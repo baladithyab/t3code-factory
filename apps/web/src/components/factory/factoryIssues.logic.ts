@@ -9,6 +9,8 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
+import type { FactoryIssueViewMode } from "./factoryIssues.views";
+
 export type FactoryIssueStateFilter = NonNullable<FactoryIssueListInput["state"]>;
 
 export const FACTORY_STATE_FILTERS: ReadonlyArray<{
@@ -24,6 +26,7 @@ export interface FactoryIssuesSearch {
   readonly state: FactoryIssueStateFilter;
   readonly environmentId?: EnvironmentId;
   readonly projectId?: ProjectId;
+  readonly view?: FactoryIssueViewMode;
 }
 
 export function parseFactoryStateFilter(value: unknown): FactoryIssueStateFilter {

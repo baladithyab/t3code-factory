@@ -19,7 +19,6 @@ import {
   CircleDotIcon,
   ExternalLinkIcon,
   FactoryIcon,
-  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   PlugZapIcon,
@@ -53,7 +52,6 @@ import { RelativeTime } from "../RelativeTime";
 import { scheduledTaskDefaultModel } from "../settings/scheduledTasksSettings.logic";
 import { SETTINGS_PICKER_TRIGGER_CLASSNAME } from "../settings/settingsLayout";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -78,23 +76,20 @@ import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import {
   FACTORY_STATE_FILTERS,
-  boundedIssueBody,
   currentFactoryPage,
   describeFactoryFailure,
   factoryScopeKey,
-  factoryTaskPresentation,
   normalizeFactoryBaseRef,
   parseFactoryStateFilter,
   popFactoryPage,
   pushFactoryPage,
-  resolveFactoryIssueAction,
   safeExternalUrl,
   type FactoryFailure,
   type FactoryIssueStateFilter,
   type FactoryIssuesSearch,
 } from "./factoryIssues.logic";
-
-const MAX_VISIBLE_LABELS = 5;
+import { FactoryIssueWorkView } from "./FactoryIssueWorkView";
+import { parseFactoryIssueViewMode, type FactoryIssueViewMode } from "./factoryIssues.views";
 
 function isConnected(environment: EnvironmentPresentation): boolean {
   return environment.connection.phase === "connected" && environment.serverConfig !== null;
@@ -142,6 +137,7 @@ export function FactoryIssuesPage() {
   const selectedProject =
     projects.find((project) => project.id === search.projectId) ?? projects[0] ?? null;
   const state = search.state;
+  const view = parseFactoryIssueViewMode(search.view);
 
   const setScope = (next: {
     readonly environmentId: EnvironmentId;
@@ -150,10 +146,15 @@ export function FactoryIssuesPage() {
   }) => {
     const target: FactoryIssuesSearch = {
       state: next.state,
+      view,
       environmentId: next.environmentId,
       ...(next.projectId !== undefined ? { projectId: next.projectId } : {}),
     };
     void navigate({ search: target, replace: true });
+  };
+
+  const setView = (next: FactoryIssueViewMode) => {
+    void navigate({ search: (previous) => ({ ...previous, view: next }), replace: true });
   };
 
   const unknownCapabilities = environments.filter(
@@ -254,6 +255,8 @@ export function FactoryIssuesPage() {
           project={selectedProject}
           projectTitleById={new Map(projects.map((project) => [project.id, project.title]))}
           state={state}
+          mode={view}
+          onModeChange={setView}
         />
       </>
     );
@@ -383,8 +386,10 @@ function FactoryInbox(props: {
   readonly project: InboxProject;
   readonly projectTitleById: ReadonlyMap<ProjectId, string>;
   readonly state: FactoryIssueStateFilter;
+  readonly mode: FactoryIssueViewMode;
+  readonly onModeChange: (mode: FactoryIssueViewMode) => void;
 }) {
-  const { environmentId, project, state } = props;
+  const { environmentId, project, state, mode } = props;
   const navigate = useNavigate();
   const [pages, setPages] = useState<ReadonlyArray<number>>([1]);
   const page = currentFactoryPage(pages);
@@ -500,10 +505,24 @@ function FactoryInbox(props: {
   const refreshing = query.isPending;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <RepositoryTarget repository={data?.repository ?? null} projectTitle={project.title} />
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <ToggleGroup
+            aria-label="Issue view"
+            value={[mode]}
+            onValueChange={(values) => {
+              const next = values[0];
+              if (next === "list" || next === "table" || next === "board") {
+                props.onModeChange(next);
+              }
+            }}
+          >
+            <Toggle value="list">List</Toggle>
+            <Toggle value="table">Table</Toggle>
+            <Toggle value="board">Board</Toggle>
+          </ToggleGroup>
           {data ? (
             <span className="text-muted-foreground text-xs">
               Updated <RelativeTime timestamp={data.fetchedAt} />
@@ -564,6 +583,15 @@ function FactoryInbox(props: {
         </div>
       ) : (
         <>
+          {mode !== "list" ? (
+            <p className="text-muted-foreground text-xs">
+              Source filter: {state === "open" ? "Open" : state === "closed" ? "Closed" : "All"}.
+              Page {page} only, not all project work.
+              {state === "open"
+                ? " Tasks linked to closed issues appear under Closed or All."
+                : null}
+            </p>
+          ) : null}
           {data.issues.length === 0 ? (
             <FactoryEmptyState
               icon={<CircleDotIcon />}
@@ -575,36 +603,27 @@ function FactoryInbox(props: {
               }
             />
           ) : (
-            <ul
-              className="flex flex-col gap-2 data-[refreshing=true]:opacity-70"
-              data-refreshing={refreshing}
-              aria-busy={refreshing}
-            >
-              {data.issues.map((issue) => (
-                <FactoryIssueRow
-                  key={issue.number}
-                  issue={issue}
-                  canStart={canStart}
-                  busy={startingIssue !== null}
-                  starting={startingIssue === issue.number}
-                  ownerTitle={
-                    issue.task && issue.task.projectId !== project.id
-                      ? (props.projectTitleById.get(issue.task.projectId) ?? "another project")
-                      : null
-                  }
-                  onStart={() => {
-                    setStartFailure(null);
-                    setDialog({ issue, repository: data.repository, restart: false });
-                  }}
-                  onRestart={() => {
-                    setStartFailure(null);
-                    setDialog({ issue, repository: data.repository, restart: true });
-                  }}
-                  onResume={() => resume(issue, data.repository)}
-                  onOpen={openTask}
-                />
-              ))}
-            </ul>
+            <FactoryIssueWorkView
+              key={`${data.repository.canonicalKey}:${page}`}
+              mode={mode}
+              issues={data.issues}
+              canStart={canStart}
+              busy={startingIssue !== null}
+              startingIssue={startingIssue}
+              selectedProjectId={project.id}
+              projectTitleById={props.projectTitleById}
+              refreshing={refreshing}
+              onStart={(issue) => {
+                setStartFailure(null);
+                setDialog({ issue, repository: data.repository, restart: false });
+              }}
+              onRestart={(issue) => {
+                setStartFailure(null);
+                setDialog({ issue, repository: data.repository, restart: true });
+              }}
+              onResume={(issue) => resume(issue, data.repository)}
+              onOpen={openTask}
+            />
           )}
           <div className="flex items-center justify-between gap-3">
             <Button
@@ -697,144 +716,6 @@ function RepositoryTarget(props: {
         </p>
       )}
     </div>
-  );
-}
-
-function FactoryIssueRow(props: {
-  readonly issue: FactoryIssue;
-  readonly canStart: boolean;
-  readonly busy: boolean;
-  readonly starting: boolean;
-  readonly ownerTitle: string | null;
-  readonly onStart: () => void;
-  readonly onRestart: () => void;
-  readonly onResume: () => void;
-  readonly onOpen: (task: NonNullable<FactoryIssue["task"]>) => void;
-}) {
-  const { issue } = props;
-  const [expanded, setExpanded] = useState(false);
-  const action = resolveFactoryIssueAction(issue);
-  const taskPresentation = issue.task ? factoryTaskPresentation(issue.task.status) : null;
-  const href = safeExternalUrl(issue.url);
-  const body = expanded ? boundedIssueBody(issue.body) : null;
-  const startDisabled = !props.canStart || props.busy;
-
-  return (
-    <li className="rounded-lg border border-border/60 bg-card p-3">
-      <div className="flex items-start gap-3">
-        <CircleDotIcon
-          aria-label={issue.state === "open" ? "Open issue" : "Closed issue"}
-          className={
-            issue.state === "open"
-              ? "mt-0.5 size-4 shrink-0 text-primary"
-              : "mt-0.5 size-4 shrink-0 text-muted-foreground"
-          }
-        />
-        <div className="min-w-0 flex-1 space-y-1.5">
-          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-            <span className="break-words font-medium text-sm">{issue.title}</span>
-            {href ? (
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="shrink-0 text-muted-foreground text-xs underline-offset-4 hover:underline"
-              >
-                #{issue.number}
-              </a>
-            ) : (
-              <span className="shrink-0 text-muted-foreground text-xs">#{issue.number}</span>
-            )}
-            <span className="shrink-0 text-muted-foreground text-xs">
-              updated <RelativeTime timestamp={issue.updatedAt} />
-            </span>
-          </div>
-          {issue.labels.length > 0 ? (
-            <div className="flex flex-wrap gap-1">
-              {issue.labels.slice(0, MAX_VISIBLE_LABELS).map((label) => (
-                <Badge key={label} variant="outline" size="sm">
-                  <span className="max-w-40 truncate">{label}</span>
-                </Badge>
-              ))}
-              {issue.labels.length > MAX_VISIBLE_LABELS ? (
-                <Badge variant="outline" size="sm">
-                  +{issue.labels.length - MAX_VISIBLE_LABELS}
-                </Badge>
-              ) : null}
-            </div>
-          ) : null}
-          {taskPresentation ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={taskPresentation.variant}>{taskPresentation.label}</Badge>
-              <span className="text-muted-foreground text-xs">{taskPresentation.detail}</span>
-              {props.ownerTitle ? (
-                <span className="text-muted-foreground text-xs">
-                  Task lives in project {props.ownerTitle}.
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-          {action.kind === "unavailable" ? (
-            <p className="text-muted-foreground text-xs">{action.reason}</p>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-expanded={expanded}
-            aria-label={expanded ? "Hide issue body" : "Show issue body"}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            <ChevronDownIcon className={expanded ? "rotate-180" : undefined} />
-            Details
-          </Button>
-          {action.kind === "start" ? (
-            <Button size="sm" disabled={startDisabled} onClick={props.onStart}>
-              Start task
-            </Button>
-          ) : action.kind === "resume" ? (
-            <Button
-              size="sm"
-              disabled={startDisabled}
-              aria-busy={props.starting}
-              onClick={props.onResume}
-            >
-              {props.starting ? "Resuming…" : "Resume launch"}
-            </Button>
-          ) : action.kind === "restart" ? (
-            <Button size="sm" variant="outline" disabled={startDisabled} onClick={props.onRestart}>
-              New attempt…
-            </Button>
-          ) : action.kind === "open" ? (
-            <Button size="sm" variant="outline" onClick={() => props.onOpen(action.task)}>
-              Open thread
-            </Button>
-          ) : null}
-        </div>
-      </div>
-      {body ? (
-        <div className="mt-3 border-border/60 border-t pt-3">
-          {body.text.length === 0 ? (
-            <p className="text-muted-foreground text-sm">This issue has no description.</p>
-          ) : (
-            <>
-              {/* Plain text on purpose: an issue body is untrusted remote content, so nothing in it
-                  is interpreted as markup, links or media. */}
-              <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-sans text-sm">
-                {body.text}
-              </pre>
-              {body.truncated ? (
-                <p className="mt-2 text-muted-foreground text-xs">
-                  Showing the first part of the description. Open the issue on GitHub to read the
-                  rest.
-                </p>
-              ) : null}
-            </>
-          )}
-        </div>
-      ) : null}
-    </li>
   );
 }
 

@@ -153,6 +153,12 @@ issue intake currently supports GitHub and uses the project's configured `origin
 Use **Open**, **Closed**, or **All**, the page controls, and **Refresh** to browse issues.
 Reading the inbox never starts work or changes an issue.
 
+On web and desktop, use **Table** to compare source and task state, or **Board** to group by
+local task state. The view choice stays in the URL. Each view shows only the current filtered
+issue page, not every task in the project; choose **All** to include closed-issue tasks.
+These views do not evaluate prerequisites or verification. The native mobile inbox remains
+a list.
+
 Choose **Start task**, select a model, and optionally enter a local branch, tag, or commit.
 Leaving the base ref empty uses the project's current local HEAD. The server resolves that
 ref to a fixed commit and starts a separate Git worktree; it does not fetch, rebase, or copy
