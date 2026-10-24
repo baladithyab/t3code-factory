@@ -6,10 +6,12 @@ import {
   parseFactoryStateFilter,
   type FactoryIssuesSearch,
 } from "../components/factory/factoryIssues.logic";
+import { parseFactoryIssueViewMode } from "../components/factory/factoryIssues.views";
 
 export const Route = createFileRoute("/_chat/factory")({
   validateSearch: (raw: Record<string, unknown>): FactoryIssuesSearch => ({
     state: parseFactoryStateFilter(raw.state),
+    view: parseFactoryIssueViewMode(raw.view),
     ...(typeof raw.environmentId === "string" && raw.environmentId
       ? { environmentId: EnvironmentId.make(raw.environmentId) }
       : {}),
