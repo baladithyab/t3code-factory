@@ -877,22 +877,24 @@ function FactoryStartDialog(props: {
                 the thread's controls afterwards.
               </AlertDescription>
             </Alert>
-            {props.failure ? (
-              <Alert variant="error">
-                <AlertTitle>{props.failure.title}</AlertTitle>
-                <AlertDescription>
-                  <p>{props.failure.message}</p>
-                  {changed ? (
-                    <p>
-                      This snapshot is no longer current. Close this dialog and reopen the issue to
-                      review the refreshed content before starting new work.
-                    </p>
-                  ) : null}
-                </AlertDescription>
-              </Alert>
-            ) : null}
           </fieldset>
         </DialogPanel>
+        {props.failure ? (
+          <div className="shrink-0 px-6 pt-3">
+            <Alert variant="error">
+              <AlertTitle>{props.failure.title}</AlertTitle>
+              <AlertDescription>
+                <p>{props.failure.message}</p>
+                {changed ? (
+                  <p>
+                    This snapshot is no longer current. Close this dialog and reopen the issue to
+                    review the refreshed content before starting new work.
+                  </p>
+                ) : null}
+              </AlertDescription>
+            </Alert>
+          </div>
+        ) : null}
         <DialogFooter>
           <DialogClose render={<Button variant="outline" size="sm" disabled={pending} />}>
             Cancel
