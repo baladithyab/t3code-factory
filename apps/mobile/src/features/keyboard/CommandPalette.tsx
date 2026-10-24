@@ -346,6 +346,17 @@ export function CommandPalette(props: {
         searchTerms: ["restore", "history"],
         run: () => openSettings(navigation, "SettingsArchive"),
       },
+      {
+        key: "factoryIssues",
+        kind: "action",
+        title: "Factory issues",
+        searchTerms: ["github", "inbox", "task", "start", "repository"],
+        run: () =>
+          navigation.navigate("SettingsSheet", {
+            screen: "SettingsContent",
+            params: { screen: "SettingsFactoryIssues" },
+          }),
+      },
     ];
     if (canTriage) {
       actions.push({

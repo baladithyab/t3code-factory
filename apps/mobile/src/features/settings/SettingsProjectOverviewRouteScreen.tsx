@@ -32,6 +32,7 @@ import {
 } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsScreen } from "./components/SettingsScreen";
+import { selectFactoryInboxProject } from "../factory/factory-inbox-state";
 import { SettingsSection } from "./components/SettingsSection";
 import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActionRow";
 import {
@@ -136,6 +137,7 @@ function ProjectOverviewContent(props: {
   const displayName = deriveProjectGroupLabel({ representative, members: props.members });
   const [draftName, setDraftName] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const navigation = useNavigation();
   const threads = useThreadShells();
   const removableEnvironments = useEnvironmentsWithScope(
     props.members,
@@ -332,6 +334,20 @@ function ProjectOverviewContent(props: {
             </View>
           );
         })}
+      </SettingsSection>
+      <SettingsSection title="Factory">
+        <SettingsActionRow
+          icon="list.number"
+          label="Issues"
+          description="Browse this project's GitHub issues and start an isolated task."
+          onPress={() => {
+            selectFactoryInboxProject(representative.environmentId, representative.id);
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsFactoryIssues" },
+            });
+          }}
+        />
       </SettingsSection>
       <SettingsSection title="Danger">
         <SettingsActionRow

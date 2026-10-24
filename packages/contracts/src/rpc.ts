@@ -1,4 +1,11 @@
 import {
+  FactoryIssueError,
+  FactoryIssueListInput,
+  FactoryIssueListResult,
+  FactoryIssueStartInput,
+  FactoryIssueStartResult,
+} from "./factory.ts";
+import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -398,6 +405,11 @@ import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
+  factoryListIssues: "factory.listIssues",
+  factoryStartIssue: "factory.startIssue",
+  projectsList: "projects.list",
+  projectsAdd: "projects.add",
+  projectsRemove: "projects.remove",
   projectsListEntries: "projects.listEntries",
   projectsListIgnoredFiles: "projects.listIgnoredFiles",
   projectsReadFile: "projects.readFile",
@@ -1927,6 +1939,17 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
+const WsFactoryListIssuesRpc = Rpc.make(WS_METHODS.factoryListIssues, {
+  payload: FactoryIssueListInput,
+  success: FactoryIssueListResult,
+  error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+});
+const WsFactoryStartIssueRpc = Rpc.make(WS_METHODS.factoryStartIssue, {
+  payload: FactoryIssueStartInput,
+  success: FactoryIssueStartResult,
+  error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+});
+
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "t3/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -1934,6 +1957,8 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 
 export const WsRpcGroup = RpcGroup.make(
   WsGuestShareCreateRpc,
+  WsFactoryListIssuesRpc,
+  WsFactoryStartIssueRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

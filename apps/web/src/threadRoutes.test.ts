@@ -138,7 +138,30 @@ describe("threadRoutes", () => {
     ).toBe("ready");
   });
 
-  it.each(["missing", "deleted", "archived"] as const)(
+  it("opens an archived linked thread from its detail without changing its archive state", () => {
+    const projection = makeThreadProjectionFixture();
+    expect(
+      resolveThreadRouteRenderState({
+        bootstrapComplete: true,
+        serverThreadExists: false,
+        serverThreadDeleted: false,
+        draftThreadExists: false,
+        unlistedThreadDetail: {
+          ...EMPTY_ENVIRONMENT_THREAD_STATE,
+          status: "live",
+          data: Option.some({
+            ...projection,
+            thread: {
+              ...projection.thread,
+              archivedAt: DateTime.makeUnsafe("2026-01-02T00:00:00Z"),
+            },
+          }),
+        },
+      }),
+    ).toBe("ready");
+  });
+
+  it.each(["missing", "deleted"] as const)(
     "redirects an unlisted thread only after detail confirms it is %s",
     (outcome) => {
       const route = {
@@ -172,8 +195,7 @@ describe("threadRoutes", () => {
                     ...projection,
                     thread: {
                       ...projection.thread,
-                      deletedAt: outcome === "deleted" ? removedAt : null,
-                      archivedAt: outcome === "archived" ? removedAt : null,
+                      deletedAt: removedAt,
                     },
                   }),
                 },

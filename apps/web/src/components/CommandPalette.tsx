@@ -57,6 +57,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   CornerLeftUpIcon,
+  FactoryIcon,
   FileSearchIcon,
   FolderGit2Icon,
   FolderIcon,
@@ -1489,6 +1490,23 @@ function OpenCommandPaletteDialog(props: {
       icon: <PullRequestGlyph.pullRequest className={ITEM_ICON_CLASS} />,
       run: async () => {
         await navigate({ to: "/pull-requests", search: readPullRequestListPreferences() });
+      },
+    });
+  }
+
+  if (
+    environments.some(
+      (environment) => environment.serverConfig?.environment.capabilities.factoryIssues === true,
+    )
+  ) {
+    actionItems.push({
+      kind: "action",
+      value: "action:factory-issues",
+      searchTerms: ["factory", "issues", "github", "tasks", "inbox", "backlog"],
+      title: "Open factory issues",
+      icon: <FactoryIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/factory", search: { state: "open" } });
       },
     });
   }

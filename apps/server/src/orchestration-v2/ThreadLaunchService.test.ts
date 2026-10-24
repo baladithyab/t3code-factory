@@ -59,6 +59,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
+import { DispatchModeLimit } from "./DispatchModeLimit.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as ThreadTitleRegeneration from "./ThreadTitleRegenerationService.ts";
@@ -2290,3 +2291,163 @@ it.effect("replays an accepted send after the project disables the instance", ()
     }
   }).pipe(Effect.provide(Layer.mergeAll(harness.layer, layerFiles)));
 });
+
+it.effect.each(["succeeds", "fails"] as const)(
+  "server-owned preparation %s after the user raises thread modes",
+  (ending) =>
+    Effect.gen(function* () {
+      const setupEntered = yield* Deferred.make<void>();
+      const allowSetup = yield* Deferred.make<void>();
+      const allowRename = yield* Deferred.make<void>();
+      const harness = makeHarness({
+        generateBranchName: () =>
+          Deferred.await(allowRename).pipe(Effect.as({ branch: "after-mode-change" })),
+        runSetup: () =>
+          Deferred.succeed(setupEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(allowSetup)),
+            Effect.andThen(
+              ending === "succeeds"
+                ? Effect.succeed({ status: "no-script" as const })
+                : Effect.die(new Error("Setup failed after mode change")),
+            ),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const input = {
+          ...launchInput({
+            command: `mode-race:${ending}`,
+            thread: `mode-race-thread:${ending}`,
+            message: "Prepare once",
+            workspace: { type: "worktree", baseRef: "main" },
+          }),
+          runtimeMode: "approval-required" as const,
+        };
+        const launched = yield* launches.launch(input).pipe(
+          Effect.provideService(DispatchModeLimit, {
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+          }),
+        );
+        yield* Deferred.await(setupEntered);
+        yield* threads.dispatch({
+          type: "thread.runtime-mode.set",
+          commandId: CommandId.make(`raise:${ending}`),
+          threadId: launched.threadId,
+          runtimeMode: "full-access",
+        });
+        yield* threads.dispatch({
+          type: "thread.interaction-mode.set",
+          commandId: CommandId.make(`plan:${ending}`),
+          threadId: launched.threadId,
+          interactionMode: "plan",
+        });
+        yield* Deferred.succeed(allowRename, undefined);
+        yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
+          Stream.filter(
+            (stored) => stored.commandId === CommandId.make(`${input.commandId}:branch-rename`),
+          ),
+          Stream.runHead,
+        );
+        yield* Deferred.succeed(allowSetup, undefined);
+        const settled = yield* preparationSettled(launched.threadId);
+        assert.equal(settled.runs[0]?.status, ending === "succeeds" ? "starting" : "failed");
+        assert.include(settled.thread.branch ?? "", "after-mode-change");
+        assert.equal(settled.thread.runtimeMode, "full-access");
+        assert.equal(settled.thread.interactionMode, "plan");
+        // The background exemption must not weaken synchronous command authority.
+        const refused = yield* threads
+          .dispatch({
+            type: "thread.metadata.update",
+            commandId: CommandId.make(`unauthorized:${ending}`),
+            threadId: launched.threadId,
+            title: "Unauthorized edit",
+          })
+          .pipe(
+            Effect.provideService(DispatchModeLimit, {
+              runtimeMode: "approval-required",
+              interactionMode: "default",
+            }),
+            Effect.exit,
+          );
+        assert.isTrue(Exit.isFailure(refused));
+        assert.notEqual(
+          (yield* threads.getThreadProjection(launched.threadId)).thread.title,
+          "Unauthorized edit",
+        );
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect("same-run setup retry and original launch replay own only one worktree preparation", () =>
+  Effect.gen(function* () {
+    const creating = yield* Deferred.make<void>();
+    const allowCreate = yield* Deferred.make<void>();
+    let fetches = 0;
+    const harness = makeHarness({
+      fetchWorktreeBaseCommit: () =>
+        ++fetches === 1
+          ? Effect.fail(
+              new GitCommandError({
+                operation: "fetch",
+                command: "git",
+                cwd: "/repo",
+                detail: "Temporary fetch failure",
+                exitCode: 128,
+              }),
+            )
+          : Effect.succeed({ commitSha: "remote-main-sha", remoteRefName: "origin/main" }),
+      createWorktree: (input) =>
+        Deferred.succeed(creating, undefined).pipe(
+          Effect.andThen(Deferred.await(allowCreate)),
+          Effect.as({
+            worktree: {
+              path: "/repo-worktrees/retried",
+              refName: input.newRefName ?? "retried-worktree",
+            },
+          }),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = launchInput({
+        command: "original-incomplete-intent",
+        thread: "retry-replay-thread",
+        message: "Only one issue task",
+        workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
+      });
+      const first = yield* launches.launch(input);
+      const failed = yield* preparationSettled(first.threadId);
+      assert.equal(failed.runs[0]?.status, "failed");
+      const runId = failed.runs[0]!.id;
+      const retryCommandId = CommandId.make("in-thread-retry");
+      yield* launches.retryPreparation({
+        commandId: retryCommandId,
+        threadId: first.threadId,
+        runId,
+      });
+      yield* Deferred.await(creating);
+      const replayed = yield* launches.launch(input);
+      assert.equal(replayed.threadId, first.threadId);
+      yield* Deferred.succeed(allowCreate, undefined);
+      yield* threads.streamStoredEventsFrom({ threadId: first.threadId }).pipe(
+        Stream.filter(
+          (stored) =>
+            stored.commandId === CommandId.make(`${retryCommandId}:release`) &&
+            stored.event.type === "run.updated",
+        ),
+        Stream.runHead,
+      );
+      const settled = yield* threads.getThreadProjection(first.threadId);
+      assert.equal(harness.createWorktree.mock.calls.length, 1);
+      assert.equal(harness.runSetup.mock.calls.length, 1);
+      assert.equal(settled.runs.length, 1);
+      assert.equal(settled.runs[0]?.id, runId);
+      assert.equal(settled.runs[0]?.status, "starting");
+      assert.equal(settled.messages.length, 1);
+      assert.equal(settled.thread.worktreePath, "/repo-worktrees/retried");
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);

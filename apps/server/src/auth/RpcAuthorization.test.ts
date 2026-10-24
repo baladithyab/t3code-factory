@@ -1,4 +1,6 @@
 import {
+  CommandId,
+  ProjectId,
   AuthEnvironmentMaintainScope,
   AuthDiagnosticsReadScope,
   AuthFilesystemReadScope,
@@ -379,3 +381,79 @@ it.effect("denies manual cleanup before the handler without settings permission"
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),
 );
+
+describe("factory authorization", () => {
+  const tested = [WS_METHODS.factoryListIssues, WS_METHODS.factoryStartIssue] as const;
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
+        !(tested as ReadonlyArray<string>).includes(tag),
+    ),
+  );
+  const input = {
+    commandId: CommandId.make("factory-auth"),
+    projectId: ProjectId.make("project"),
+    expectedRepositoryKey: "github.com/owner/repo",
+    issueNumber: 1,
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+    runtimeMode: "approval-required" as const,
+    interactionMode: "default" as const,
+  };
+  it.effect.each([
+    { scopes: [AuthOrchestrationReadScope], missing: AuthOrchestrationOperateScope },
+    { scopes: [AuthOrchestrationOperateScope], missing: AuthSourceControlWriteScope },
+    { scopes: [AuthSourceControlWriteScope], missing: AuthOrchestrationOperateScope },
+  ])("denies issue launch without $missing before invoking the service", ({ scopes, missing }) =>
+    Effect.gen(function* () {
+      let handled = false;
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.factoryListIssues, () => Effect.never),
+            group.toLayerHandler(WS_METHODS.factoryStartIssue, () =>
+              Effect.sync(() => {
+                handled = true;
+              }).pipe(Effect.andThen(Effect.never)),
+            ),
+            RpcAuthorization.layer(scopes),
+          ),
+        ),
+      );
+      expect(yield* client[WS_METHODS.factoryStartIssue](input).pipe(Effect.flip)).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
+        requiredPermission: missing,
+      });
+      expect(handled).toBe(false);
+    }).pipe(Effect.scoped),
+  );
+  it.effect("allows read-only issue intake but never starts work", () =>
+    Effect.gen(function* () {
+      const result = {
+        repository: {
+          provider: "github" as const,
+          host: "github.com",
+          repository: "owner/repo",
+          canonicalKey: "github.com/owner/repo",
+          url: "https://github.com/owner/repo",
+        },
+        issues: [],
+        nextPage: null,
+        fetchedAt: "2026-10-23T00:00:00.000Z",
+      };
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.factoryListIssues, () => Effect.succeed(result)),
+            group.toLayerHandler(WS_METHODS.factoryStartIssue, () =>
+              Effect.die("read-only launch reached handler"),
+            ),
+            RpcAuthorization.layer([AuthOrchestrationReadScope]),
+          ),
+        ),
+      );
+      expect(yield* client[WS_METHODS.factoryListIssues]({ projectId: input.projectId })).toEqual(
+        result,
+      );
+    }).pipe(Effect.scoped),
+  );
+});

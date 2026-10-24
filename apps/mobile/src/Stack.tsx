@@ -128,6 +128,11 @@ import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRouteScreen";
 import { SettingsNotificationsRouteScreen } from "./features/settings/SettingsNotificationsRouteScreen";
+import { FactoryIssuesRouteScreen } from "./features/factory/FactoryIssuesRouteScreen";
+import {
+  FactoryBranchPickerRouteScreen,
+  FactoryModelPickerRouteScreen,
+} from "./features/factory/FactoryPickerScreens";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
 import { SettingsLabsRouteScreen } from "./features/settings/ThreadSettingsSections";
 import { SettingsEnvironmentFilterProvider } from "./features/settings/settings-environment-filter";
@@ -379,6 +384,22 @@ const SETTINGS_SCREENS = {
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Chat",
+    },
+  }),
+  SettingsFactoryIssues: createNativeStackScreen({
+    screen: FactoryIssuesRouteScreen,
+    linking: "settings/factory-issues",
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "Factory issues" },
+  }),
+  SettingsFactoryBranch: createNativeStackScreen({
+    screen: FactoryBranchPickerRouteScreen,
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "Base branch" },
+  }),
+  SettingsFactoryModel: createNativeStackScreen({
+    screen: FactoryModelPickerRouteScreen,
+    options: {
+      headerShown: false,
+      ...(Platform.OS === "android" ? { presentation: "card" as const } : THREAD_SETTINGS_SHEET_OPTIONS),
     },
   }),
   SettingsScheduledTasks: createNativeStackScreen({
