@@ -165,6 +165,12 @@ ref to a fixed commit and starts a separate Git worktree; it does not fetch, reb
 uncommitted changes from the project checkout. Commit the source you want workers to receive
 before using Factory to develop this project itself.
 
+The confirmation shows the complete issue title and description as text, not rendered Markdown.
+Backslashes and control or formatting characters are shown as escapes; no source text is omitted.
+Row details can be a preview, so review the confirmation before starting. If the title or
+description changed, new work is refused: close the confirmation, refresh the inbox and review
+the issue again. A refresh never silently replaces the snapshot in an open confirmation.
+
 Tasks default to approval-required mode. Project-configured worktree setup scripts still run
 on the environment's machine; approval mode is not an OS or network sandbox. Starting a task
 does not authorize publishing, pushing, opening a pull request, merging, or releasing.
@@ -182,11 +188,11 @@ an existing worker, and completing a worker does not close the issue. To stop wo
 the linked thread and use its normal stop controls. Factory does not automatically write
 task results back to GitHub issues.
 
-Listing needs `orchestration:read`; starting also needs `orchestration:operate` and
-`source-control:write`. Agents can use `factory_list_issues` and `factory_start_issue` under
-their existing permissions. Pass the returned `repository.canonicalKey` as
-`expectedRepositoryKey` when starting; a changed origin is refused instead of silently
-retargeting the task.
+Listing and reading an issue need `orchestration:read`; starting also needs
+`orchestration:operate` and `source-control:write`. Agents can use `factory_list_issues`,
+`factory_read_issue` and `factory_start_issue` under their existing permissions. Pass the returned
+`repository.canonicalKey` as `expectedRepositoryKey` when starting; a changed origin is refused
+instead of silently retargeting the task.
 
 For example, call `factory_list_issues` with a registered project ID:
 
@@ -199,14 +205,19 @@ For example, call `factory_list_issues` with a registered project ID:
 ```
 
 Check the returned repository and the selected issue's `task`. For an existing task,
-follow its status and owning project/thread rather than creating a duplicate. For an
-explicitly authorized new task, pass parameters like these to `factory_start_issue`:
+follow its status and owning project/thread rather than creating a duplicate. Use
+`factory_read_issue` with `projectId` and `issueNumber` to retrieve one complete issue instead
+of reviewing a large page of descriptions. Review the full title and body. Do not authorize from
+a truncated result; this tool has no partial-content paging.
+
+For an explicitly authorized new task, pass parameters like these to `factory_start_issue`:
 
 ```json
 {
   "commandId": "<unique-command-id>",
   "projectId": "<project-id>",
   "expectedRepositoryKey": "github.com/<owner>/<repository>",
+  "expectedIssueRevision": "<returned-issue-revision>",
   "issueNumber": 17,
   "modelSelection": {
     "instanceId": "<provider-instance-id>",
@@ -217,10 +228,20 @@ explicitly authorized new task, pass parameters like these to `factory_start_iss
 }
 ```
 
-Replace the repository key with the exact `repository.canonicalKey` returned by the list,
-and use the selected issue number. Choose provider/model IDs from `orchestrator_capabilities`;
-the supervised example uses `approval-required`, and MCP cannot exceed the caller's runtime
-authority. Reuse `commandId` when retrying the same request. Omitting `baseRef` uses local HEAD.
+Replace the repository key with the exact `repository.canonicalKey` returned by the read or
+list, pass the selected issue's `revision` as `expectedIssueRevision`, and use its issue number.
+New tasks and confirmed deleted-task restarts reject changed title or body content. Do not
+silently substitute a new revision after an error: retrieve and review the updated issue.
+
+Choose provider/model IDs from `orchestrator_capabilities`; the supervised example uses
+`approval-required`, and MCP cannot exceed the caller's runtime authority. Reuse `commandId`
+when retrying the same request. Omitting `baseRef` uses local HEAD.
+
+An existing reservation is not a new admission. Start can return `resumed: true` for the
+already-admitted task, including when another caller won a concurrent start. It retains the
+saved prompt and settings; the live issue revision is not revalidated on that path. This also
+preserves reservations made before content-revision checking was added. A revision identifies
+content, not a human approval or permission to execute.
 
 ## Create a pull request
 

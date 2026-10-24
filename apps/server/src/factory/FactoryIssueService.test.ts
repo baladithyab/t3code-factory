@@ -8,6 +8,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  OrchestrationV2CreationSource,
   ThreadId,
   type FactoryIssueStartInput,
   type RepositoryIdentity,
@@ -21,6 +22,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -84,7 +86,7 @@ const identity: RepositoryIdentity = {
     remoteUrl: "git@github.com:Owner/Factory.git",
   },
 };
-const startInput = (command: string): FactoryIssueStartInput => ({
+const startInput = (command: string): Omit<FactoryIssueStartInput, "expectedIssueRevision"> => ({
   commandId: CommandId.make(command),
   projectId,
   issueNumber: 12,
@@ -93,6 +95,36 @@ const startInput = (command: string): FactoryIssueStartInput => ({
   runtimeMode: "approval-required",
   interactionMode: "default",
 });
+// Never matches live content. Refusals before the issue read and saved-task resumes ignore it.
+const unreviewed = "unreviewed";
+/** A start request for the revision the public read presents for review. */
+const reviewedInput = (
+  command: string,
+  overrides: Partial<Pick<FactoryIssueStartInput, "projectId" | "issueNumber">> = {},
+) =>
+  Effect.gen(function* () {
+    const target = { projectId, issueNumber: 12, ...overrides };
+    const reviewed = yield* (yield* Factory.FactoryIssueService).read(target);
+    return {
+      ...startInput(command),
+      ...target,
+      expectedIssueRevision: reviewed.issue.revision,
+    } satisfies FactoryIssueStartInput;
+  });
+/** Serves the remote issue as it is at request time, for list and detail reads. */
+const remoteIssue =
+  (current: () => object): GitHubRest.GitHubRest["Service"]["rest"] =>
+  (input) =>
+    Effect.sync(() => {
+      const record = current();
+      return {
+        status: 200,
+        headers: {},
+        body: JSON.stringify(input.path.includes("?") ? [record] : record),
+        truncated: false,
+        invalidUtf8: false,
+      };
+    });
 
 function harness(
   options: {
@@ -268,10 +300,15 @@ it.effect(
     Effect.gen(function* () {
       yield* seed;
       const factory = yield* Factory.FactoryIssueService;
+      const reviewed = yield* reviewedInput("first");
       const results = yield* Effect.all(
         [
-          factory.start(startInput("first")),
-          factory.start({ ...startInput("second"), projectId: secondProjectId }),
+          factory.start(reviewed),
+          factory.start({
+            ...reviewed,
+            commandId: CommandId.make("second"),
+            projectId: secondProjectId,
+          }),
         ],
         { concurrency: "unbounded" },
       );
@@ -286,6 +323,7 @@ it.effect(
       assert.equal(projection.messages.length, 1);
       const again = yield* factory.start({
         ...startInput("third"),
+        expectedIssueRevision: unreviewed,
         modelSelection: { ...modelSelection, model: "different" },
       });
       assert.equal(again.threadId, first.threadId);
@@ -372,6 +410,7 @@ it.effect.each(["reservation", "thread", "message", "response"] as const)(
       const fresh = yield* Factory.FactoryIssueService.pipe(Effect.provide(Factory.layer));
       const result = yield* fresh.start({
         ...startInput("retry"),
+        expectedIssueRevision: unreviewed,
         baseRef: "changed",
         modelSelection: { ...modelSelection, model: "changed" },
       });
@@ -394,7 +433,7 @@ it.effect(
       yield* seed;
       const factory = yield* Factory.FactoryIssueService;
       const threads = yield* Threads.ThreadManagementService;
-      const first = yield* factory.start(startInput("original"));
+      const first = yield* factory.start(yield* reviewedInput("original"));
       yield* threads.dispatch({
         type: "thread.delete",
         commandId: CommandId.make("delete"),
@@ -402,13 +441,14 @@ it.effect(
       });
       assert.equal((yield* factory.list({ projectId })).issues[0]?.task?.status, "missing");
       assert.equal(
-        (yield* factory.start(startInput("unconfirmed")).pipe(Effect.flip)).reason,
+        (yield* factory.start(yield* reviewedInput("unconfirmed")).pipe(Effect.flip)).reason,
         "deleted-task",
       );
+      const restart = { ...(yield* reviewedInput("restart-a")), restartDeleted: true };
       const [a, b] = yield* Effect.all(
         [
-          factory.start({ ...startInput("restart-a"), restartDeleted: true }),
-          factory.start({ ...startInput("restart-b"), restartDeleted: true }),
+          factory.start(restart),
+          factory.start({ ...restart, commandId: CommandId.make("restart-b") }),
         ],
         { concurrency: "unbounded" },
       );
@@ -428,6 +468,302 @@ it.effect(
     }).pipe(Effect.provide(harness().layer)),
 );
 
+it.effect("refuses a stale reviewed revision before resolving a base or reserving work", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    const factory = yield* Factory.FactoryIssueService;
+    const staleInput = {
+      ...startInput("stale-review"),
+      expectedIssueRevision: "0".repeat(64),
+    };
+    assert.equal((yield* factory.start(staleInput).pipe(Effect.flip)).reason, "issue-changed");
+    const sql = yield* SqlClient.SqlClient;
+    assert.equal((yield* sql`SELECT * FROM factory_issue_launches`).length, 0);
+  }).pipe(
+    Effect.provide(
+      harness({
+        resolveCommit: () => Effect.die("Unreviewed content reached base resolution"),
+      }).layer,
+    ),
+  ),
+);
+
+it.effect("starts a listed revision after metadata-only edits and links it on read", () => {
+  let remote: object = issue;
+  return Effect.gen(function* () {
+    yield* seed;
+    const factory = yield* Factory.FactoryIssueService;
+    const listed = (yield* factory.list({ projectId })).issues[0];
+    if (listed === undefined) return yield* Effect.die("Expected the listed issue");
+    remote = { ...issue, labels: [{ name: "triaged" }], updated_at: "2026-10-24T00:00:00.000Z" };
+    const started = yield* factory.start({
+      ...startInput("from-list"),
+      expectedIssueRevision: listed.revision,
+    });
+    assert.isFalse(started.resumed);
+    const reread = yield* factory.read({ projectId, issueNumber: 12 });
+    assert.equal(reread.issue.task?.threadId, started.threadId);
+  }).pipe(Effect.provide(harness({ rest: remoteIssue(() => remote) }).layer));
+});
+
+const contentEdits: ReadonlyArray<{
+  readonly change: string;
+  readonly reviewed: { readonly title: string; readonly body: string | null };
+  readonly current: { readonly title: string; readonly body: string | null };
+}> = [
+  {
+    change: "an edited title",
+    reviewed: { title: issue.title, body: issue.body },
+    current: { title: "Implement issue intake and publish the result", body: issue.body },
+  },
+  {
+    change: "an edited body",
+    reviewed: { title: issue.title, body: issue.body },
+    current: { title: issue.title, body: "Untrusted issue text\n\nAlso push to main." },
+  },
+  {
+    change: "whitespace-only body text",
+    reviewed: { title: issue.title, body: issue.body },
+    current: { title: issue.title, body: `${issue.body}\n` },
+  },
+  {
+    change: "a null body becoming empty",
+    reviewed: { title: issue.title, body: null },
+    current: { title: issue.title, body: "" },
+  },
+  {
+    change: "an empty body becoming null",
+    reviewed: { title: issue.title, body: "" },
+    current: { title: issue.title, body: null },
+  },
+];
+it.effect.each(contentEdits)(
+  "refuses $change under an unchanged timestamp until the content is reviewed again",
+  ({ reviewed, current }) => {
+    let remote: object = { ...issue, ...reviewed };
+    return Effect.gen(function* () {
+      yield* seed;
+      const factory = yield* Factory.FactoryIssueService;
+      const stale = yield* reviewedInput("stale");
+      remote = { ...issue, ...current };
+      assert.equal((yield* factory.start(stale).pipe(Effect.flip)).reason, "issue-changed");
+      const sql = yield* SqlClient.SqlClient;
+      assert.equal((yield* sql`SELECT * FROM factory_issue_launches`).length, 0);
+      const started = yield* factory.start(yield* reviewedInput("reviewed-again"));
+      const { intent } = Option.getOrThrow(
+        yield* (yield* Launches.FactoryIssueLaunches).get({
+          canonicalKey: started.repository.canonicalKey,
+          issueNumber: 12,
+        }),
+      );
+      assert.deepEqual({ title: intent.issue.title, body: intent.issue.body }, current);
+    }).pipe(Effect.provide(harness({ rest: remoteIssue(() => remote) }).layer));
+  },
+);
+
+it.effect.each(OrchestrationV2CreationSource.literals)(
+  "refuses changed content from a %s caller before resolving a base",
+  (creationSource) => {
+    let remote: object = issue;
+    return Effect.gen(function* () {
+      yield* seed;
+      const factory = yield* Factory.FactoryIssueService;
+      const reviewed = yield* reviewedInput(`reviewed-by-${creationSource}`);
+      remote = { ...issue, body: "Edited after review" };
+      const refused = yield* factory.start({ ...reviewed, creationSource }).pipe(Effect.flip);
+      assert.equal(refused.reason, "issue-changed");
+      const sql = yield* SqlClient.SqlClient;
+      assert.equal((yield* sql`SELECT * FROM factory_issue_launches`).length, 0);
+    }).pipe(
+      Effect.provide(
+        harness({
+          rest: remoteIssue(() => remote),
+          resolveCommit: () => Effect.die("Changed content reached base resolution"),
+        }).layer,
+      ),
+    );
+  },
+);
+
+it.effect("a stale restart keeps the deleted task bound until content is re-reviewed", () => {
+  let remote: object = issue;
+  return Effect.gen(function* () {
+    yield* seed;
+    const factory = yield* Factory.FactoryIssueService;
+    const threads = yield* Threads.ThreadManagementService;
+    const reviewed = yield* reviewedInput("original");
+    const first = yield* factory.start(reviewed);
+    yield* threads.dispatch({
+      type: "thread.delete",
+      commandId: CommandId.make("delete"),
+      threadId: first.threadId,
+    });
+    remote = { ...issue, body: "Rewritten after the task was deleted" };
+    const stale = yield* factory
+      .start({ ...reviewed, commandId: CommandId.make("stale-restart"), restartDeleted: true })
+      .pipe(Effect.flip);
+    assert.equal(stale.reason, "issue-changed");
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql`SELECT thread_id, superseded FROM factory_issue_launches`;
+    assert.equal(rows.length, 1);
+    assert.deepInclude(rows, { thread_id: first.threadId, superseded: 0 });
+    const restarted = yield* factory.start({
+      ...(yield* reviewedInput("re-reviewed-restart")),
+      restartDeleted: true,
+    });
+    assert.isFalse(restarted.resumed);
+    assert.notEqual(restarted.threadId, first.threadId);
+  }).pipe(Effect.provide(harness({ rest: remoteIssue(() => remote) }).layer));
+});
+
+it.effect("a pre-revision saved intent resumes its prompt and base without reading GitHub", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    const savedBase = "b".repeat(40);
+    const threadId = ThreadId.make("legacy-thread");
+    // The row exactly as written before issue revisions existed.
+    const legacyIntent = JSON.stringify({
+      repository: {
+        provider: "github",
+        host: "github.com",
+        repository: "owner/factory",
+        canonicalKey: "github.com/owner/factory",
+        url: "https://github.com/owner/factory",
+      },
+      issue: {
+        number: 12,
+        title: issue.title,
+        body: issue.body,
+        state: "open",
+        url: issue.html_url,
+        labels: ["feature"],
+        updatedAt: issue.updated_at,
+        task: null,
+      },
+      projectId,
+      workspaceRoot: "/repo",
+      requestCommandId: "legacy-request",
+      commandId: "legacy-launch",
+      threadId,
+      messageId: "legacy-message",
+      baseRef: savedBase,
+      modelSelection,
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      prompt: "Legacy immutable prompt",
+      createdBy: "user",
+      creationSource: "web",
+      createdAt: issue.updated_at,
+      previousThreadId: null,
+    });
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO factory_issue_launches
+      (thread_id, canonical_key, issue_number, request_command_id, intent_json)
+      VALUES (${threadId}, ${"github.com/owner/factory"}, 12, 'legacy-request', ${legacyIntent})`;
+    const factory = yield* Factory.FactoryIssueService;
+    const result = yield* factory.start({
+      ...startInput("after-upgrade"),
+      expectedIssueRevision: unreviewed,
+      baseRef: "changed",
+    });
+    assert.equal(result.threadId, threadId);
+    assert.isTrue(result.resumed);
+    const projection = yield* (yield* Threads.ThreadManagementService).getThreadProjection(
+      threadId,
+    );
+    assert.deepEqual(
+      projection.messages.map((message) => message.text),
+      ["Legacy immutable prompt"],
+    );
+    const preparation = projection.runs[0]?.workspacePreparation;
+    assert.equal(preparation?.type === "worktree" ? preparation.baseRef : undefined, savedBase);
+  }).pipe(
+    Effect.provide(
+      harness({ rest: () => Effect.die("A saved intent must not read the live issue") }).layer,
+    ),
+  ),
+);
+
+it.effect("admits the matched snapshot when GitHub changes during base resolution", () =>
+  Effect.gen(function* () {
+    const atBase = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let remote: object = { ...issue, body: "Reviewed body" };
+    yield* Effect.gen(function* () {
+      yield* seed;
+      const factory = yield* Factory.FactoryIssueService;
+      const pending = yield* factory
+        .start(yield* reviewedInput("reviewed"))
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(atBase);
+      remote = { ...issue, body: "Edited after the reviewed read" };
+      yield* Deferred.succeed(release, undefined);
+      const started = yield* Fiber.join(pending);
+      assert.isFalse(started.resumed);
+      const { messages } = yield* (yield* Threads.ThreadManagementService).getThreadProjection(
+        started.threadId,
+      );
+      const prompt = messages[0]?.text ?? "";
+      assert.include(prompt, "Reviewed body");
+      assert.notInclude(prompt, "Edited after the reviewed read");
+    }).pipe(
+      Effect.provide(
+        harness({
+          rest: remoteIssue(() => remote),
+          resolveCommit: () =>
+            Deferred.succeed(atBase, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as({ commitSha: baseRef }),
+            ),
+        }).layer,
+      ),
+    );
+  }),
+);
+
+it.effect("a slower start of older reviewed content resumes the newer admitted task", () =>
+  Effect.gen(function* () {
+    const olderAtBase = yield* Deferred.make<void>();
+    const releaseOlder = yield* Deferred.make<void>();
+    let remote: object = { ...issue, body: "Older reviewed body" };
+    let baseResolutions = 0;
+    yield* Effect.gen(function* () {
+      yield* seed;
+      const factory = yield* Factory.FactoryIssueService;
+      const older = yield* factory
+        .start(yield* reviewedInput("older-review"))
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(olderAtBase);
+      remote = { ...issue, body: "Newer reviewed body" };
+      const newer = yield* factory.start(yield* reviewedInput("newer-review"));
+      assert.isFalse(newer.resumed);
+      yield* Deferred.succeed(releaseOlder, undefined);
+      const late = yield* Fiber.join(older);
+      assert.isTrue(late.resumed);
+      assert.equal(late.threadId, newer.threadId);
+      const { messages } = yield* (yield* Threads.ThreadManagementService).getThreadProjection(
+        newer.threadId,
+      );
+      assert.equal(messages.length, 1);
+      assert.include(messages[0]?.text ?? "", "Newer reviewed body");
+      assert.notInclude(messages[0]?.text ?? "", "Older reviewed body");
+    }).pipe(
+      Effect.provide(
+        harness({
+          rest: remoteIssue(() => remote),
+          resolveCommit: () =>
+            baseResolutions++ === 0
+              ? Deferred.succeed(olderAtBase, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseOlder)),
+                  Effect.as({ commitSha: baseRef }),
+                )
+              : Effect.succeed({ commitSha: baseRef }),
+        }).layer,
+      ),
+    );
+  }),
+);
+
 it.effect.each([
   { record: { ...issue, state: "closed" }, reason: "closed-issue" },
   { record: { ...issue, pull_request: {} }, reason: "not-an-issue" },
@@ -435,7 +771,8 @@ it.effect.each([
   Effect.gen(function* () {
     yield* seed;
     const factory = yield* Factory.FactoryIssueService;
-    assert.equal((yield* factory.start(startInput("rejected")).pipe(Effect.flip)).reason, reason);
+    const rejected = { ...startInput("rejected"), expectedIssueRevision: unreviewed };
+    assert.equal((yield* factory.start(rejected).pipe(Effect.flip)).reason, reason);
     const sql = yield* SqlClient.SqlClient;
     assert.equal((yield* sql`SELECT * FROM factory_issue_launches`).length, 0);
   }).pipe(
@@ -459,9 +796,9 @@ it.effect("closed issues still open their existing task without another launch",
   return Effect.gen(function* () {
     yield* seed;
     const factory = yield* Factory.FactoryIssueService;
-    const first = yield* factory.start(startInput("open"));
+    const first = yield* factory.start(yield* reviewedInput("open"));
     closed = true;
-    const again = yield* factory.start(startInput("closed"));
+    const again = yield* factory.start(yield* reviewedInput("closed"));
     assert.equal(again.threadId, first.threadId);
     assert.isTrue(again.resumed);
   }).pipe(
@@ -527,10 +864,13 @@ it.effect("an incomplete stored launch cannot exceed a retrying MCP caller's cei
   Effect.gen(function* () {
     yield* seed;
     const factory = yield* Factory.FactoryIssueService;
-    const first = yield* factory.start({ ...startInput("powerful"), runtimeMode: "full-access" });
+    const first = yield* factory.start({
+      ...(yield* reviewedInput("powerful")),
+      runtimeMode: "full-access",
+    });
     const sql = yield* SqlClient.SqlClient;
     yield* sql`UPDATE factory_issue_launches SET accepted = 0 WHERE thread_id = ${first.threadId}`;
-    const refused = yield* factory.start(startInput("limited")).pipe(
+    const refused = yield* factory.start(yield* reviewedInput("limited")).pipe(
       Effect.provideService(DispatchModeLimit, {
         runtimeMode: "approval-required",
         interactionMode: "default",
@@ -551,7 +891,7 @@ it.effect("keeps preparation failures and archived threads on their original tas
     yield* seed;
     const factory = yield* Factory.FactoryIssueService;
     const threads = yield* Threads.ThreadManagementService;
-    const first = yield* factory.start(startInput("setup"));
+    const first = yield* factory.start(yield* reviewedInput("setup"));
     const projection = yield* threads.getThreadProjection(first.threadId);
     const run = projection.runs[0];
     if (run === undefined) return yield* Effect.die("Expected the initial run");
@@ -567,7 +907,10 @@ it.effect("keeps preparation failures and archived threads on their original tas
       }),
     });
     assert.equal((yield* factory.list({ projectId })).issues[0]?.task?.status, "failed");
-    const reopened = yield* factory.start({ ...startInput("setup-reopen"), restartDeleted: true });
+    const reopened = yield* factory.start({
+      ...(yield* reviewedInput("setup-reopen")),
+      restartDeleted: true,
+    });
     assert.equal(reopened.threadId, first.threadId);
     assert.equal(reopened.task.status, "failed");
     yield* threads.dispatch({
@@ -575,7 +918,7 @@ it.effect("keeps preparation failures and archived threads on their original tas
       commandId: CommandId.make("archive"),
       threadId: first.threadId,
     });
-    const archived = yield* factory.start(startInput("archive-open"));
+    const archived = yield* factory.start(yield* reviewedInput("archive-open"));
     assert.equal(archived.threadId, first.threadId);
     assert.equal(archived.task.status, "archived");
     assert.equal((yield* threads.getThreadProjection(first.threadId)).messages.length, 1);
@@ -587,8 +930,9 @@ it.effect("refuses an unresolved local base without leaving a reservation", () =
     yield* seed;
     const factory = yield* Factory.FactoryIssueService;
     assert.equal(
-      (yield* factory.start({ ...startInput("bad-base"), baseRef: "missing" }).pipe(Effect.flip))
-        .reason,
+      (yield* factory
+        .start({ ...(yield* reviewedInput("bad-base")), baseRef: "missing" })
+        .pipe(Effect.flip)).reason,
       "invalid-base-ref",
     );
     const sql = yield* SqlClient.SqlClient;
@@ -616,7 +960,7 @@ it.effect("refuses a remote change between issue read and reservation", () => {
     yield* seed;
     const factory = yield* Factory.FactoryIssueService;
     assert.equal(
-      (yield* factory.start(startInput("remote-race")).pipe(Effect.flip)).reason,
+      (yield* factory.start(yield* reviewedInput("remote-race")).pipe(Effect.flip)).reason,
       "repository-changed",
     );
     const sql = yield* SqlClient.SqlClient;
@@ -740,7 +1084,7 @@ it.effect("server restart retains a same-run and same-worktree preparation retry
       yield* seed;
       const factory = yield* Factory.FactoryIssueService;
       const threads = yield* Threads.ThreadManagementService;
-      const first = yield* factory.start(startInput("before-restart"));
+      const first = yield* factory.start(yield* reviewedInput("before-restart"));
       yield* threads.dispatch({
         type: "thread.metadata.update",
         commandId: CommandId.make("bind-worktree"),
@@ -759,7 +1103,7 @@ it.effect("server restart retains a same-run and same-worktree preparation retry
       yield* recovery.reconcile("startup");
       yield* Effect.gen(function* () {
         const restartedFactory = yield* Factory.FactoryIssueService;
-        const reopened = yield* restartedFactory.start(startInput("after-restart"));
+        const reopened = yield* restartedFactory.start(yield* reviewedInput("after-restart"));
         assert.equal(reopened.threadId, first.threadId);
         assert.equal(reopened.task.status, "failed");
         const launcher = yield* ThreadLaunch.ThreadLaunchService;
@@ -799,6 +1143,7 @@ it.effect(
       const result = yield* factory
         .start({
           ...startInput("stale-inbox"),
+          expectedIssueRevision: unreviewed,
           expectedRepositoryKey: "github.com/owner/previous",
         })
         .pipe(Effect.flip);
@@ -817,7 +1162,7 @@ it.effect("public command reuse cannot attach another issue to an earlier launch
     yield* seed;
     const factory = yield* Factory.FactoryIssueService;
     const store = yield* Launches.FactoryIssueLaunches;
-    const originalInput = startInput("shared-public-command");
+    const originalInput = yield* reviewedInput("shared-public-command");
     const original = yield* factory.start(originalInput);
     const originalBinding = Option.getOrThrow(
       yield* store.get({
@@ -826,7 +1171,14 @@ it.effect("public command reuse cannot attach another issue to an earlier launch
       }),
     );
     assert.notEqual(originalBinding.intent.commandId, originalInput.commandId);
-    const conflict = yield* factory.start({ ...originalInput, issueNumber: 13 }).pipe(Effect.flip);
+    const separateInput = yield* reviewedInput("separate-public-command", { issueNumber: 13 });
+    const conflict = yield* factory
+      .start({
+        ...originalInput,
+        issueNumber: 13,
+        expectedIssueRevision: separateInput.expectedIssueRevision,
+      })
+      .pipe(Effect.flip);
     assert.equal(conflict.reason, "persistence-failure");
     assert.isTrue(
       Option.isNone(
@@ -836,10 +1188,7 @@ it.effect("public command reuse cannot attach another issue to an earlier launch
         }),
       ),
     );
-    const separate = yield* factory.start({
-      ...startInput("separate-public-command"),
-      issueNumber: 13,
-    });
+    const separate = yield* factory.start(separateInput);
     const separateBinding = Option.getOrThrow(
       yield* store.get({
         canonicalKey: separate.repository.canonicalKey,
@@ -891,7 +1240,7 @@ it.effect.each(["disabled", "unknown"] as const)(
         });
       const refused = yield* factory
         .start({
-          ...startInput("provider-refusal"),
+          ...(yield* reviewedInput("provider-refusal")),
           modelSelection:
             kind === "unknown"
               ? { ...modelSelection, instanceId: ProviderInstanceId.make("misspelled-provider") }
@@ -907,7 +1256,7 @@ it.effect.each(["disabled", "unknown"] as const)(
           [projectId]: { providerInstances: { [modelSelection.instanceId]: { enabled: true } } },
         },
       });
-      const started = yield* factory.start(startInput("provider-corrected"));
+      const started = yield* factory.start(yield* reviewedInput("provider-corrected"));
       assert.isFalse(started.resumed);
       assert.equal((yield* sql`SELECT * FROM factory_issue_launches`).length, 1);
     }).pipe(Effect.provide(harness().layer)),
@@ -959,7 +1308,7 @@ it.effect(
       const factory = yield* Factory.FactoryIssueService;
       const listed = yield* factory.list({ projectId: secondProjectId });
       assert.equal(listed.issues[0]?.task?.status, "missing");
-      const input = { ...startInput("orphan-restart"), projectId: secondProjectId };
+      const input = yield* reviewedInput("orphan-restart", { projectId: secondProjectId });
       assert.equal((yield* factory.start(input).pipe(Effect.flip)).reason, "deleted-task");
       const restarted = yield* factory.start({ ...input, restartDeleted: true });
       assert.equal(restarted.projectId, secondProjectId);

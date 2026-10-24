@@ -7,6 +7,8 @@ import {
   FactoryIssue,
   type FactoryIssueListInput,
   type FactoryIssueListResult,
+  type FactoryIssueReadInput,
+  type FactoryIssueReadResult,
   type FactoryIssueStartInput,
   type FactoryIssueStartResult,
   type FactoryIssueTask,
@@ -22,6 +24,7 @@ import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -62,7 +65,7 @@ const encodeIssueSnapshot = Schema.encodeSync(
     }),
   ),
 );
-const toIssue = (issue: typeof GitHubIssue.Type): FactoryIssue => ({
+const toIssue = (issue: typeof GitHubIssue.Type): Launches.FactoryLaunchIntent["issue"] => ({
   number: issue.number,
   title: issue.title,
   body: issue.body,
@@ -102,6 +105,9 @@ export class FactoryIssueService extends Context.Service<
     readonly list: (
       input: FactoryIssueListInput,
     ) => Effect.Effect<FactoryIssueListResult, FactoryIssueError>;
+    readonly read: (
+      input: FactoryIssueReadInput,
+    ) => Effect.Effect<FactoryIssueReadResult, FactoryIssueError>;
     readonly start: (
       input: FactoryIssueStartInput,
     ) => Effect.Effect<FactoryIssueStartResult, FactoryIssueError>;
@@ -185,6 +191,41 @@ const make = Effect.gen(function* () {
       return yield* new FactoryIssueError({ reason: "invalid-response" });
     return response;
   });
+  const fetchIssue = Effect.fn("FactoryIssueService.fetchIssue")(function* (
+    repository: FactoryRepository,
+    issueNumber: FactoryIssueReadInput["issueNumber"],
+  ) {
+    const response = yield* request(repository, `/${issueNumber}`);
+    const raw = yield* decodeIssue(response.body).pipe(
+      Effect.mapError((cause) => new FactoryIssueError({ reason: "invalid-response", cause })),
+    );
+    if (raw.pull_request !== undefined)
+      return yield* new FactoryIssueError({ reason: "not-an-issue" });
+    if (raw.number !== issueNumber)
+      return yield* new FactoryIssueError({ reason: "invalid-response" });
+    return toIssue(raw);
+  });
+  // Covers only task-defining text: labels, state, URL and timestamps can change without
+  // invalidating a review, and an unchanged timestamp never vouches for unchanged text.
+  // JSON keeps null distinct from "" and escapes lone surrogates, so no text is merged.
+  const revisionOf = (
+    repository: FactoryRepository,
+    issue: Launches.FactoryLaunchIntent["issue"],
+  ) =>
+    crypto
+      .digest(
+        "SHA-256",
+        new TextEncoder().encode(
+          JSON.stringify([
+            "t3.factory.issue-content/1",
+            repository.canonicalKey,
+            issue.number,
+            issue.title,
+            issue.body,
+          ]),
+        ),
+      )
+      .pipe(Effect.map(Hex.encode), Effect.orDie);
   const inspect = Effect.fn("FactoryIssueService.inspect")(function* (
     binding: Launches.FactoryIssueBinding,
   ) {
@@ -245,6 +286,20 @@ const make = Effect.gen(function* () {
       } satisfies FactoryIssueTask,
     };
   });
+  const present = Effect.fn("FactoryIssueService.present")(function* (
+    repository: FactoryRepository,
+    issue: Launches.FactoryLaunchIntent["issue"],
+  ): Effect.fn.Return<FactoryIssue, FactoryIssueError> {
+    const binding = yield* launches.get({
+      canonicalKey: repository.canonicalKey,
+      issueNumber: issue.number,
+    });
+    return {
+      ...issue,
+      revision: yield* revisionOf(repository, issue),
+      task: Option.isSome(binding) ? (yield* inspect(binding.value)).task : null,
+    };
+  });
   const list = Effect.fn("FactoryIssueService.list")(function* (
     input: FactoryIssueListInput,
   ): Effect.fn.Return<FactoryIssueListResult, FactoryIssueError> {
@@ -259,18 +314,7 @@ const make = Effect.gen(function* () {
     );
     const issues = yield* Effect.forEach(
       raw.filter((issue) => issue.pull_request === undefined),
-      (rawIssue) =>
-        Effect.gen(function* () {
-          const issue = toIssue(rawIssue);
-          const binding = yield* launches.get({
-            canonicalKey: repository.canonicalKey,
-            issueNumber: issue.number,
-          });
-          return {
-            ...issue,
-            task: Option.isSome(binding) ? (yield* inspect(binding.value)).task : null,
-          };
-        }),
+      (issue) => present(repository, toIssue(issue)),
     );
     // GitHub paginates the raw issue+PR stream. An all-PR page must still advance.
     const hasNext = (response.headers.link ?? "")
@@ -282,6 +326,13 @@ const make = Effect.gen(function* () {
       nextPage: hasNext ? page + 1 : null,
       fetchedAt: DateTime.formatIso(yield* DateTime.now),
     };
+  });
+  const read = Effect.fn("FactoryIssueService.read")(function* (
+    input: FactoryIssueReadInput,
+  ): Effect.fn.Return<FactoryIssueReadResult, FactoryIssueError> {
+    const { repository } = yield* resolve(input.projectId);
+    const issue = yield* present(repository, yield* fetchIssue(repository, input.issueNumber));
+    return { repository, issue, fetchedAt: DateTime.formatIso(yield* DateTime.now) };
   });
   const resume = Effect.fn("FactoryIssueService.resume")(function* (
     binding: Launches.FactoryIssueBinding,
@@ -366,16 +417,12 @@ const make = Effect.gen(function* () {
     // Factory tasks must never take that non-isolated path.
     if (yield* folders.isScratchProject(input.projectId))
       return yield* new FactoryIssueError({ reason: "missing-repository" });
-    const response = yield* request(repository, `/${input.issueNumber}`);
-    const raw = yield* decodeIssue(response.body).pipe(
-      Effect.mapError((cause) => new FactoryIssueError({ reason: "invalid-response", cause })),
-    );
-    if (raw.pull_request !== undefined)
-      return yield* new FactoryIssueError({ reason: "not-an-issue" });
-    if (raw.number !== input.issueNumber)
-      return yield* new FactoryIssueError({ reason: "invalid-response" });
-    if (raw.state !== "open") return yield* new FactoryIssueError({ reason: "closed-issue" });
-    const issue = toIssue(raw);
+    // One decoded snapshot is compared, reserved and prompted. GitHub can still change after this
+    // read; what holds is that new work carries exactly the content the caller reviewed.
+    const issue = yield* fetchIssue(repository, input.issueNumber);
+    if (issue.state !== "open") return yield* new FactoryIssueError({ reason: "closed-issue" });
+    if ((yield* revisionOf(repository, issue)) !== input.expectedIssueRevision)
+      return yield* new FactoryIssueError({ reason: "issue-changed" });
     const { commitSha } = yield* git
       .resolveCommit({ cwd: project.workspaceRoot, revision: input.baseRef ?? "HEAD" })
       .pipe(
@@ -435,6 +482,6 @@ const make = Effect.gen(function* () {
     const winner = yield* launches.reserve(intent);
     return yield* resume(winner, winner.intent.threadId !== intent.threadId);
   });
-  return FactoryIssueService.of({ list, start });
+  return FactoryIssueService.of({ list, read, start });
 });
 export const layer = Layer.effect(FactoryIssueService, make);

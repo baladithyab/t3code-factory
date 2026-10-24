@@ -41,6 +41,7 @@ function issue(state: FactoryIssue["state"], linked: FactoryIssueTask | null): F
     number: 7,
     title: "Fix it",
     body: null,
+    revision: "a".repeat(64),
     state,
     url: "https://github.com/o/r/issues/7",
     labels: [],
@@ -73,8 +74,11 @@ describe("resolveFactoryIssueAction", () => {
     expect(resolveFactoryIssueAction(issue("closed", task("missing"))).kind).toBe("unavailable");
   });
 
-  it("resumes an interrupted launch rather than opening a thread that may not exist", () => {
+  it("resumes an interrupted launch even when its source issue is now closed", () => {
     expect(resolveFactoryIssueAction(issue("open", task("launching")))).toEqual({
+      kind: "resume",
+    });
+    expect(resolveFactoryIssueAction(issue("closed", task("launching")))).toEqual({
       kind: "resume",
     });
   });
@@ -95,6 +99,11 @@ describe("describeFactoryFailure", () => {
     expect(
       describeFactoryFailure(new FactoryIssueError({ reason: "missing-repository" })).kind,
     ).toBe("repository");
+  });
+
+  it("distinguishes changed source content so confirmation cannot retry the stale review", () => {
+    const failure = describeFactoryFailure(new FactoryIssueError({ reason: "issue-changed" }));
+    expect(failure.kind).toBe("changed");
   });
 });
 

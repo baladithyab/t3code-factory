@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useNavigation } from "@react-navigation/native";
+import { useIsFocused, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { MenuAction } from "@react-native-menu/menu";
 import {
@@ -34,6 +34,7 @@ import {
   useFactoryInboxSelection,
 } from "./factory-inbox-state";
 import { FactoryIssueRow } from "./FactoryIssueRow";
+import { FactoryIssueReviewModal } from "./FactoryIssueReviewModal";
 import {
   describeFactoryFailure,
   FACTORY_ISSUE_FILTERS,
@@ -144,6 +145,7 @@ function StateMessage(props: {
 export function FactoryIssuesRouteScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<NativeStackNavigationProp<FactoryRoutes>>();
+  const isFocused = useIsFocused();
   const { availableTargets, selectedProjectKey, projectGroups } = useSettingsEnvironmentFilter();
   const configs = useAtomValue(environmentServerConfigsAtom);
   const selection = useFactoryInboxSelection();
@@ -247,7 +249,8 @@ export function FactoryIssuesRouteScreen() {
   const { refresh } = list;
   const actions = useFactoryIssueActions({
     settings,
-    scopeKey: list.requestKey,
+    scopeKey:
+      isFocused && list.requestKey !== null ? JSON.stringify([list.requestKey, canStart]) : null,
     onSettled: () => void refresh(),
   });
 
@@ -474,6 +477,14 @@ export function FactoryIssuesRouteScreen() {
 
         {body}
       </ScrollView>
+      {actions.review ? (
+        <FactoryIssueReviewModal
+          review={actions.review}
+          pending={actions.busyIssue !== null}
+          onClose={actions.closeReview}
+          onConfirm={actions.confirmReview}
+        />
+      ) : null}
     </SettingsScreen>
   );
 }

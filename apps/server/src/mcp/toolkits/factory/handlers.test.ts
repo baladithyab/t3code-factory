@@ -80,6 +80,7 @@ it.effect.each([
           projectId: ProjectId.make("project"),
           issueNumber: 1,
           expectedRepositoryKey: "github.com/owner/repo",
+          expectedIssueRevision: "0".repeat(64),
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
           runtimeMode: requested,
           interactionMode: "default",
@@ -88,4 +89,38 @@ it.effect.each([
       assert.deepInclude(outputs.at(-1)?.result, { code });
       assert.isFalse(called);
     }),
+);
+
+it.effect("refuses a focused issue read without orchestration capability before fetching", () =>
+  Effect.gen(function* () {
+    let called = false;
+    const dependencies = Layer.mergeAll(
+      Layer.succeed(Context.McpInvocationContext, {
+        environmentId: EnvironmentId.make("test"),
+        requestNamespace: "factory-read-test",
+        issuedAt: 0,
+        thread: undefined,
+        client: { sessionId: "test", label: "test", access: "full-access" },
+        capabilities: new Set<Context.McpCapability>(["worktree"]),
+      }),
+      Layer.mock(Threads.ThreadManagementService)({}),
+      Layer.mock(Factory.FactoryIssueService)({
+        read: () => {
+          called = true;
+          return Effect.die("Unauthorized issue read reached the source");
+        },
+      }),
+    );
+    const toolkit = yield* FactoryToolkit.pipe(
+      Effect.provide(Access.HandlersLayer.layer(Handlers.layer).pipe(Layer.provide(dependencies))),
+    );
+    const outputs = yield* toolkit
+      .handle("factory_read_issue", {
+        projectId: ProjectId.make("project"),
+        issueNumber: 1,
+      })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    assert.deepInclude(outputs.at(-1)?.result, { code: "capability_denied" });
+    assert.isFalse(called);
+  }),
 );

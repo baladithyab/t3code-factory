@@ -48,6 +48,9 @@ export const FactoryIssue = Schema.Struct({
   url: Schema.String,
   labels: Schema.Array(Schema.String),
   updatedAt: IsoDateTime,
+  // Opaque SHA-256 token over the repository and the exact issue title/body. Compare it; never
+  // parse it. Labels, state, URL and timestamps can change without invalidating a review.
+  revision: TrimmedNonEmptyString,
   task: Schema.NullOr(FactoryIssueTask),
 });
 export type FactoryIssue = typeof FactoryIssue.Type;
@@ -65,12 +68,26 @@ export const FactoryIssueListResult = Schema.Struct({
   fetchedAt: IsoDateTime,
 });
 export type FactoryIssueListResult = typeof FactoryIssueListResult.Type;
+export const FactoryIssueReadInput = Schema.Struct({
+  projectId: ProjectId,
+  issueNumber: PositiveInt,
+});
+export type FactoryIssueReadInput = typeof FactoryIssueReadInput.Type;
+export const FactoryIssueReadResult = Schema.Struct({
+  repository: FactoryRepository,
+  issue: FactoryIssue,
+  fetchedAt: IsoDateTime,
+});
+export type FactoryIssueReadResult = typeof FactoryIssueReadResult.Type;
 
 export const FactoryIssueStartInput = Schema.Struct({
   commandId: CommandId,
   projectId: ProjectId,
   expectedRepositoryKey: TrimmedNonEmptyString,
   issueNumber: PositiveInt,
+  // The full-content revision the caller reviewed. New and restarted tasks require it to match the
+  // live issue; an existing saved task resumes its original snapshot and ignores this value.
+  expectedIssueRevision: FactoryIssue.fields.revision,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
@@ -99,6 +116,7 @@ export class FactoryIssueError extends Schema.TaggedError<FactoryIssueError>()(
       "repository-changed",
       "closed-issue",
       "deleted-task",
+      "issue-changed",
       "invalid-base-ref",
       "launch-failure",
       "launch-authority",
@@ -137,6 +155,8 @@ export class FactoryIssueError extends Schema.TaggedError<FactoryIssueError>()(
         return "Closed issues cannot start new tasks. An existing task can still be opened.";
       case "deleted-task":
         return "The linked thread or its owning project was deleted. Confirm a new attempt to restart this issue.";
+      case "issue-changed":
+        return "The issue title or body no longer matches the reviewed content. Refresh and review the current issue before starting new work; existing tasks are unaffected.";
       case "invalid-base-ref":
         return "The base ref does not resolve to a local commit. Choose an existing branch, tag, or commit.";
       case "launch-authority":

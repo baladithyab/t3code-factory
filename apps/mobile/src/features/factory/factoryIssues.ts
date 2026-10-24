@@ -146,8 +146,8 @@ const MAX_BODY_CHARACTERS = 4_000;
 const UNSAFE_TEXT = /(?![\t\n])[\p{Cc}\u202A-\u202E\u2066-\u2069]/gu;
 
 /**
- * Issue text is untrusted. It is only ever drawn as plain text, never parsed as markup or a
- * link target. This also removes characters that can disguise it and bounds its size.
+ * Row previews are plain text, never markup or link targets. They remove disguising characters
+ * and bound rendering cost; approval uses the separate, complete review representation.
  */
 export function safeFactoryIssueText(value: string, limit = MAX_BODY_CHARACTERS): string {
   const cleaned = value
@@ -164,7 +164,13 @@ export function safeFactoryIssueBody(body: string | null): string | null {
   return text.length === 0 ? null : text;
 }
 
-export type FactoryFailureKind = "auth" | "unsupported" | "repository" | "retry" | "error";
+export type FactoryFailureKind =
+  | "auth"
+  | "unsupported"
+  | "repository"
+  | "changed"
+  | "retry"
+  | "error";
 
 export interface FactoryFailure {
   readonly kind: FactoryFailureKind;
@@ -196,6 +202,8 @@ export function describeFactoryFailure(error: unknown, fallbackTitle: string): F
       case "missing-repository":
       case "repository-changed":
         return { kind: "repository", title: "Repository unavailable", detail: error.message };
+      case "issue-changed":
+        return { kind: "changed", title: "Issue changed", detail: error.message };
       case "launch-failure":
         return { kind: "retry", title: "Launch interrupted", detail: error.message };
       case "deleted-task":
@@ -221,6 +229,7 @@ export function factoryIssueStartKey(input: {
   readonly projectId: string;
   readonly expectedRepositoryKey: string;
   readonly issueNumber: number;
+  readonly expectedIssueRevision: string;
   readonly restartDeleted: boolean;
   readonly previousThreadId: string | null;
 }): string {
@@ -229,6 +238,7 @@ export function factoryIssueStartKey(input: {
     input.projectId,
     input.expectedRepositoryKey,
     input.issueNumber,
+    input.expectedIssueRevision,
     input.restartDeleted,
     input.previousThreadId,
   ]);

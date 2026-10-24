@@ -4,6 +4,7 @@ import {
   type NavigationAction,
   type NavigationState,
 } from "@react-navigation/native";
+import { factoryIssueReviewText } from "@t3tools/client-runtime/state/factory";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -12,6 +13,7 @@ import {
   CommandId,
   type EnvironmentId,
   type FactoryIssue,
+  type FactoryIssueStartInput,
   type FactoryRepository,
   type ModelSelection,
   type ProjectId,
@@ -28,11 +30,9 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useAndroidWorkspaceSelection } from "../workspace/useAndroidWorkspaceSelection";
 import {
   describeFactoryFailure,
-  FACTORY_SUPERVISION_NOTICE,
   factoryIssueStartKey,
-  factoryRepositoryLabel,
-  safeFactoryIssueText,
   type FactoryIssueAction,
+  type FactoryFailure,
 } from "./factoryIssues";
 
 interface NavigationNode {
@@ -77,18 +77,36 @@ export interface FactoryStartSettings {
   readonly runtimeMode: RuntimeMode;
 }
 
-const RUNTIME_MODE_LABELS: Record<RuntimeMode, string> = {
-  "approval-required": "Approval required",
-  "auto-accept-edits": "Auto-accept edits",
-  auto: "Auto",
-  "full-access": "Full access",
-};
+interface FactoryLaunchRequest {
+  readonly environmentId: EnvironmentId;
+  readonly input: FactoryIssueStartInput;
+  readonly key: string;
+}
+
+export interface FactoryIssueReviewSnapshot {
+  readonly issue: FactoryIssue;
+  readonly repository: FactoryRepository;
+  readonly modelLabel: string;
+  readonly request: FactoryLaunchRequest;
+  readonly titleText: string;
+  readonly bodyText: string | null;
+}
+
+export interface FactoryIssueReview {
+  readonly snapshot: FactoryIssueReviewSnapshot;
+  readonly failure: FactoryFailure | null;
+}
+
+interface ActionLifetime {
+  readonly key: string;
+  active: boolean;
+  pending: boolean;
+  review: FactoryIssueReview | null;
+}
 
 /**
- * Starts, resumes, restarts, or opens the task for one issue. A start asks first so the user sees
- * the repository, model, base, and supervision they are authorizing. Each logical attempt keeps
- * one command id across retries, so a dropped response replays the same reservation instead of
- * racing a second launch.
+ * New work pins its source and launch input when review opens. Retries keep that same input
+ * and command id; a response cannot navigate or update a different inbox lifetime.
  */
 export function useFactoryIssueActions(input: {
   readonly settings: FactoryStartSettings | null;
@@ -98,93 +116,65 @@ export function useFactoryIssueActions(input: {
   const { settings, onSettled, scopeKey } = input;
   const run = useAtomCommand(factoryEnvironment.start, { reportFailure: false });
   const openThread = useOpenFactoryThread();
-  const lifetime = useRef<{ readonly key: string; active: boolean; pending: boolean } | null>(null);
+  const lifetime = useRef<ActionLifetime | null>(null);
   const commandIds = useRef(new Map<string, string>());
-  const [busy, setBusy] = useState<{
+  const [state, setState] = useState<{
     readonly key: string | null;
-    readonly issue: number | null;
-  }>({ key: scopeKey, issue: null });
-  if (busy.key !== scopeKey) setBusy({ key: scopeKey, issue: null });
+    readonly busyIssue: number | null;
+    readonly review: FactoryIssueReview | null;
+  }>({ key: scopeKey, busyIssue: null, review: null });
+  if (state.key !== scopeKey) setState({ key: scopeKey, busyIssue: null, review: null });
   useLayoutEffect(() => {
     if (scopeKey === null) {
       lifetime.current = null;
       return;
     }
-    const current = { key: scopeKey, active: true, pending: false };
+    const current: ActionLifetime = { key: scopeKey, active: true, pending: false, review: null };
     lifetime.current = current;
     return () => {
       current.active = false;
+      current.review = null;
     };
   }, [scopeKey]);
 
   const launch = useCallback(
-    async (issue: FactoryIssue, restartDeleted: boolean) => {
+    async (request: FactoryLaunchRequest, snapshot: FactoryIssueReviewSnapshot | null) => {
       const current = lifetime.current;
       if (
         current === null ||
         !current.active ||
         current.key !== scopeKey ||
         current.pending ||
-        settings === null ||
-        settings.repository === null
+        (current.review?.snapshot ?? null) !== snapshot ||
+        current.review?.failure?.kind === "changed"
       )
         return;
-      const reserved = issue.task?.status === "launching" ? issue.task : null;
-      const modelSelection = reserved?.modelSelection ?? settings.modelSelection;
-      if (modelSelection === null) return;
-      const { environmentId, projectId, repository, baseRef } = settings;
-      const runtimeMode = reserved?.runtimeMode ?? settings.runtimeMode;
-      const interactionMode = reserved?.interactionMode ?? "default";
-      const key = factoryIssueStartKey({
-        environmentId,
-        projectId,
-        expectedRepositoryKey: repository.canonicalKey,
-        issueNumber: issue.number,
-        restartDeleted,
-        previousThreadId: restartDeleted ? (issue.task?.threadId ?? null) : null,
-      });
-      let commandId = commandIds.current.get(key);
-      if (commandId === undefined) {
-        commandId = uuidv4();
-        commandIds.current.set(key, commandId);
-      }
       current.pending = true;
-      setBusy({ key: scopeKey, issue: issue.number });
-      const result = await run({
-        environmentId,
-        input: {
-          commandId: CommandId.make(commandId),
-          projectId,
-          issueNumber: issue.number,
-          expectedRepositoryKey: repository.canonicalKey,
-          modelSelection,
-          runtimeMode,
-          interactionMode,
-          ...(baseRef === null ? {} : { baseRef }),
-          ...(restartDeleted ? { restartDeleted: true } : {}),
-          creationSource: "mobile",
-        },
-      });
+      setState({ key: scopeKey, busyIssue: request.input.issueNumber, review: current.review });
+      const result = await run({ environmentId: request.environmentId, input: request.input });
       current.pending = false;
-      if (!current.active) return;
-      setBusy({ key: scopeKey, issue: null });
+      if (!current.active || lifetime.current !== current) return;
       if (result._tag === "Failure") {
-        if (!isAtomCommandInterrupted(result)) {
-          const failure = describeFactoryFailure(
-            squashAtomCommandFailure(result),
-            "Couldn't start the task",
-          );
+        const failure = isAtomCommandInterrupted(result)
+          ? null
+          : describeFactoryFailure(squashAtomCommandFailure(result), "Couldn't start the task");
+        if (current.review !== null) {
+          current.review = { ...current.review, failure };
+        } else if (failure !== null) {
           Dialog.alert(failure.title, failure.detail);
         }
-        // The server may have recorded an outcome (or the issue changed) before the failure.
+        setState({ key: scopeKey, busyIssue: null, review: current.review });
+        // Refresh only the inbox. The source and input in an open review never change.
         onSettled();
         return;
       }
-      commandIds.current.delete(key);
+      current.review = null;
+      setState({ key: scopeKey, busyIssue: null, review: null });
+      commandIds.current.delete(request.key);
       onSettled();
-      openThread(environmentId, result.value.threadId);
+      openThread(request.environmentId, result.value.threadId);
     },
-    [onSettled, openThread, run, scopeKey, settings],
+    [onSettled, openThread, run, scopeKey],
   );
 
   const perform = useCallback(
@@ -195,7 +185,8 @@ export function useFactoryIssueActions(input: {
         current === null ||
         !current.active ||
         current.key !== scopeKey ||
-        current.pending
+        current.pending ||
+        current.review !== null
       )
         return;
       if (action.kind === "open") {
@@ -203,7 +194,11 @@ export function useFactoryIssueActions(input: {
         openThread(settings.environmentId, action.task.threadId);
         return;
       }
-      if (settings === null || (action.kind !== "resume" && settings.modelSelection === null)) {
+      if (settings === null) return;
+      const reserved =
+        action.kind === "resume" && issue.task?.status === "launching" ? issue.task : null;
+      const modelSelection = reserved?.modelSelection ?? settings.modelSelection;
+      if (modelSelection === null) {
         Dialog.alert("Choose a model", "Pick a model and provider before starting a task.");
         return;
       }
@@ -211,33 +206,88 @@ export function useFactoryIssueActions(input: {
         Dialog.alert("Repository unavailable", "Refresh the inbox before starting a task.");
         return;
       }
+      const restartDeleted = action.kind === "restart";
+      const key = factoryIssueStartKey({
+        environmentId: settings.environmentId,
+        projectId: settings.projectId,
+        expectedRepositoryKey: settings.repository.canonicalKey,
+        issueNumber: issue.number,
+        expectedIssueRevision: issue.revision,
+        restartDeleted,
+        previousThreadId: restartDeleted ? (issue.task?.threadId ?? null) : null,
+      });
+      let commandId = commandIds.current.get(key);
+      if (commandId === undefined) {
+        commandId = uuidv4();
+        commandIds.current.set(key, commandId);
+      }
+      const baseRef = reserved?.baseRef ?? settings.baseRef;
+      const request: FactoryLaunchRequest = {
+        key,
+        environmentId: settings.environmentId,
+        input: {
+          commandId: CommandId.make(commandId),
+          projectId: settings.projectId,
+          issueNumber: issue.number,
+          expectedRepositoryKey: settings.repository.canonicalKey,
+          expectedIssueRevision: issue.revision,
+          modelSelection: {
+            ...modelSelection,
+            ...(modelSelection.options === undefined
+              ? {}
+              : { options: modelSelection.options.map((option) => ({ ...option })) }),
+          },
+          runtimeMode: reserved?.runtimeMode ?? settings.runtimeMode,
+          interactionMode: reserved?.interactionMode ?? "default",
+          ...(baseRef === null ? {} : { baseRef }),
+          ...(restartDeleted ? { restartDeleted: true } : {}),
+          creationSource: "mobile",
+        },
+      };
       if (action.kind === "resume") {
-        void launch(issue, false);
+        void launch(request, null);
         return;
       }
-      const restart = action.kind === "restart";
-      const repository = factoryRepositoryLabel(settings.repository);
-      Dialog.confirm({
-        title: restart ? "Start a new attempt?" : "Start this task?",
-        message: [
-          `#${issue.number} ${safeFactoryIssueText(issue.title, 140)}`,
-          repository,
-          restart
-            ? "The earlier thread was deleted. A new attempt creates a new isolated worktree."
-            : "This creates an isolated worktree for the issue.",
-          `Model: ${settings.modelLabel}`,
-          `Base: ${settings.baseRef ?? "Current HEAD"}`,
-          `Runtime: ${RUNTIME_MODE_LABELS[settings.runtimeMode]}`,
-          FACTORY_SUPERVISION_NOTICE,
-        ].join("\n\n"),
-        confirmText: restart ? "Start new attempt" : "Start task",
-        onConfirm: () => {
-          void launch(issue, restart);
+      current.review = {
+        snapshot: {
+          issue: { ...issue, labels: [...issue.labels] },
+          repository: { ...settings.repository },
+          modelLabel: settings.modelLabel,
+          request,
+          titleText: factoryIssueReviewText(issue.title),
+          bodyText: issue.body === null ? null : factoryIssueReviewText(issue.body),
         },
-      });
+        failure: null,
+      };
+      setState({ key: scopeKey, busyIssue: null, review: current.review });
     },
     [launch, openThread, scopeKey, settings],
   );
 
-  return { busyIssue: busy.key === scopeKey ? busy.issue : null, perform };
+  const snapshot = state.review?.snapshot ?? null;
+  const confirmReview = useCallback(() => {
+    if (snapshot !== null) void launch(snapshot.request, snapshot);
+  }, [launch, snapshot]);
+
+  const closeReview = useCallback(() => {
+    const current = lifetime.current;
+    if (
+      current === null ||
+      !current.active ||
+      current.key !== scopeKey ||
+      current.pending ||
+      current.review?.snapshot !== snapshot
+    )
+      return;
+    current.review = null;
+    setState({ key: scopeKey, busyIssue: null, review: null });
+  }, [scopeKey, snapshot]);
+
+  return {
+    busyIssue: state.key === scopeKey ? state.busyIssue : null,
+    review: state.key === scopeKey ? state.review : null,
+    perform,
+    confirmReview,
+    closeReview,
+  };
 }

@@ -24,7 +24,19 @@ import * as SqlSchema from "effect/sql/SqlSchema";
 
 export const FactoryLaunchIntent = Schema.Struct({
   repository: FactoryRepository,
-  issue: FactoryIssue,
+  // Frozen durable snapshot. Rows written before content revisions decode unchanged, and new rows
+  // keep the shape older binaries read. A revision belongs to live read/list results, never here.
+  issue: Schema.Struct({
+    number: FactoryIssue.fields.number,
+    title: FactoryIssue.fields.title,
+    body: FactoryIssue.fields.body,
+    state: FactoryIssue.fields.state,
+    url: FactoryIssue.fields.url,
+    labels: FactoryIssue.fields.labels,
+    updatedAt: FactoryIssue.fields.updatedAt,
+    // Always null here; retained because older binaries require the key.
+    task: FactoryIssue.fields.task,
+  }),
   projectId: ProjectId,
   workspaceRoot: Schema.String,
   requestCommandId: CommandId,

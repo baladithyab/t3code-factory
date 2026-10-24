@@ -16,6 +16,7 @@ import {
   describeFactoryFailure,
   EMPTY_FACTORY_ISSUE_PAGES,
   factoryIssueAction,
+  factoryIssueStartKey,
   factoryRepositoryLabel,
   resolveFactoryInboxTarget,
   safeFactoryIssueBody,
@@ -47,6 +48,7 @@ function task(status: FactoryIssueTask["status"]): FactoryIssueTask {
 function issue(overrides: Partial<FactoryIssue> = {}): FactoryIssue {
   return {
     number: 1,
+    revision: "a".repeat(64),
     title: "Fix it",
     body: null,
     state: "open",
@@ -144,6 +146,40 @@ describe("factoryIssueAction", () => {
   });
 });
 
+describe("factoryIssueStartKey", () => {
+  it("reuses a retry identity only for the same reviewed revision", () => {
+    const input = {
+      environmentId: "environment-1",
+      projectId: "project-1",
+      expectedRepositoryKey: repository.canonicalKey,
+      issueNumber: 1,
+      expectedIssueRevision: "a".repeat(64),
+      restartDeleted: false,
+      previousThreadId: null,
+    };
+    const commands = new Map([[factoryIssueStartKey(input), "original-command"]]);
+    expect(commands.get(factoryIssueStartKey({ ...input }))).toBe("original-command");
+    expect(
+      commands.get(factoryIssueStartKey({ ...input, expectedIssueRevision: "b".repeat(64) })),
+    ).toBeUndefined();
+  });
+
+  it("does not replay the attempt for a different deleted thread", () => {
+    const input = {
+      environmentId: "environment-1",
+      projectId: "project-1",
+      expectedRepositoryKey: repository.canonicalKey,
+      issueNumber: 1,
+      expectedIssueRevision: "a".repeat(64),
+      restartDeleted: true,
+      previousThreadId: "deleted-thread-1",
+    };
+    expect(factoryIssueStartKey(input)).not.toBe(
+      factoryIssueStartKey({ ...input, previousThreadId: "deleted-thread-2" }),
+    );
+  });
+});
+
 describe("safeFactoryIssueText", () => {
   it("removes controls and bidirectional overrides but keeps newlines", () => {
     expect(safeFactoryIssueText("a\u202Eb\u0000c\r\nd")).toBe("abc\nd");
@@ -186,6 +222,15 @@ describe("describeFactoryFailure", () => {
     expect(
       describeFactoryFailure(new FactoryIssueError({ reason: "missing-repository" }), "x").kind,
     ).toBe("repository");
+  });
+
+  it("distinguishes changed source from failures that can retry the same review", () => {
+    expect(
+      describeFactoryFailure(new FactoryIssueError({ reason: "issue-changed" }), "x").kind,
+    ).toBe("changed");
+    expect(
+      describeFactoryFailure(new FactoryIssueError({ reason: "launch-failure" }), "x").kind,
+    ).toBe("retry");
   });
 
   it("reports authorization failures as not permitted", () => {

@@ -20,6 +20,13 @@ export const layer = McpToolAccess.toLayer(FactoryToolkit, {
       return yield* factory.list(input).pipe(Effect.mapError(failure));
     }),
   ),
+  factory_read_issue: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      yield* readCaller();
+      const factory = yield* Factory.FactoryIssueService;
+      return yield* factory.read(input).pipe(Effect.mapError(failure));
+    }),
+  ),
   factory_start_issue: McpToolAccess.startsThreads(
     (input) => input,
     (input, modes) =>

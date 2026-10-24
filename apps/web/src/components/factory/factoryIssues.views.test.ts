@@ -19,6 +19,7 @@ function issue(
     number,
     title: `Issue ${number}`,
     body: null,
+    revision: "a".repeat(64),
     state,
     url: `https://github.com/o/r/issues/${number}`,
     labels,

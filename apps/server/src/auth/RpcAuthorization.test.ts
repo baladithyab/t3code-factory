@@ -386,6 +386,7 @@ describe("factory authorization", () => {
     commandId: CommandId.make("factory-auth"),
     projectId: ProjectId.make("project"),
     expectedRepositoryKey: "github.com/owner/repo",
+    expectedIssueRevision: "0".repeat(64),
     issueNumber: 1,
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
     runtimeMode: "approval-required" as const,
