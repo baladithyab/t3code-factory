@@ -113,7 +113,7 @@ export function resolveFactoryIssueAction(issue: FactoryIssue): FactoryIssueActi
   }
 }
 
-export type FactoryFailureKind = "permission" | "unsupported" | "repository" | "other";
+export type FactoryFailureKind = "permission" | "unsupported" | "repository" | "changed" | "other";
 
 export interface FactoryFailure {
   readonly kind: FactoryFailureKind;
@@ -138,6 +138,13 @@ export function describeFactoryFailure(error: unknown, fallbackMessage?: string)
   }
   if (isFactoryIssueError(error)) {
     switch (error.reason) {
+      case "issue-changed":
+        return {
+          kind: "changed",
+          title: "Issue changed",
+          message: error.message,
+          reason: error.reason,
+        };
       case "unsupported-provider":
         return {
           kind: "unsupported",

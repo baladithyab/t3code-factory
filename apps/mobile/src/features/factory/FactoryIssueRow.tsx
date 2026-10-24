@@ -107,6 +107,9 @@ export function FactoryIssueRow(props: {
       </Pressable>
       {expanded ? (
         <View className="gap-3 px-4 pb-4">
+          <Text className="text-xs text-foreground-muted">
+            Issue preview. New tasks require review of the complete title and body.
+          </Text>
           {body ? (
             <Text selectable className="text-sm leading-normal text-foreground-secondary">
               {body}

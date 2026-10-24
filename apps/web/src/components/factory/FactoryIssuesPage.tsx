@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { factoryIssueReviewText } from "@t3tools/client-runtime/state/factory";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -23,7 +24,7 @@ import {
   ChevronRightIcon,
   PlugZapIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { isElectron } from "../../env";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
@@ -445,40 +446,39 @@ function FactoryInbox(props: {
   ) => {
     // The server owns deduplication; this only stops the same client double-submitting.
     if (startInFlight.current) return;
+    const input: FactoryIssueStartInput = {
+      commandId: CommandId.make(randomUUID()),
+      projectId: project.id,
+      issueNumber: issue.number,
+      expectedRepositoryKey: options.expectedRepositoryKey,
+      expectedIssueRevision: issue.revision,
+      modelSelection: options.modelSelection,
+      runtimeMode: options.runtimeMode,
+      interactionMode: options.interactionMode,
+      ...(options.baseRef !== undefined ? { baseRef: options.baseRef } : {}),
+      ...(options.restartDeleted ? { restartDeleted: true } : {}),
+    };
     startInFlight.current = true;
     setStartingIssue(issue.number);
     setStartFailure(null);
-    try {
-      const input: FactoryIssueStartInput = {
-        commandId: CommandId.make(randomUUID()),
-        projectId: project.id,
-        issueNumber: issue.number,
-        expectedRepositoryKey: options.expectedRepositoryKey,
-        modelSelection: options.modelSelection,
-        runtimeMode: options.runtimeMode,
-        interactionMode: options.interactionMode,
-        ...(options.baseRef !== undefined ? { baseRef: options.baseRef } : {}),
-        ...(options.restartDeleted ? { restartDeleted: true } : {}),
-      };
-      const result = await runStart({ environmentId, input });
-      if (!mounted.current) return;
-      if (result._tag === "Success") {
-        query.refresh();
-        setDialog(null);
-        void navigate({
-          to: "/$environmentId/$threadId",
-          params: buildThreadRouteParams(scopeThreadRef(environmentId, result.value.threadId)),
-        });
-        return;
-      }
-      if (isAtomCommandInterrupted(result)) return;
-      setStartFailure(describeFactoryFailure(squashAtomCommandFailure(result)));
-      // The failure may mean the row is stale (closed, deleted, already launched elsewhere).
-      query.refresh();
-    } finally {
+    const result = await runStart({ environmentId, input }).finally(() => {
       startInFlight.current = false;
       if (mounted.current) setStartingIssue(null);
+    });
+    if (!mounted.current) return;
+    if (result._tag === "Success") {
+      query.refresh();
+      setDialog(null);
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(scopeThreadRef(environmentId, result.value.threadId)),
+      });
+      return;
     }
+    if (isAtomCommandInterrupted(result)) return;
+    setStartFailure(describeFactoryFailure(squashAtomCommandFailure(result)));
+    // The failure may mean the row is stale (closed, deleted, already launched elsewhere).
+    query.refresh();
   };
 
   const openTask = (task: NonNullable<FactoryIssue["task"]>) => {
@@ -670,14 +670,15 @@ function FactoryInbox(props: {
             setDialog(null);
             setStartFailure(null);
           }}
-          onSubmit={(options) =>
+          onSubmit={(options) => {
+            if (startFailure?.kind === "changed") return;
             void startIssue(dialog.issue, {
               ...options,
               expectedRepositoryKey: dialog.repository.canonicalKey,
               runtimeMode: "approval-required",
               interactionMode: "default",
-            })
-          }
+            });
+          }}
         />
       ) : null}
     </div>
@@ -740,15 +741,30 @@ function FactoryStartDialog(props: {
   }) => void;
 }) {
   const { issue, restart, pending } = props;
+  // Keep defaults and model normalization pinned while the user reviews this issue.
+  const [modelSettings] = useState(() => ({
+    defaultSelection: props.defaultSelection,
+    instanceEntries: props.instanceEntries,
+    modelOptionsByInstance: props.modelOptionsByInstance,
+    normalizeModelSelection: props.normalizeModelSelection,
+  }));
+  const reviewId = useId();
+  const review = {
+    title: factoryIssueReviewText(issue.title),
+    body: issue.body === null ? null : factoryIssueReviewText(issue.body),
+  };
+  const changed = props.failure?.kind === "changed";
   const [picked, setPicked] = useState<ModelSelection | null>(null);
   const [baseRef, setBaseRef] = useState("");
   const pickedIsAvailable =
     picked !== null &&
-    props.instanceEntries.some((entry) => entry.instanceId === picked.instanceId && entry.enabled);
-  const candidate = pickedIsAvailable ? picked : props.defaultSelection;
-  const selection = candidate === null ? null : props.normalizeModelSelection(candidate);
+    modelSettings.instanceEntries.some(
+      (entry) => entry.instanceId === picked.instanceId && entry.enabled,
+    );
+  const candidate = pickedIsAvailable ? picked : modelSettings.defaultSelection;
+  const selection = candidate === null ? null : modelSettings.normalizeModelSelection(candidate);
   const activeInstanceId: ProviderInstanceId | null =
-    selection?.instanceId ?? props.instanceEntries[0]?.instanceId ?? null;
+    selection?.instanceId ?? modelSettings.instanceEntries[0]?.instanceId ?? null;
 
   return (
     <Dialog
@@ -769,13 +785,54 @@ function FactoryStartDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
-          <fieldset disabled={pending} className="min-w-0 space-y-4">
-            <div className="space-y-1">
-              <p className="font-medium text-sm">{issue.title}</p>
-              <p className="text-muted-foreground text-xs">
-                {`${props.repository.host}/${props.repository.repository}`} · task project{" "}
-                {props.projectTitle}
+          <fieldset disabled={pending || changed} className="min-w-0 space-y-4">
+            <p className="text-muted-foreground text-xs">
+              {`${props.repository.host}/${props.repository.repository}`} · task project{" "}
+              {props.projectTitle}
+            </p>
+            <div className="space-y-2">
+              <h3 id={`${reviewId}-title`} className="font-medium text-sm">
+                Full issue snapshot
+              </h3>
+              <p id={`${reviewId}-description`} className="text-muted-foreground text-xs">
+                Review the full title and description before confirming. Backslashes are escaped;
+                control and formatting characters are shown as <code>{"\\uXXXX"}</code>. Tabs and
+                newlines remain literal. No source text is omitted.
               </p>
+              <div
+                role="region"
+                aria-labelledby={`${reviewId}-title`}
+                aria-describedby={`${reviewId}-description`}
+                tabIndex={0}
+                className="max-h-80 min-w-0 space-y-3 overflow-auto rounded-lg border border-border/60 p-3 focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                <div className="space-y-1">
+                  <h4 className="font-medium text-xs">Title</h4>
+                  {review.title.length === 0 ? (
+                    <p className="text-muted-foreground text-sm">The source title is empty.</p>
+                  ) : (
+                    <pre className="whitespace-pre-wrap font-sans text-sm [overflow-wrap:anywhere]">
+                      {review.title}
+                    </pre>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  <h4 className="font-medium text-xs">Description</h4>
+                  {review.body === null ? (
+                    <p className="text-muted-foreground text-sm">
+                      This issue has no description. The source body is null.
+                    </p>
+                  ) : review.body.length === 0 ? (
+                    <p className="text-muted-foreground text-sm">
+                      The source description is an empty string.
+                    </p>
+                  ) : (
+                    <pre className="whitespace-pre-wrap font-sans text-sm [overflow-wrap:anywhere]">
+                      {review.body}
+                    </pre>
+                  )}
+                </div>
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label>Model</Label>
@@ -783,12 +840,12 @@ function FactoryStartDialog(props: {
                 {activeInstanceId !== null ? (
                   <ProviderModelPicker
                     environmentId={props.environmentId}
-                    disabled={pending}
+                    disabled={pending || changed}
                     activeInstanceId={activeInstanceId}
                     model={selection?.model ?? ""}
                     lockedProvider={null}
-                    instanceEntries={props.instanceEntries}
-                    modelOptionsByInstance={props.modelOptionsByInstance}
+                    instanceEntries={modelSettings.instanceEntries}
+                    modelOptionsByInstance={modelSettings.modelOptionsByInstance}
                     isComposerOwned={false}
                     triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
                     onInstanceModelChange={(instanceId, model) => setPicked({ instanceId, model })}
@@ -823,7 +880,15 @@ function FactoryStartDialog(props: {
             {props.failure ? (
               <Alert variant="error">
                 <AlertTitle>{props.failure.title}</AlertTitle>
-                <AlertDescription>{props.failure.message}</AlertDescription>
+                <AlertDescription>
+                  <p>{props.failure.message}</p>
+                  {changed ? (
+                    <p>
+                      This snapshot is no longer current. Close this dialog and reopen the issue to
+                      review the refreshed content before starting new work.
+                    </p>
+                  ) : null}
+                </AlertDescription>
               </Alert>
             ) : null}
           </fieldset>
@@ -834,10 +899,10 @@ function FactoryStartDialog(props: {
           </DialogClose>
           <Button
             size="sm"
-            disabled={!props.canStart || pending || selection === null}
+            disabled={!props.canStart || pending || changed || selection === null}
             aria-busy={pending}
             onClick={() => {
-              if (selection === null) return;
+              if (!props.canStart || pending || changed || selection === null) return;
               const normalized = normalizeFactoryBaseRef(baseRef);
               props.onSubmit({
                 modelSelection: selection,
