@@ -142,6 +142,41 @@ For a local Git repository without a remote, **Publish Repository** creates a ho
 adds it as `origin`, and pushes your commits. If there are no commits yet, it creates the remote;
 make your first commit before pushing.
 
+## Start a Factory task from an issue
+
+Open **Factory Issues** in the web or desktop sidebar. On mobile, open **Factory issues**
+in Settings' Automations section or from a project's overview.
+
+Choose the environment and project, then check the repository shown above the list. Factory
+issue intake currently supports GitHub and uses the project's configured `origin`, not its
+`upstream`. A missing or unsupported origin is an error, not a fallback to another repository.
+Use **Open**, **Closed**, or **All**, the page controls, and **Refresh** to browse issues.
+Reading the inbox never starts work or changes an issue.
+
+Choose **Start task**, select a model, and optionally enter a local branch, tag, or commit.
+Leaving the base ref empty uses the project's current local HEAD. The server resolves that
+ref to a fixed commit and starts a separate Git worktree; it does not fetch, rebase, or copy
+uncommitted changes from the project checkout. Commit the source you want workers to receive
+before using Factory to develop this project itself.
+
+Tasks default to approval-required mode. Project-configured worktree setup scripts still run
+on the environment's machine; approval mode is not an OS or network sandbox. Starting a task
+does not authorize publishing, pushing, opening a pull request, merging, or releasing.
+Review the linked thread and use the normal Git and pull-request controls separately.
+
+There is one current task per repository and issue in each environment, including across
+multiple project checkouts. **Open thread** returns to that task's owning project rather
+than starting another worker. **Resume launch** retains the original model, modes, prompt,
+and base commit. For failed workspace preparation, open the thread and use its setup retry.
+Archived task threads remain readable without unarchiving. A deleted thread requires an
+explicit new-attempt confirmation; closed issues cannot start new attempts.
+
+Listing needs `orchestration:read`; starting also needs `orchestration:operate` and
+`source-control:write`. Agents can use `factory_list_issues` and `factory_start_issue` under
+their existing permissions. Pass the returned `repository.canonicalKey` as
+`expectedRepositoryKey` when starting; a changed origin is refused instead of silently
+retargeting the task.
+
 ## Create a pull request
 
 Use a thread's Git actions to commit, push, and create a pull request. T3 Code can generate commit

@@ -50,6 +50,7 @@ import type * as Orchestrator from "./Orchestrator.ts";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+import { DispatchModeLimit } from "./DispatchModeLimit.ts";
 
 export type ThreadLaunchWorkspaceStrategy =
   | { readonly type: "root"; readonly branch?: string | undefined }
@@ -210,7 +211,7 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
   const preparationScope = yield* Scope.make("sequential");
-  const scheduledLaunches = yield* Ref.make<ReadonlySet<CommandId>>(new Set());
+  const scheduledLaunches = yield* Ref.make<ReadonlySet<string>>(new Set());
   yield* Effect.addFinalizer(() => Scope.close(preparationScope, Exit.void));
 
   const mapError =
@@ -551,6 +552,7 @@ const make = Effect.gen(function* () {
               cause,
             }),
           ),
+          Effect.provideService(DispatchModeLimit, undefined),
           Effect.forkIn(preparationScope),
         );
       }
@@ -746,18 +748,23 @@ const make = Effect.gen(function* () {
             ),
           );
 
-  const reservePreparation = (commandId: CommandId) =>
+  // A retry command and an original launch replay can refer to the same run.
+  // Ownership follows that run, not whichever command happened to schedule it.
+  const preparationKey = (commandId: CommandId, runId: RunId | null) =>
+    runId === null ? `command:${commandId}` : `run:${runId}`;
+  const reservePreparation = (commandId: CommandId, runId: RunId | null) =>
     Ref.modify(scheduledLaunches, (scheduled) => {
-      if (scheduled.has(commandId)) return [false, scheduled] as const;
+      const key = preparationKey(commandId, runId);
+      if (scheduled.has(key)) return [false, scheduled] as const;
       const next = new Set(scheduled);
-      next.add(commandId);
+      next.add(key);
       return [true, next] as const;
     });
 
-  const releasePreparation = (commandId: CommandId) =>
+  const releasePreparation = (commandId: CommandId, runId: RunId | null) =>
     Ref.update(scheduledLaunches, (scheduled) => {
       const next = new Set(scheduled);
-      next.delete(commandId);
+      next.delete(preparationKey(commandId, runId));
       return next;
     });
 
@@ -802,7 +809,10 @@ const make = Effect.gen(function* () {
         ),
       ),
       Effect.ignoreCause,
-      Effect.ensuring(releasePreparation(input.commandId)),
+      Effect.ensuring(releasePreparation(input.commandId, runId)),
+      // The caller's authority is enforced synchronously before acceptance. Completing
+      // accepted preparation is server work, even if the user subsequently changes modes.
+      Effect.provideService(DispatchModeLimit, undefined),
       Effect.forkIn(preparationScope),
     );
   });
@@ -1006,7 +1016,7 @@ const make = Effect.gen(function* () {
               }
             : workspaceStrategy;
         if (shouldSchedule) {
-          const ownsPreparation = yield* reservePreparation(input.commandId);
+          const ownsPreparation = yield* reservePreparation(input.commandId, runId);
           if (ownsPreparation) {
             yield* Effect.gen(function* () {
               const preparationStillRequired =
@@ -1025,9 +1035,9 @@ const make = Effect.gen(function* () {
                   runId,
                 );
               } else {
-                yield* releasePreparation(input.commandId);
+                yield* releasePreparation(input.commandId, runId);
               }
-            }).pipe(Effect.onError(() => releasePreparation(input.commandId)));
+            }).pipe(Effect.onError(() => releasePreparation(input.commandId, runId)));
           }
         }
 
@@ -1048,9 +1058,9 @@ const make = Effect.gen(function* () {
       const run = projection.runs.find((candidate) => candidate.id === input.runId);
       const workspacePreparation = run?.workspacePreparation;
       if (run?.status !== "preparing" || workspacePreparation === undefined) return;
-      if (!(yield* reservePreparation(input.commandId))) return;
+      if (!(yield* reservePreparation(input.commandId, input.runId))) return;
       yield* scheduleRunPreparation(input, projection, run, workspacePreparation).pipe(
-        Effect.onError(() => releasePreparation(input.commandId)),
+        Effect.onError(() => releasePreparation(input.commandId, input.runId)),
       );
     }).pipe(Effect.exit);
     if (Exit.isFailure(scheduled)) {

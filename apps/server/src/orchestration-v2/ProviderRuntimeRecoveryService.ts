@@ -2,6 +2,7 @@ import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   CommandId,
+  ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   type OrchestrationV2DomainEvent,
   type ProviderThreadId,
   type OrchestrationV2RestartCancelledBackgroundWork,
@@ -20,6 +21,7 @@ import * as Schema from "effect/Schema";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { restartContinuationRun } from "./RestartContinuation.ts";
@@ -352,7 +354,77 @@ export const make = Effect.gen(function* () {
           },
         });
       }
+      let recoveryItemOrdinal: number | undefined;
       for (const run of runs) {
+        const preparationItem =
+          run.status === "preparing" && run.workspacePreparation !== undefined
+            ? projection.turnItems.find(
+                (item) =>
+                  item.runId === run.id &&
+                  item.type === "command_execution" &&
+                  item.input === "Preparing workspace",
+              )
+            : undefined;
+        const preparationProvider =
+          preparationItem === undefined
+            ? undefined
+            : projection.providerThreads.find((thread) => thread.id === run.providerThreadId);
+        const interruptedPreparation =
+          preparationItem !== undefined && preparationProvider !== undefined;
+        // A cancelled preparation has no actionable retry in the ordinary thread UI.
+        // Reuse the same failure identity as prepared-run.fail so retry keeps this run and worktree.
+        if (interruptedPreparation) {
+          if (recoveryItemOrdinal === undefined) {
+            recoveryItemOrdinal = yield* projections
+              .getNextTurnItemOrdinal(projection.thread.id)
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderRuntimeRecoveryError({
+                      operation: "reconcile",
+                      threadId: projection.thread.id,
+                      cause,
+                    }),
+                ),
+              );
+          }
+          events.push({
+            id: yield* allocateEventId(),
+            type: "turn-item.updated",
+            threadId: projection.thread.id,
+            runId: run.id,
+            ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              id: ids.derive.turnItemFromProviderItem({
+                driver: preparationProvider.driver,
+                nativeItemId: `workspace-preparation-failure:${run.id}`,
+              }),
+              threadId: projection.thread.id,
+              runId: run.id,
+              nodeId: run.rootNodeId,
+              providerThreadId: preparationProvider.id,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: recoveryItemOrdinal++,
+              status: "failed",
+              title: "Workspace preparation interrupted",
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              type: "error",
+              failure: makeProviderFailure({
+                message:
+                  "The server stopped during workspace preparation. Retry preparation in this thread.",
+                class: "validation_error",
+                retryable: true,
+                code: ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+              }),
+            },
+          });
+        }
         events.push({
           id: yield* allocateEventId(),
           type: "run.updated",
@@ -360,7 +432,12 @@ export const make = Effect.gen(function* () {
           runId: run.id,
           providerInstanceId: run.providerInstanceId,
           occurredAt: now,
-          payload: { ...run, status: "cancelled", queuePosition: null, completedAt: now },
+          payload: {
+            ...run,
+            status: interruptedPreparation ? "failed" : "cancelled",
+            queuePosition: null,
+            completedAt: now,
+          },
         });
         for (const attempt of projection.attempts.filter(
           (candidate) =>
@@ -375,7 +452,11 @@ export const make = Effect.gen(function* () {
             nodeId: attempt.rootNodeId,
             providerInstanceId: run.providerInstanceId,
             occurredAt: now,
-            payload: { ...attempt, status: "cancelled", completedAt: now },
+            payload: {
+              ...attempt,
+              status: interruptedPreparation ? "failed" : "cancelled",
+              completedAt: now,
+            },
           });
         }
         for (const node of projection.nodes.filter(
@@ -395,7 +476,11 @@ export const make = Effect.gen(function* () {
             nodeId: node.id,
             providerInstanceId: run.providerInstanceId,
             occurredAt: now,
-            payload: { ...node, status: "cancelled", completedAt: now },
+            payload: {
+              ...node,
+              status: interruptedPreparation ? "failed" : "cancelled",
+              completedAt: now,
+            },
           });
         }
         for (const providerTurn of projection.providerTurns.filter(
@@ -453,7 +538,20 @@ export const make = Effect.gen(function* () {
             ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
             providerInstanceId: run.providerInstanceId,
             occurredAt: now,
-            payload: cancelledItem(item, now),
+            payload:
+              interruptedPreparation &&
+              item.id === preparationItem.id &&
+              item.type === "command_execution"
+                ? {
+                    ...item,
+                    status: "failed",
+                    title: "Workspace preparation interrupted",
+                    output: "Retry preparation in this thread.",
+                    exitCode: 1,
+                    completedAt: now,
+                    updatedAt: now,
+                  }
+                : cancelledItem(item, now),
           });
         }
       }

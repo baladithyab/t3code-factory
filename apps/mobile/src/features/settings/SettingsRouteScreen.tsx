@@ -164,6 +164,12 @@ function SettingsIndexSections() {
 
       <SettingsSection title="Automations">
         <SettingsRow icon="clock" label="Scheduled tasks" target="SettingsScheduledTasks" />
+        <SettingsRow
+          icon="list.number"
+          label="Factory issues"
+          target="SettingsFactoryIssues"
+          disabled={noServerTargets}
+        />
       </SettingsSection>
 
       <SettingsSection title="Projects & threads">

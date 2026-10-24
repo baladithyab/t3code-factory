@@ -50,9 +50,7 @@ export function resolveThreadRouteRenderState(input: {
   if (projection === null) {
     return "loading";
   }
-  return projection.thread.deletedAt !== null || projection.thread.archivedAt !== null
-    ? "missing"
-    : "ready";
+  return projection.thread.deletedAt !== null ? "missing" : "ready";
 }
 
 export function buildThreadRouteParams(ref: ScopedThreadRef): {

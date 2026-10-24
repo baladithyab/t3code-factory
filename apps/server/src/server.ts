@@ -1,3 +1,6 @@
+import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
+import * as FactoryIssueLaunches from "./persistence/FactoryIssueLaunches.ts";
+import * as FactoryCommandReceipts from "./orchestration-v2/CommandReceiptStore.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Random from "effect/Random";
@@ -716,6 +719,16 @@ const layerMakeRoutes = Layer.mergeAll(
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
   ),
 ).pipe(
+  Layer.provide(
+    FactoryIssueService.layer.pipe(
+      Layer.provide(
+        Layer.merge(
+          FactoryIssueLaunches.layer,
+          FactoryCommandReceipts.layerFromApplicationReceipts,
+        ),
+      ),
+    ),
+  ),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),

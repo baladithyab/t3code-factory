@@ -279,6 +279,17 @@ export function CommandPalette(props: {
             params: { screen: "SettingsArchive" },
           }),
       },
+      {
+        key: "factoryIssues",
+        kind: "action",
+        title: "Factory issues",
+        searchTerms: ["github", "inbox", "task", "start", "repository"],
+        run: () =>
+          navigation.navigate("SettingsSheet", {
+            screen: "SettingsContent",
+            params: { screen: "SettingsFactoryIssues" },
+          }),
+      },
     ];
     const projectByKey = new Map(
       projects.map((project) => [scopedProjectKey(project.environmentId, project.id), project]),

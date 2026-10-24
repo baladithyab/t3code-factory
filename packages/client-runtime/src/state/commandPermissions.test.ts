@@ -205,6 +205,46 @@ describe("command permissions", () => {
   });
 });
 
+it.effect("requires both destination grants before starting an isolated factory task", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      const start = createCommandPermissions(runtime, WS_METHODS.factoryStartIssue);
+      registry.set(sessions(env), AsyncResult.success(grant(true)));
+      expect(registry.get(start.permissionAtom(env))).toBe(false);
+      expect((yield* start.authorize(registry, env).pipe(Effect.flip)).requiredPermission).toBe(
+        AuthSourceControlWriteScope,
+      );
+      registry.set(
+        sessions(env),
+        AsyncResult.success({
+          ...grant(false),
+          scopes: [AuthSourceControlWriteScope],
+          permissions: [AuthSourceControlWriteScope],
+        }),
+      );
+      expect((yield* start.authorize(registry, env).pipe(Effect.flip)).requiredPermission).toBe(
+        AuthOrchestrationOperateScope,
+      );
+      registry.set(
+        sessions(env),
+        AsyncResult.success({
+          ...grant(true),
+          scopes: [AuthOrchestrationOperateScope, AuthSourceControlWriteScope],
+          permissions: [AuthOrchestrationOperateScope, AuthSourceControlWriteScope],
+        }),
+      );
+      expect(registry.get(start.permissionAtom(env))).toBe(true);
+      yield* start.authorize(registry, env);
+      registry.set(sessions(other), AsyncResult.success(grant(false)));
+      expect(registry.get(start.permissionAtom(other))).toBe(false);
+      expect((yield* start.authorize(registry, other).pipe(Effect.flip))._tag).toBe(
+        "EnvironmentAuthorizationError",
+      );
+    }),
+  ),
+);
+
 it.effect(
   "requires source control alone for git, and both grants when attaching a worktree to a thread",
   () =>

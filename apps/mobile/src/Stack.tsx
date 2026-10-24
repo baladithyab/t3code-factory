@@ -122,6 +122,11 @@ import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRouteScreen";
 import { SettingsNotificationsRouteScreen } from "./features/settings/SettingsNotificationsRouteScreen";
+import { FactoryIssuesRouteScreen } from "./features/factory/FactoryIssuesRouteScreen";
+import {
+  FactoryBranchPickerRouteScreen,
+  FactoryModelPickerRouteScreen,
+} from "./features/factory/FactoryPickerScreens";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
 import { SettingsThreadsRouteScreen } from "./features/settings/SettingsThreadsRouteScreen";
 import { SettingsEnvironmentFilterProvider } from "./features/settings/settings-environment-filter";
@@ -426,6 +431,26 @@ const SettingsContentStack = createV5SheetStackNavigator({
       linking: "usage",
       options: {
         title: "Usage",
+      },
+    }),
+    SettingsFactoryIssues: createNativeStackScreen({
+      screen: FactoryIssuesRouteScreen,
+      linking: "factory-issues",
+      options: { title: "Factory issues" },
+    }),
+    SettingsFactoryBranch: createNativeStackScreen({
+      screen: FactoryBranchPickerRouteScreen,
+      options: { title: "Base branch" },
+    }),
+    SettingsFactoryModel: createNativeStackScreen({
+      screen: FactoryModelPickerRouteScreen,
+      options: {
+        headerShown: false,
+        ...(Platform.OS === "android"
+          ? { presentation: "card" as const }
+          : {
+              ...THREAD_SETTINGS_SHEET_OPTIONS,
+            }),
       },
     }),
   },

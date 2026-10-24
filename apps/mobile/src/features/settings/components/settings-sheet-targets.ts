@@ -7,6 +7,7 @@ export type SettingsSheetTarget =
   | "SettingsAppearance"
   | "SettingsOrganization"
   | "SettingsProjectOverview"
+  | "SettingsFactoryIssues"
   | "SettingsEnvironmentNewThreads"
   | "SettingsEnvironmentSourceControl"
   | "SettingsEnvironmentAgentBehavior"
