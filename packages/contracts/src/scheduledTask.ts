@@ -356,6 +356,8 @@ export type ScheduledTaskDeleteResult = typeof ScheduledTaskDeleteResult.Type;
 
 export const ScheduledTaskRunNowResult = Schema.Struct({
   task: ScheduledTask,
+  /** Older servers omit the dispatch destination. A null value means no thread was dispatched. */
+  threadId: Schema.optional(Schema.NullOr(ThreadId)),
 });
 export type ScheduledTaskRunNowResult = typeof ScheduledTaskRunNowResult.Type;
 

@@ -6,6 +6,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  AuthOrchestrationReadScope,
   CommandId,
   type EnvironmentId,
   type FactoryIssue,
@@ -22,11 +23,9 @@ import {
   FactoryIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  PlugZapIcon,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
-import { isElectron } from "../../env";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import {
   getCustomModelOptionsByInstance,
@@ -40,10 +39,11 @@ import {
 } from "../../providerInstances";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { ModelEsque } from "../chat/providerIconUtils";
-import { useFactoryIssueEnvironmentIds, factoryEnvironment } from "../../state/factory";
-import { useEnvironments, type EnvironmentPresentation } from "../../state/environments";
+import { factoryEnvironment } from "../../state/factory";
+import { useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
+import { useEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { buildThreadRouteParams } from "../../threadRoutes";
@@ -68,13 +68,8 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "..
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { RefreshIcon } from "../ui/refresh-icon";
-import { ScrollArea } from "../ui/scroll-area";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { SidebarInset } from "../ui/sidebar";
 import { Skeleton } from "../ui/skeleton";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
-import { WorkspacePageContainer } from "../WorkspacePageContainer";
-import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import {
   FACTORY_STATE_FILTERS,
   currentFactoryPage,
@@ -87,14 +82,12 @@ import {
   safeExternalUrl,
   type FactoryFailure,
   type FactoryIssueStateFilter,
-  type FactoryIssuesSearch,
 } from "./factoryIssues.logic";
 import { FactoryIssueWorkView } from "./FactoryIssueWorkView";
 import { parseFactoryIssueViewMode, type FactoryIssueViewMode } from "./factoryIssues.views";
 
-function isConnected(environment: EnvironmentPresentation): boolean {
-  return environment.connection.phase === "connected" && environment.serverConfig !== null;
-}
+import { useSettingsScope } from "../settings/SettingsScopeContext";
+import { factoryScopeSearchForMember, singleFactoryMember } from "./factoryScope";
 
 function FactoryEmptyState(props: {
   readonly icon: ReactNode;
@@ -116,261 +109,184 @@ function FactoryEmptyState(props: {
 
 export function FactoryIssuesPage() {
   const search = useSearch({ from: "/_chat/factory" });
-  const navigate = useNavigate({ from: "/factory" });
+  const navigate = useNavigate({ from: "/factory/issues" });
+  const { scope, groups, selectScope } = useSettingsScope();
   const { isReady, environments } = useEnvironments();
-  const supportedIds = useFactoryIssueEnvironmentIds();
   const allProjects = useProjects();
-
-  const supported = environments.filter((environment) =>
-    supportedIds.includes(environment.environmentId),
+  const readableIds = useEnvironmentsWithScope(environments, AuthOrchestrationReadScope);
+  const member = singleFactoryMember(scope);
+  const environment = environments.find(
+    (candidate) => candidate.environmentId === member?.environmentId,
   );
-  const selectedEnvironment =
-    supported.find((environment) => environment.environmentId === search.environmentId) ??
-    supported.find(isConnected) ??
-    supported[0] ??
-    null;
-  const projects =
-    selectedEnvironment === null
-      ? []
-      : allProjects
-          .filter((project) => project.environmentId === selectedEnvironment.environmentId)
-          .toSorted((left, right) => left.title.localeCompare(right.title));
-  const selectedProject =
-    projects.find((project) => project.id === search.projectId) ?? projects[0] ?? null;
+  const canRead = useEnvironmentScope(member?.environmentId ?? null, AuthOrchestrationReadScope);
+  const project = allProjects.find(
+    (candidate) => candidate.environmentId === member?.environmentId && candidate.id === member?.id,
+  );
   const state = search.state;
   const view = parseFactoryIssueViewMode(search.view);
+  const visibleGroups = groups.flatMap((group) => {
+    const members = group.memberProjects.filter((candidate) =>
+      scope.kind === "project" || scope.kind === "checkout"
+        ? scope.members.some(
+            (selected) => selected.physicalProjectKey === candidate.physicalProjectKey,
+          )
+        : scope.environmentIds.includes(candidate.environmentId),
+    );
+    return members.length > 0 ? [{ group, members }] : [];
+  });
 
-  const setScope = (next: {
-    readonly environmentId: EnvironmentId;
-    readonly projectId?: ProjectId;
-    readonly state: FactoryIssueStateFilter;
-  }) => {
-    const target: FactoryIssuesSearch = {
-      state: next.state,
-      view,
-      environmentId: next.environmentId,
-      ...(next.projectId !== undefined ? { projectId: next.projectId } : {}),
-    };
-    void navigate({ search: target, replace: true });
-  };
-
-  const setView = (next: FactoryIssueViewMode) => {
-    void navigate({ search: (previous) => ({ ...previous, view: next }), replace: true });
-  };
-
-  const unknownCapabilities = environments.filter(
-    (environment) => environment.serverConfig === null,
-  );
-  const awaitingCapabilities =
-    supported.length === 0 &&
-    unknownCapabilities.some((environment) => environment.connection.phase === "connecting");
-
-  let content: ReactNode;
-  if (!isReady || awaitingCapabilities) {
-    content = (
+  if (scope.kind === "unavailable") return null;
+  if (!isReady) {
+    return (
       <div className="space-y-3" aria-busy>
         <Skeleton className="h-6 w-48" />
         <Skeleton className="h-20 w-full" />
-        <Skeleton className="h-20 w-full" />
       </div>
-    );
-  } else if (environments.length === 0) {
-    content = (
-      <FactoryEmptyState
-        icon={<PlugZapIcon />}
-        title="Connect an environment"
-        description="Factory issues are read and started by a T3 Code server. Connect an environment to get started."
-      />
-    );
-  } else if (selectedEnvironment === null) {
-    const lacking = environments.filter((environment) => environment.serverConfig !== null);
-    content =
-      unknownCapabilities.length > 0 ? (
-        <FactoryEmptyState
-          icon={<PlugZapIcon />}
-          title="Environment not connected"
-          description={`Connect ${unknownCapabilities
-            .map((environment) => environment.label)
-            .join(", ")} to check whether it supports the GitHub issue inbox.`}
-        />
-      ) : (
-        <FactoryEmptyState
-          icon={<FactoryIcon />}
-          title="Factory issues unavailable"
-          description={`Update the T3 Code server on ${lacking
-            .map((environment) => environment.label)
-            .join(", ")} to enable the GitHub issue inbox.`}
-        />
-      );
-  } else if (!isConnected(selectedEnvironment)) {
-    content = (
-      <>
-        <ScopeControls
-          supported={supported}
-          selectedEnvironment={selectedEnvironment}
-          projects={projects}
-          selectedProject={selectedProject}
-          state={state}
-          onChange={setScope}
-        />
-        <FactoryEmptyState
-          icon={<PlugZapIcon />}
-          title="Environment not connected"
-          description={`${selectedEnvironment.label} must be connected to list and start issues.`}
-        />
-      </>
-    );
-  } else if (selectedProject === null) {
-    content = (
-      <>
-        <ScopeControls
-          supported={supported}
-          selectedEnvironment={selectedEnvironment}
-          projects={projects}
-          selectedProject={null}
-          state={state}
-          onChange={setScope}
-        />
-        <FactoryEmptyState
-          icon={<FactoryIcon />}
-          title="No projects in this environment"
-          description="Add a project that is a clone of the repository whose issues you want to work."
-        />
-      </>
-    );
-  } else {
-    const scopeKey = factoryScopeKey(selectedEnvironment.environmentId, selectedProject.id, state);
-    content = (
-      <>
-        <ScopeControls
-          supported={supported}
-          selectedEnvironment={selectedEnvironment}
-          projects={projects}
-          selectedProject={selectedProject}
-          state={state}
-          onChange={setScope}
-        />
-        <FactoryInbox
-          key={scopeKey}
-          environmentId={selectedEnvironment.environmentId}
-          project={selectedProject}
-          projectTitleById={new Map(projects.map((project) => [project.id, project.title]))}
-          state={state}
-          mode={view}
-          onModeChange={setView}
-        />
-      </>
     );
   }
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
-        <WorkspacePageHeader electron={isElectron}>
-          <FactoryIcon aria-hidden className="size-4 text-muted-foreground" />
-          <h1 className="truncate font-medium text-sm">Factory issues</h1>
-        </WorkspacePageHeader>
-        <ScrollArea className="min-h-0 flex-1">
-          <WorkspacePageContainer width="wide">{content}</WorkspacePageContainer>
-        </ScrollArea>
+    <section className="min-w-0 space-y-5" aria-labelledby="factory-issues-title">
+      <div className="space-y-1">
+        <h2 id="factory-issues-title" className="font-medium text-lg">
+          Issues
+        </h2>
+        <p className="text-muted-foreground text-sm">
+          Review GitHub issues in one checkout before starting isolated, supervised work.
+        </p>
       </div>
-    </SidebarInset>
-  );
-}
-
-function ScopeControls(props: {
-  readonly supported: ReadonlyArray<EnvironmentPresentation>;
-  readonly selectedEnvironment: EnvironmentPresentation;
-  readonly projects: ReadonlyArray<{ readonly id: ProjectId; readonly title: string }>;
-  readonly selectedProject: { readonly id: ProjectId; readonly title: string } | null;
-  readonly state: FactoryIssueStateFilter;
-  readonly onChange: (next: {
-    readonly environmentId: EnvironmentId;
-    readonly projectId?: ProjectId;
-    readonly state: FactoryIssueStateFilter;
-  }) => void;
-}) {
-  const { selectedEnvironment, selectedProject, state, onChange } = props;
-  return (
-    <div className="flex flex-wrap items-end gap-3">
-      {props.supported.length > 1 ? (
-        <div className="min-w-44 space-y-1.5">
-          <Label htmlFor="factory-environment">Environment</Label>
-          <Select
-            value={selectedEnvironment.environmentId}
-            onValueChange={(environmentId) => {
-              const next = props.supported.find(
-                (environment) => environment.environmentId === environmentId,
-              );
-              if (next) onChange({ environmentId: next.environmentId, state });
-            }}
-          >
-            <SelectTrigger size="sm" id="factory-environment">
-              <SelectValue>{selectedEnvironment.label}</SelectValue>
-            </SelectTrigger>
-            <SelectPopup>
-              {props.supported.map((environment) => (
-                <SelectItem
-                  key={environment.environmentId}
-                  value={environment.environmentId}
-                  label={environment.label}
-                >
-                  <span className="block truncate">{environment.label}</span>
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
-        </div>
-      ) : null}
-      {props.projects.length > 0 ? (
-        <div className="min-w-44 space-y-1.5">
-          <Label htmlFor="factory-project">Project</Label>
-          <Select
-            value={selectedProject?.id ?? ""}
-            onValueChange={(projectId) => {
-              const next = props.projects.find((project) => project.id === projectId);
-              if (next) {
-                onChange({
-                  environmentId: selectedEnvironment.environmentId,
-                  projectId: next.id,
-                  state,
+      {member === null ? (
+        <>
+          <p className="text-muted-foreground text-sm">
+            Choose a checkout to open its issue inbox. Checkouts of the same repository may share
+            issues; they are not combined into a global queue.
+          </p>
+          {visibleGroups.length === 0 ? (
+            <FactoryEmptyState
+              icon={<FactoryIcon />}
+              title="No checkouts in this scope"
+              description="Connect an environment and add a repository checkout to use the issue inbox."
+            />
+          ) : (
+            visibleGroups.map(({ group, members }) => (
+              <section key={group.projectKey} className="space-y-2">
+                <h3 className="font-medium text-sm">{group.displayName}</h3>
+                <ul className="divide-y rounded-lg border">
+                  {members.map((candidate) => {
+                    const owner = environments.find(
+                      (item) => item.environmentId === candidate.environmentId,
+                    );
+                    const status = !owner
+                      ? "Environment unavailable"
+                      : owner.connection.phase !== "connected"
+                        ? "Offline. Reconnect to read issues"
+                        : owner.serverConfig === null
+                          ? "Server capabilities unknown"
+                          : owner.serverConfig.environment.capabilities.factoryIssues !== true
+                            ? "Issue inbox unsupported. Update this server"
+                            : !readableIds.has(owner.environmentId)
+                              ? "Read access unavailable"
+                              : "Connected · issue inbox available";
+                    return (
+                      <li
+                        key={candidate.physicalProjectKey}
+                        className="flex flex-wrap items-center justify-between gap-3 p-3"
+                      >
+                        <div className="min-w-0 space-y-1">
+                          <p className="font-medium text-sm">
+                            {owner?.label ?? candidate.environmentLabel ?? candidate.environmentId}
+                          </p>
+                          <p className="break-all text-muted-foreground text-xs">
+                            {candidate.workspaceRoot}
+                          </p>
+                          <p className="text-muted-foreground text-xs">{status}</p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => selectScope(factoryScopeSearchForMember(candidate, group))}
+                        >
+                          Choose checkout
+                        </Button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))
+          )}
+        </>
+      ) : !environment || !project ? (
+        <FactoryEmptyState
+          icon={<FactoryIcon />}
+          title="Checkout unavailable"
+          description="This checkout is no longer available. Choose another scope."
+        />
+      ) : environment.connection.phase !== "connected" ? (
+        <FactoryEmptyState
+          icon={<FactoryIcon />}
+          title="Environment offline"
+          description={`Reconnect ${environment.label} to read this checkout's issues.`}
+        />
+      ) : environment.serverConfig === null ? (
+        <FactoryEmptyState
+          icon={<FactoryIcon />}
+          title="Server capabilities unknown"
+          description="Wait for this environment to finish connecting before opening its inbox."
+        />
+      ) : environment.serverConfig.environment.capabilities.factoryIssues !== true ? (
+        <FactoryEmptyState
+          icon={<FactoryIcon />}
+          title="Issue inbox unsupported"
+          description={`Update the server on ${environment.label} to use the GitHub issue inbox.`}
+        />
+      ) : !canRead ? (
+        <FactoryEmptyState
+          icon={<FactoryIcon />}
+          title="Read access unavailable"
+          description="This connection needs orchestration read access to list issues."
+        />
+      ) : (
+        <>
+          <ToggleGroup
+            aria-label="Issue state"
+            value={[state]}
+            onValueChange={(values) => {
+              const next = values[0];
+              if (next !== undefined) {
+                void navigate({
+                  search: (previous) => ({ ...previous, state: parseFactoryStateFilter(next) }),
+                  replace: true,
                 });
               }
             }}
           >
-            <SelectTrigger size="sm" id="factory-project">
-              <SelectValue placeholder="Select a project">{selectedProject?.title}</SelectValue>
-            </SelectTrigger>
-            <SelectPopup>
-              {props.projects.map((project) => (
-                <SelectItem key={project.id} value={project.id} label={project.title}>
-                  <span className="block truncate">{project.title}</span>
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
-        </div>
-      ) : null}
-      <ToggleGroup
-        aria-label="Issue state"
-        value={[state]}
-        onValueChange={(values) => {
-          const next = values[0];
-          if (next === undefined) return;
-          onChange({
-            environmentId: selectedEnvironment.environmentId,
-            ...(selectedProject ? { projectId: selectedProject.id } : {}),
-            state: parseFactoryStateFilter(next),
-          });
-        }}
-      >
-        {FACTORY_STATE_FILTERS.map((filter) => (
-          <Toggle key={filter.value} value={filter.value}>
-            {filter.label}
-          </Toggle>
-        ))}
-      </ToggleGroup>
-    </div>
+            {FACTORY_STATE_FILTERS.map((filter) => (
+              <Toggle key={filter.value} value={filter.value}>
+                {filter.label}
+              </Toggle>
+            ))}
+          </ToggleGroup>
+          <FactoryInbox
+            key={factoryScopeKey(environment.environmentId, project.id, state)}
+            environmentId={environment.environmentId}
+            project={project}
+            projectTitleById={
+              new Map(
+                allProjects
+                  .filter((candidate) => candidate.environmentId === environment.environmentId)
+                  .map((candidate) => [candidate.id, candidate.title]),
+              )
+            }
+            state={state}
+            mode={view}
+            onModeChange={(next) => {
+              void navigate({ search: (previous) => ({ ...previous, view: next }), replace: true });
+            }}
+          />
+        </>
+      )}
+    </section>
   );
 }
 

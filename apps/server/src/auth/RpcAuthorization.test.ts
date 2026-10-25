@@ -17,6 +17,7 @@ import {
   AuthTerminalOperateScope,
   WS_METHODS,
   WsRpcGroup,
+  type AuthEnvironmentScope,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -456,5 +457,156 @@ describe("factory authorization", () => {
         result,
       );
     }).pipe(Effect.scoped),
+  );
+});
+
+describe("project coordinator authorization", () => {
+  const tested = [
+    WS_METHODS.projectCoordinatorsGet,
+    WS_METHODS.projectCoordinatorsList,
+    WS_METHODS.projectCoordinatorsEnsure,
+    WS_METHODS.factoryStartIssue,
+  ] as const;
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
+        !(tested as ReadonlyArray<string>).includes(tag),
+    ),
+  );
+  const input = {
+    commandId: CommandId.make("coordinator-auth"),
+    projectId: ProjectId.make("project"),
+    expectedThreadId: null,
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+    runtimeMode: "approval-required" as const,
+    interactionMode: "default" as const,
+  };
+  const coordinator = {
+    projectId: input.projectId,
+    threadId: ThreadId.make("coordinator"),
+    status: "idle" as const,
+    modelSelection: input.modelSelection,
+    runtimeMode: input.runtimeMode,
+    interactionMode: input.interactionMode,
+    createdAt: "2026-10-24T00:00:00.000Z",
+    current: true,
+  };
+  const fetchedAt = "2026-10-24T00:00:00.000Z";
+  const makeClient = (scopes: ReadonlyArray<AuthEnvironmentScope>, handled: Array<string>) =>
+    RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.projectCoordinatorsGet, () =>
+            Effect.sync(() => {
+              handled.push("get");
+              return { coordinator, fetchedAt };
+            }),
+          ),
+          group.toLayerHandler(WS_METHODS.projectCoordinatorsList, () =>
+            Effect.sync(() => {
+              handled.push("list");
+              return { coordinators: [coordinator], fetchedAt };
+            }),
+          ),
+          group.toLayerHandler(WS_METHODS.projectCoordinatorsEnsure, () =>
+            Effect.sync(() => {
+              handled.push("ensure");
+              return { coordinator, resumed: false };
+            }),
+          ),
+          group.toLayerHandler(WS_METHODS.factoryStartIssue, () =>
+            Effect.die("issue launch must retain its additional source-control grant"),
+          ),
+          RpcAuthorization.layer(scopes),
+        ),
+      ),
+    );
+
+  it.effect.each([
+    { scopes: [] },
+    { scopes: [AuthOrchestrationReadScope] },
+    { scopes: [AuthSourceControlWriteScope] },
+    { scopes: [AuthOrchestrationReadScope, AuthSourceControlWriteScope] },
+  ])("denies coordinator creation with $scopes before any handler side effect", ({ scopes }) =>
+    Effect.gen(function* () {
+      const handled: Array<string> = [];
+      const client = yield* makeClient(scopes, handled);
+      expect(
+        yield* client[WS_METHODS.projectCoordinatorsEnsure](input).pipe(Effect.flip),
+      ).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
+        requiredPermission: AuthOrchestrationOperateScope,
+      });
+      expect(handled).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("permits read-only get and list without creating a coordinator", () =>
+    Effect.gen(function* () {
+      const handled: Array<string> = [];
+      const client = yield* makeClient([AuthOrchestrationReadScope], handled);
+      expect(
+        yield* client[WS_METHODS.projectCoordinatorsGet]({ projectId: input.projectId }),
+      ).toEqual({ coordinator, fetchedAt });
+      expect(yield* client[WS_METHODS.projectCoordinatorsList]({})).toEqual({
+        coordinators: [coordinator],
+        fetchedAt,
+      });
+      expect(
+        yield* client[WS_METHODS.projectCoordinatorsEnsure](input).pipe(Effect.flip),
+      ).toMatchObject({ requiredPermission: AuthOrchestrationOperateScope });
+      expect(handled).toEqual(["get", "list"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    { scopes: [] },
+    { scopes: [AuthSourceControlWriteScope] },
+    { scopes: [AuthOrchestrationOperateScope] },
+  ])("denies coordinator reads with $scopes before invoking handlers", ({ scopes }) =>
+    Effect.gen(function* () {
+      const handled: Array<string> = [];
+      const client = yield* makeClient(scopes, handled);
+      expect(
+        yield* client[WS_METHODS.projectCoordinatorsGet]({
+          projectId: input.projectId,
+        }).pipe(Effect.flip),
+      ).toMatchObject({ requiredPermission: AuthOrchestrationReadScope });
+      expect(yield* client[WS_METHODS.projectCoordinatorsList]({}).pipe(Effect.flip)).toMatchObject(
+        { requiredPermission: AuthOrchestrationReadScope },
+      );
+      expect(handled).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "allows operate-only root orientation without granting reads or issue worktree starts",
+    () =>
+      Effect.gen(function* () {
+        const handled: Array<string> = [];
+        const client = yield* makeClient([AuthOrchestrationOperateScope], handled);
+        expect(yield* client[WS_METHODS.projectCoordinatorsEnsure](input)).toEqual({
+          coordinator,
+          resumed: false,
+        });
+        expect(
+          yield* client[WS_METHODS.projectCoordinatorsGet]({
+            projectId: input.projectId,
+          }).pipe(Effect.flip),
+        ).toMatchObject({ requiredPermission: AuthOrchestrationReadScope });
+        expect(
+          yield* client[WS_METHODS.factoryStartIssue]({
+            commandId: CommandId.make("issue-after-coordinator"),
+            projectId: input.projectId,
+            expectedRepositoryKey: "github.com/owner/repo",
+            expectedIssueRevision: "0".repeat(64),
+            issueNumber: 1,
+            modelSelection: input.modelSelection,
+            runtimeMode: input.runtimeMode,
+            interactionMode: input.interactionMode,
+          }).pipe(Effect.flip),
+        ).toMatchObject({ requiredPermission: AuthSourceControlWriteScope });
+        expect(handled).toEqual(["ensure"]);
+      }).pipe(Effect.scoped),
   );
 });

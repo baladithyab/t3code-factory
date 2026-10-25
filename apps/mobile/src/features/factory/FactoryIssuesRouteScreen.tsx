@@ -1,7 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import type { MenuAction } from "@react-native-menu/menu";
 import {
   AuthOrchestrationReadScope,
   type EnvironmentId,
@@ -9,8 +8,7 @@ import {
   type ProjectId,
 } from "@t3tools/contracts";
 import { useProjects } from "../../state/entities";
-import { Atom } from "effect/reactivity";
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Pressable, RefreshControl, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -19,20 +17,12 @@ import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
-import { Menu } from "../../components/ui/Menu";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { factoryEnvironment } from "../../state/factory";
 import { useEnvironmentScope } from "../../state/session";
-import { environmentServerConfigsAtom } from "../../state/server";
-import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { SettingsSection } from "../settings/components/SettingsSection";
-import { useSettingsEnvironmentFilter } from "../settings/settings-environment-filter";
-import {
-  selectFactoryInboxProject,
-  updateFactoryInboxSelection,
-  useFactoryInboxSelection,
-} from "./factory-inbox-state";
+import { updateFactoryInboxSelection, useFactoryInboxSelection } from "./factory-inbox-state";
 import { FactoryIssueRow } from "./FactoryIssueRow";
 import { FactoryIssueReviewModal } from "./FactoryIssueReviewModal";
 import {
@@ -40,7 +30,6 @@ import {
   FACTORY_ISSUE_FILTERS,
   FACTORY_SUPERVISION_NOTICE,
   factoryRepositoryLabel,
-  resolveFactoryInboxTarget,
   safeFactoryIssueUrl,
   type FactoryIssueFilter,
 } from "./factoryIssues";
@@ -52,49 +41,6 @@ type FactoryRoutes = {
   SettingsFactoryModel: undefined;
   SettingsFactoryBranch: undefined;
 };
-
-const NO_PERMISSION_ATOM = Atom.make(false).pipe(Atom.keepAlive);
-
-function SelectRow(props: {
-  readonly label: string;
-  readonly value: string;
-  readonly actions: MenuAction[];
-  readonly onSelect: (id: string) => void;
-  readonly borderTop?: boolean;
-}) {
-  const content = (
-    <>
-      <Text className="text-lg text-foreground">{props.label}</Text>
-      <Text className="min-w-0 flex-1 text-right text-base text-foreground-muted" numberOfLines={1}>
-        {props.value}
-      </Text>
-    </>
-  );
-  const className = props.borderTop
-    ? "min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3"
-    : "min-h-14 flex-row items-center gap-3 px-4 py-3";
-  if (props.actions.length < 2) return <View className={className}>{content}</View>;
-  return (
-    <Menu
-      actions={props.actions}
-      onPressAction={({ nativeEvent }) => props.onSelect(nativeEvent.event)}
-    >
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${props.label}, ${props.value}`}
-        className={`${className} active:opacity-70`}
-      >
-        {content}
-        <SymbolView
-          name="chevron.down"
-          size={14}
-          tintColorClassName="accent-chevron"
-          type="monochrome"
-        />
-      </Pressable>
-    </Menu>
-  );
-}
 
 function PickerRow(props: {
   readonly label: string;
@@ -142,86 +88,27 @@ function StateMessage(props: {
   );
 }
 
-export function FactoryIssuesRouteScreen() {
+export function FactoryIssuesRouteScreen({
+  environmentId,
+  projectId,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+}) {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<NativeStackNavigationProp<FactoryRoutes>>();
   const isFocused = useIsFocused();
-  const { availableTargets, selectedProjectKey, projectGroups } = useSettingsEnvironmentFilter();
-  const configs = useAtomValue(environmentServerConfigsAtom);
   const selection = useFactoryInboxSelection();
   const allProjects = useProjects();
-
-  const environments = useMemo(
-    () =>
-      availableTargets.map((target) => ({
-        environmentId: target.environmentId,
-        label: target.label,
-        supported:
-          configs.get(target.environmentId)?.environment.capabilities.factoryIssues === true,
-      })),
-    [availableTargets, configs],
-  );
-  const selectedGroup = projectGroups.find((group) => group.key === selectedProjectKey);
-  const hints = useMemo(
-    () =>
-      selectedGroup?.members.map((member) => ({
-        environmentId: member.project.environmentId,
-        projectId: member.project.id,
-      })) ?? [],
-    [selectedGroup],
-  );
-  const everyProject = useMemo(
-    () =>
-      allProjects
-        .filter(
-          (project) =>
-            !project.isScratch &&
-            environments.some((entry) => entry.environmentId === project.environmentId),
-        )
-        .map((project) => ({ environmentId: project.environmentId, projectId: project.id })),
-    [allProjects, environments],
-  );
-  const resolved = resolveFactoryInboxTarget<EnvironmentId, ProjectId>({
-    environments,
-    projects: everyProject,
-    preferred: { environmentId: selection.environmentId, projectId: selection.projectId },
-    hints,
-  });
-  const environmentId = resolved.environmentId;
-  const projectId = resolved.projectId;
-
-  // The pickers read the stored selection, so keep it equal to what this screen resolved.
-  useEffect(() => {
-    if (environmentId === selection.environmentId && projectId === selection.projectId) return;
-    if (environmentId !== null && projectId !== null) {
-      selectFactoryInboxProject(environmentId, projectId);
-    } else {
-      updateFactoryInboxSelection({ environmentId, projectId });
-    }
-  }, [environmentId, projectId, selection.environmentId, selection.projectId]);
-
-  const environment = environments.find((entry) => entry.environmentId === environmentId) ?? null;
-  const supported = environment?.supported === true;
   const canRead = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
-  const canStart = useAtomValue(
-    environmentId === null
-      ? NO_PERMISSION_ATOM
-      : factoryEnvironment.start.permissionAtom(environmentId),
-  );
-  const listActive = supported && canRead;
+  const canStart = useAtomValue(factoryEnvironment.start.permissionAtom(environmentId));
+  const listActive = canRead;
   const list = useFactoryIssueList({
     environmentId: listActive ? environmentId : null,
     projectId: listActive ? projectId : null,
     filter: selection.filter,
   });
   const launch = useFactoryLaunchModel({ ...selection, environmentId, projectId });
-  const projects = useMemo(
-    () =>
-      allProjects.filter(
-        (project) => !project.isScratch && project.environmentId === environmentId,
-      ),
-    [allProjects, environmentId],
-  );
 
   const settings = useMemo(
     () =>
@@ -254,7 +141,9 @@ export function FactoryIssuesRouteScreen() {
     onSettled: () => void refresh(),
   });
 
-  const project = projects.find((entry) => entry.id === projectId) ?? null;
+  const project =
+    allProjects.find((entry) => entry.environmentId === environmentId && entry.id === projectId) ??
+    null;
   const failure = list.error ? describeFactoryFailure(list.error, "Couldn't load issues") : null;
   const repositoryUrl = list.repository ? safeFactoryIssueUrl(list.repository.url) : null;
 
@@ -278,28 +167,7 @@ export function FactoryIssuesRouteScreen() {
   );
 
   let body: ReactNode;
-  if (environments.length === 0) {
-    body = (
-      <StateMessage
-        title="Connect an environment"
-        detail="Connect to a T3 Code server in Settings to see its repository's issues."
-      />
-    );
-  } else if (!supported) {
-    body = (
-      <StateMessage
-        title="Not supported by this server"
-        detail="This environment doesn't offer the factory issue inbox. Update its T3 Code server to use it."
-      />
-    );
-  } else if (projectId === null) {
-    body = (
-      <StateMessage
-        title="No project"
-        detail="Add a project with a GitHub repository to this environment to see its issues."
-      />
-    );
-  } else if (!canRead) {
+  if (!canRead) {
     body = (
       <StateMessage
         title="Not permitted"
@@ -362,19 +230,8 @@ export function FactoryIssuesRouteScreen() {
     );
   }
 
-  const environmentActions: MenuAction[] = environments.map((entry) => ({
-    id: entry.environmentId,
-    title: entry.supported ? entry.label : `${entry.label} (unsupported)`,
-    state: entry.environmentId === environmentId ? "on" : undefined,
-  }));
-  const projectActions: MenuAction[] = projects.map((entry) => ({
-    id: entry.id,
-    title: entry.title,
-    state: entry.id === projectId ? "on" : undefined,
-  }));
-
   return (
-    <SettingsScreen title="Factory issues">
+    <View className="flex-1">
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
@@ -388,32 +245,14 @@ export function FactoryIssuesRouteScreen() {
         }
       >
         <SettingsSection title="Source">
-          <SelectRow
-            label="Environment"
-            value={environment?.label ?? "None"}
-            actions={environmentActions}
-            onSelect={(id) => {
-              const next = environments.find((entry) => entry.environmentId === id);
-              if (next) {
-                updateFactoryInboxSelection({
-                  environmentId: next.environmentId,
-                  projectId: null,
-                  modelSelection: null,
-                  baseRef: null,
-                });
-              }
-            }}
-          />
-          <SelectRow
-            borderTop
-            label="Project"
-            value={project?.title ?? (projects.length ? "Choose project" : "No projects")}
-            actions={projectActions}
-            onSelect={(id) => {
-              const next = projects.find((entry) => entry.id === id);
-              if (next && environmentId !== null) selectFactoryInboxProject(environmentId, next.id);
-            }}
-          />
+          <View className="gap-1 px-4 py-3">
+            <Text className="text-lg text-foreground">
+              {project?.title ?? "Project unavailable"}
+            </Text>
+            <Text className="text-sm text-foreground-muted" selectable>
+              {project?.workspaceRoot}
+            </Text>
+          </View>
           <View className="min-h-14 justify-center gap-0.5 border-t border-border-subtle px-4 py-3">
             <Text className="text-sm text-foreground-muted">Issues from</Text>
             <Text className="text-base text-foreground" selectable>
@@ -485,6 +324,6 @@ export function FactoryIssuesRouteScreen() {
           onConfirm={actions.confirmReview}
         />
       ) : null}
-    </SettingsScreen>
+    </View>
   );
 }

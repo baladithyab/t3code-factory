@@ -6,6 +6,14 @@ import {
   FactoryIssueStartResult,
 } from "./factory.ts";
 import {
+  ProjectCoordinatorEnsureInput,
+  ProjectCoordinatorEnsureResult,
+  ProjectCoordinatorError,
+  ProjectCoordinatorGetInput,
+  ProjectCoordinatorGetResult,
+  ProjectCoordinatorListResult,
+} from "./projectCoordinator.ts";
+import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -407,6 +415,9 @@ import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 export const WS_METHODS = {
   factoryListIssues: "factory.listIssues",
   factoryStartIssue: "factory.startIssue",
+  projectCoordinatorsGet: "projectCoordinators.get",
+  projectCoordinatorsList: "projectCoordinators.list",
+  projectCoordinatorsEnsure: "projectCoordinators.ensure",
   projectsList: "projects.list",
   projectsAdd: "projects.add",
   projectsRemove: "projects.remove",
@@ -1950,6 +1961,24 @@ const WsFactoryStartIssueRpc = Rpc.make(WS_METHODS.factoryStartIssue, {
   error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
 });
 
+const WsProjectCoordinatorsGetRpc = Rpc.make(WS_METHODS.projectCoordinatorsGet, {
+  payload: ProjectCoordinatorGetInput,
+  success: ProjectCoordinatorGetResult,
+  error: Schema.Union([ProjectCoordinatorError, EnvironmentAuthorizationError]),
+});
+
+const WsProjectCoordinatorsListRpc = Rpc.make(WS_METHODS.projectCoordinatorsList, {
+  payload: Schema.Struct({}),
+  success: ProjectCoordinatorListResult,
+  error: Schema.Union([ProjectCoordinatorError, EnvironmentAuthorizationError]),
+});
+
+const WsProjectCoordinatorsEnsureRpc = Rpc.make(WS_METHODS.projectCoordinatorsEnsure, {
+  payload: ProjectCoordinatorEnsureInput,
+  success: ProjectCoordinatorEnsureResult,
+  error: Schema.Union([ProjectCoordinatorError, EnvironmentAuthorizationError]),
+});
+
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "t3/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -1959,6 +1988,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsGuestShareCreateRpc,
   WsFactoryListIssuesRpc,
   WsFactoryStartIssueRpc,
+  WsProjectCoordinatorsGetRpc,
+  WsProjectCoordinatorsListRpc,
+  WsProjectCoordinatorsEnsureRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

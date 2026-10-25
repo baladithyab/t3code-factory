@@ -41,6 +41,7 @@ import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts"
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
+import * as CommandReceiptStore from "./orchestration-v2/CommandReceiptStore.ts";
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
@@ -63,6 +64,7 @@ import * as PreviewManager from "./preview/Manager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
+import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
 import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
@@ -116,6 +118,7 @@ import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
+import * as ProjectCoordinators from "./persistence/ProjectCoordinators.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProjectEnrichment from "./project/ProjectEnrichmentService.ts";
@@ -584,7 +587,10 @@ it.effect(
       const finishDiscovery = yield* Deferred.make<void>();
       const responses = yield* Queue.unbounded<ServerConfigStreamEvent>();
       const configRpcServices = Layer.mergeAll(
-        layerUnusedConfigRpcServices,
+        ProjectCoordinatorService.layer.pipe(
+          Layer.provide(Layer.merge(ProjectCoordinators.layer, CommandReceiptStore.layer)),
+          Layer.provideMerge(layerUnusedConfigRpcServices),
+        ),
         Layer.mock(ExternalLauncher.ExternalLauncher)({
           resolveAvailableEditors: () =>
             Deferred.succeed(discoveryStarted, undefined).pipe(

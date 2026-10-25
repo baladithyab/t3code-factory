@@ -128,7 +128,7 @@ import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRouteScreen";
 import { SettingsNotificationsRouteScreen } from "./features/settings/SettingsNotificationsRouteScreen";
-import { FactoryIssuesRouteScreen } from "./features/factory/FactoryIssuesRouteScreen";
+import { FactoryRouteScreen } from "./features/factory/FactoryRouteScreen";
 import {
   FactoryBranchPickerRouteScreen,
   FactoryModelPickerRouteScreen,

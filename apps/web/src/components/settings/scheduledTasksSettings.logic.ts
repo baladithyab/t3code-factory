@@ -41,6 +41,19 @@ export function matchesScheduledTaskScope(
   return true;
 }
 
+export function scheduledTaskDispatchLabel(status: ScheduledTask["lastRunStatus"]): string {
+  switch (status) {
+    case "never":
+      return "Not dispatched yet";
+    case "running":
+      return "Dispatching";
+    case "succeeded":
+      return "Dispatch accepted";
+    case "failed":
+      return "Dispatch failed";
+  }
+}
+
 export function validateScheduledTasksSearch(raw: Record<string, unknown>) {
   return {
     ...(typeof raw.environmentId === "string" && raw.environmentId.trim()

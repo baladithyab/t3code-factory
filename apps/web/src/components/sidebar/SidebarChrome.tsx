@@ -1,11 +1,16 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, FactoryIcon, SettingsIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ChartNoAxesColumnIcon,
+  FactoryIcon,
+  MessageSquareIcon,
+  SettingsIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { useFactoryIssuesSupported } from "../../state/factory";
 import { usePullRequestsSupported } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
 import {
@@ -49,31 +54,34 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       : null;
 
   return (
-    <div
-      className={cn(
-        "relative flex h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center gap-2 pr-3",
-        isElectron && "drag-region",
-      )}
-    >
-      {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
-      <div className="relative top-[calc(var(--workspace-controls-top)-env(safe-area-inset-top))] z-10 ml-[calc(var(--workspace-controls-left)+1px-env(safe-area-inset-left))] flex shrink-0 items-center md:hidden">
-        <SidebarTrigger
-          variant={backdropVariant ? "media-navigation" : "ghost"}
-          className="relative top-auto translate-y-0"
-          aria-label="Toggle main sidebar"
-        />
+    <>
+      <div
+        className={cn(
+          "relative flex h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center gap-2 pr-3",
+          isElectron && "drag-region",
+        )}
+      >
+        {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
+        <div className="relative top-[calc(var(--workspace-controls-top)-env(safe-area-inset-top))] z-10 ml-[calc(var(--workspace-controls-left)+1px-env(safe-area-inset-left))] flex shrink-0 items-center md:hidden">
+          <SidebarTrigger
+            variant={backdropVariant ? "media-navigation" : "ghost"}
+            className="relative top-auto translate-y-0"
+            aria-label="Toggle main sidebar"
+          />
+        </div>
+        <div className="relative z-10 flex h-8 min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 overflow-hidden py-0.5">
+          <SidebarBrand onBackdrop={backdropVariant !== null} />
+          {pillLabel ? (
+            <div className="ml-1 flex h-7 items-center">
+              <Badge data-environment-identification="pill" size="sm" variant="secondary">
+                {pillLabel}
+              </Badge>
+            </div>
+          ) : null}
+        </div>
       </div>
-      <div className="relative z-10 flex h-8 min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 overflow-hidden py-0.5">
-        <SidebarBrand onBackdrop={backdropVariant !== null} />
-        {pillLabel ? (
-          <div className="ml-1 flex h-7 items-center">
-            <Badge data-environment-identification="pill" size="sm" variant="secondary">
-              {pillLabel}
-            </Badge>
-          </div>
-        ) : null}
-      </div>
-    </div>
+      <SidebarPrimaryNavigation />
+    </>
   );
 });
 
@@ -101,17 +109,62 @@ export function SidebarBrandWidthProbe({
   );
 }
 
+function SidebarPrimaryNavigation() {
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const { isMobile, setOpenMobile } = useSidebar();
+  const factoryActive = pathname === "/factory" || pathname.startsWith("/factory/");
+  const closeMobileSidebar = () => {
+    if (isMobile) setOpenMobile(false);
+  };
+
+  return (
+    <div className="shrink-0 px-2 pb-2">
+      <SidebarMenu className="flex-row" aria-label="Primary navigation">
+        <SidebarMenuItem className="min-w-0 flex-1">
+          <SidebarMenuButton
+            isActive={factoryActive}
+            aria-current={factoryActive ? "page" : undefined}
+            render={<Link to="/factory" search={{ state: "open", view: "list" }} />}
+            onClick={closeMobileSidebar}
+          >
+            <FactoryIcon />
+            <span>Factory</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem className="min-w-0 flex-1">
+          <SidebarMenuButton
+            isActive={!factoryActive && !isSidebarUtilityPage(pathname)}
+            aria-current={!factoryActive && !isSidebarUtilityPage(pathname) ? "page" : undefined}
+            render={<Link to="/" />}
+            onClick={closeMobileSidebar}
+          >
+            <MessageSquareIcon />
+            <span>Sessions</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
+    </div>
+  );
+}
+
 function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
+  const { isMobile, setOpenMobile } = useSidebar();
   return (
     <Link
-      aria-label="Go to threads"
+      aria-label="T3 Code Factory home"
       className={cn(
         "relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 focus-visible:ring-inset md:flex",
         onBackdrop ? "text-white" : "text-foreground",
       )}
-      to="/"
+      to="/factory"
+      search={{ state: "open", view: "list" }}
+      onClick={() => {
+        if (isMobile) setOpenMobile(false);
+      }}
     >
-      <SidebarBrandMark onBackdrop={onBackdrop} />
+      <span aria-hidden="true">
+        <SidebarBrandMark onBackdrop={onBackdrop} />
+      </span>
     </Link>
   );
 }
@@ -126,7 +179,7 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
           onBackdrop ? "text-white/70" : "text-muted-foreground",
         )}
       >
-        Code
+        Code Factory
       </span>
     </span>
   );
@@ -165,7 +218,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     select: (location) => isSidebarUtilityPage(location.pathname),
   });
   const pullRequestsSupported = usePullRequestsSupported();
-  const factoryIssuesSupported = useFactoryIssuesSupported();
   const closeMobileSidebar = () => {
     if (isMobile) {
       setOpenMobile(false);
@@ -177,10 +229,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       to: "/pull-requests",
       search: readPullRequestListPreferences(),
     });
-  };
-  const handleFactoryClick = () => {
-    closeMobileSidebar();
-    void navigate({ to: "/factory", search: { state: "open" } });
   };
   const handleSettingsClick = () => {
     closeMobileSidebar();
@@ -220,13 +268,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               icon={<PullRequestGlyph.pullRequest />}
               label="Pull requests"
               onClick={handlePullRequestsClick}
-            />
-          ) : null}
-          {factoryIssuesSupported ? (
-            <SidebarUtilityItem
-              icon={<FactoryIcon />}
-              label="Factory Issues"
-              onClick={handleFactoryClick}
             />
           ) : null}
           <SidebarUtilityItem

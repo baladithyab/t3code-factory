@@ -1,12 +1,17 @@
-import { OrchestratorMcpFailure, type FactoryIssueError } from "@t3tools/contracts";
+import {
+  OrchestratorMcpFailure,
+  type FactoryIssueError,
+  type ProjectCoordinatorError,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Factory from "../../../factory/FactoryIssueService.ts";
 import { DispatchModeLimit } from "../../../orchestration-v2/DispatchModeLimit.ts";
+import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { readCaller } from "../../threadAccess.ts";
 import { FactoryToolkit } from "./tools.ts";
 
-const failure = (error: FactoryIssueError) =>
+const failure = (error: FactoryIssueError | ProjectCoordinatorError) =>
   new OrchestratorMcpFailure({
     code:
       error.reason === "launch-authority" ? "runtime_mode_escalation_denied" : "invalid_request",
@@ -42,6 +47,25 @@ export const layer = McpToolAccess.toLayer(FactoryToolkit, {
         // through the service and the orchestration command lock as well as checking new input.
         return yield* factory
           .start({ ...input, ...modes, creationSource: "mcp" })
+          .pipe(Effect.provideService(DispatchModeLimit, caller.limits), Effect.mapError(failure));
+      }),
+  ),
+  factory_get_orchestrator: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      yield* readCaller();
+      const coordinators = yield* Coordinators.ProjectCoordinatorService;
+      return yield* coordinators.get(input).pipe(Effect.mapError(failure));
+    }),
+  ),
+  factory_start_orchestrator: McpToolAccess.startsThreads(
+    (input) => input,
+    (input, modes) =>
+      Effect.gen(function* () {
+        const caller = yield* readCaller();
+        const coordinators = yield* Coordinators.ProjectCoordinatorService;
+        // Resuming uses frozen launch modes; the service must enforce the caller's current ceiling.
+        return yield* coordinators
+          .ensure({ ...input, ...modes, creationSource: "mcp" })
           .pipe(Effect.provideService(DispatchModeLimit, caller.limits), Effect.mapError(failure));
       }),
   ),

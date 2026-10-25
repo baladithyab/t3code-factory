@@ -1,4 +1,4 @@
-# Source control
+# Factory and source control
 
 T3 Code integrates with GitHub, GitLab, Forgejo, Gitea, Bitbucket, Azure DevOps, and GitCafe to clone
 and publish repositories, create pull requests, and review changes.
@@ -142,16 +142,44 @@ For a local Git repository without a remote, **Publish Repository** creates a ho
 adds it as `origin`, and pushes your commits. If there are no commits yet, it creates the remote;
 make your first commit before pushing.
 
-## Start a Factory task from an issue
+## Factory
 
-Open **Factory Issues** in the web or desktop sidebar. On mobile, open **Factory issues**
-in Settings' Automations section or from a project's overview.
+Open **Factory** in the sidebar or command palette. Its sections are **Overview**, **Issues**,
+**Workflows**, and **Orchestrator**. **Sessions** and **New thread** still open ordinary
+conversations; you do not need an orchestrator to use them.
 
-Choose the environment and project, then check the repository shown above the list. Factory
-issue intake currently supports GitHub and uses the project's configured `origin`, not its
-`upstream`. A missing or unsupported origin is an error, not a fallback to another repository.
-Use **Open**, **Closed**, or **All**, the page controls, and **Refresh** to browse issues.
-Reading the inbox never starts work or changes an issue.
+### Choose the scope
+
+Factory can show all environments, one environment, a project across its checkouts, or one
+exact checkout. An environment is the server and machine that own the files, credentials, and
+provider processes. A project record belongs to that environment and points to a workspace
+directory. The same repository can have several project records and checkouts.
+
+On web and desktop, the URL preserves this selection with `project`, `machine`, and `checkout`.
+`machine` selects the environment; `project` selects the grouped project; `checkout` selects
+one physical member of that group. Selecting only a project can still include several
+environments or several checkouts on one machine. Check the environment and full workspace
+path before starting work. A removed or invalid selection is unavailable, not a request to
+use the first project or all projects. Reset it or choose another valid target.
+
+Overview shows the selected projects' environments and paths, thread and running counts,
+scheduled workflow counts and latest dispatch, and orchestrator state. Loading, offline,
+unsupported, and denied environments are not empty projects. Opening a checkout narrows the
+scope. Opening a workflow selects its owning environment, checkout, and exact definition;
+a missing or out-of-scope workflow link does not open a different workflow.
+
+Issues requires a single checkout. At a broader scope, choose a checkout before browsing;
+Factory does not combine its GitHub pages into a global issue queue. Orchestrator creation
+also requires a single checkout. Workflows can list definitions across the selected scope,
+but every definition has one owning environment and project.
+
+### Start a task from an issue
+
+Open **Factory → Issues**, choose a checkout, and check the repository shown above the list.
+Factory issue intake currently supports GitHub and uses the project's configured `origin`,
+not its `upstream`. A missing or unsupported origin is an error, not a fallback to another
+repository. Use **Open**, **Closed**, or **All**, the page controls, and **Refresh** to browse
+issues. Reading the inbox never starts work or changes an issue.
 
 On web and desktop, use **Table** to compare source and task state, or **Board** to group by
 local task state. The view choice stays in the URL. Each view shows only the current filtered
@@ -164,6 +192,10 @@ Leaving the base ref empty uses the project's current local HEAD. The server res
 ref to a fixed commit and starts a separate Git worktree; it does not fetch, rebase, or copy
 uncommitted changes from the project checkout. Commit the source you want workers to receive
 before using Factory to develop this project itself.
+
+When Factory develops its own code, keep its host server outside automatic source restarts.
+A restart interrupts running agents, including when a check only rewrites a watched
+configuration file.
 
 The confirmation shows the complete issue title and description as text, not rendered Markdown.
 Backslashes and control or formatting characters are shown as escapes; no source text is omitted.
@@ -242,6 +274,105 @@ already-admitted task, including when another caller won a concurrent start. It 
 saved prompt and settings; the live issue revision is not revalidated on that path. This also
 preserves reservations made before content-revision checking was added. A revision identifies
 content, not a human approval or permission to execute.
+
+### Start a project orchestrator
+
+Open **Factory → Orchestrator** and select one checkout. **Create and start** asks you to
+confirm the target environment, workspace, provider, model, and permission modes. It creates
+an ordinary project-root thread and starts a one-time orientation prompt. The prompt asks the
+agent to inspect project instructions, the tracker, and workflows if accessible, then wait.
+It does not authorize edits, workers, schedule enablement, publishing, merging, or spending.
+Project and tracker text are context, not permission to act.
+
+Opening Factory, changing scope, or reopening the orchestrator sends no prompt. There is one
+current orchestrator binding for each environment-local project, not one for every repository
+across machines. **Open** returns to its existing thread. Inspect failed preparation or archived
+threads with the normal thread controls; they are not silently replaced. A missing or deleted
+thread needs explicit replacement confirmation. An interrupted startup that cannot finish,
+such as a rejected launch or a workspace moved before admission, also needs reviewed
+replacement. A live admitted thread reopens without another orientation, even after a
+workspace move. Deleting the project does not let a start request recreate it.
+
+A retried or concurrent start returns the reserved thread and its saved launch intent.
+It does not replace the winning model or modes or send another accepted orientation message.
+A replay of an older, superseded request refers to that older thread, not a fresh start.
+
+After orientation, give the orchestrator an explicit task in its thread. It can use the same
+MCP controls as other eligible threads. `delegate_task` creates a T3-owned child task and
+requires an agent running in a thread with an active run. Supply the complete task brief,
+because it does not copy the parent's conversation. Choose models with
+`orchestrator_capabilities`; use `task_status` to inspect a child and `task_cancel` to stop it.
+Opening an orchestrator is not itself a delegation request or an additional permission grant.
+
+For MCP clients, `factory_get_orchestrator` reads the current binding and
+`factory_start_orchestrator` explicitly starts or resumes it. A first start uses a stable
+`commandId` and `expectedThreadId: null` with the selected model and modes. To replace a missing
+binding, review its thread ID and pass it as `expectedThreadId` with `replaceRetired: true`.
+A changed binding is not permission to replace the newer thread. Keep the same `commandId`
+when retrying the same request. See [Outside agents](./outside-agents.md) for connection and
+sign-in instructions.
+
+### Manage scheduled workflows
+
+Open **Factory → Workflows**. These workflows are saved scheduled agent prompts managed by
+the existing scheduler, also available in scheduled-task Settings. They are not dependency
+graphs, issue-readiness evaluations, or a separate execution engine.
+
+Create a definition for the intended environment and checkout, enter its prompt and trigger,
+then review **Run in**:
+
+- **New thread each run** dispatches directly to a fresh thread with the definition's model,
+  modes, and workspace settings.
+- **Project orchestrator** queues the prompt into that project's existing orchestrator thread.
+  Selecting it does not create an orchestrator. If none is available, create one explicitly
+  in Orchestrator first.
+- An existing binding to another thread remains visible when editing. Review it before
+  changing the destination; selecting a different model does not move it to another thread.
+
+A bound prompt uses the thread's current provider rather than the model saved for fresh
+threads. It enters the thread's queue rather than interrupting its current turn. Deleting a
+bound thread, including a project orchestrator, also deletes the workflows still bound to it.
+Replacing the orchestrator does not transfer those deleted definitions.
+
+New definitions created in Factory default to paused and supervised. Saving or selecting one
+does not enable it or run it. Review its prompt, destination, trigger, and permission modes
+before enabling automatic dispatch. A pause stops future automatic dispatch; it does not
+cancel work already sent to a thread. Use that thread's stop controls for work in progress.
+For a non-webhook definition, **Run now** is an explicit dispatch even while paused and does
+not enable the schedule. Each click requests a new manual run. Webhook definitions run when
+their URL receives a request and have no manual **Run now** action.
+
+The latest dispatch time, status, error, and count describe scheduler dispatch and bookkeeping,
+not completed agent work. A successful dispatch may only have queued a prompt. Open the returned
+thread to inspect what the agent actually did. An older server can accept dispatch without
+returning a thread link. Workflows has no general run history or DAG timeline. Webhook delivery
+records are specific to webhook requests, not a history of provider turns.
+
+An orchestrator can manage the same definitions through `schedule_task`, `list_scheduled_tasks`,
+`update_scheduled_task`, and `delete_scheduled_task`. For a calling thread's own project,
+`schedule_task` binds to that thread by default; set `bindToCurrentThread: false` for a fresh
+thread each run. Review the binding and `enabled` value rather than assuming MCP uses Factory's
+paused defaults. Use `update_scheduled_task` with `enabled: false` to pause.
+`run_scheduled_task_now` explicitly requests a manual dispatch and requires a full-access/default
+MCP caller; a supervised orchestrator does not gain that authority merely by being designated.
+
+Webhook URLs and their controls require operate permission. Treat the URL as a credential.
+Existing signature, filter, and deduplication settings still apply when a workflow targets an
+orchestrator. Do not put secrets into its prompt or chat.
+
+### Permissions and unavailable environments
+
+Factory reads require `orchestration:read`. Orchestrator start and workflow changes or manual
+dispatch require `orchestration:operate`; creating an orchestrator does not additionally require
+`source-control:write`. Starting an issue worktree still requires that source-control grant.
+Provider availability and the caller's runtime and interaction-mode limits still apply.
+Supervised mode is not a filesystem or network sandbox.
+
+Read-only access does not permit starting, enabling, editing, or deleting work. Offline
+environments cannot accept actions; reconnect to the owning environment rather than dispatching
+to another checkout. An older server that does not advertise orchestrator support shows that
+feature as unsupported. A failed read is not proof that no orchestrator or workflow exists.
+Changing the selected scope grants no permissions and never starts work on its own.
 
 ## Create a pull request
 

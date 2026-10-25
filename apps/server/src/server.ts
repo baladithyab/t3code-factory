@@ -1,5 +1,7 @@
 import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
 import * as FactoryIssueLaunches from "./persistence/FactoryIssueLaunches.ts";
+import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
+import * as ProjectCoordinators from "./persistence/ProjectCoordinators.ts";
 import * as FactoryCommandReceipts from "./orchestration-v2/CommandReceiptStore.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
@@ -750,10 +752,11 @@ const layerMakeRoutes = Layer.mergeAll(
   ),
 ).pipe(
   Layer.provide(
-    FactoryIssueService.layer.pipe(
+    Layer.merge(FactoryIssueService.layer, ProjectCoordinatorService.layer).pipe(
       Layer.provide(
-        Layer.merge(
+        Layer.mergeAll(
           FactoryIssueLaunches.layer,
+          ProjectCoordinators.layer,
           FactoryCommandReceipts.layerFromApplicationReceipts,
         ),
       ),

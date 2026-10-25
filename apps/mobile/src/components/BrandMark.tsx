@@ -15,7 +15,7 @@ export function BrandMark(props: { readonly compact?: boolean; readonly stageLab
   const stageLabel = props.stageLabel ?? DEFAULT_STAGE_LABEL;
 
   return (
-    <View className="flex-row items-center gap-3">
+    <View className="min-w-0 max-w-full shrink flex-row items-center gap-3">
       <Image
         source={T3_CODE_BRAND_MARK_SOURCE}
         accessibilityIgnoresInvertColors
@@ -25,10 +25,17 @@ export function BrandMark(props: { readonly compact?: boolean; readonly stageLab
           borderRadius: compact ? 10 : 14,
         }}
       />
-      <View className="gap-1">
-        <View className="flex-row items-center gap-2">
-          <Text className="text-lg font-t3-bold tracking-[-0.4px] text-foreground">T3 Code</Text>
-          <View className="rounded-full bg-subtle px-2 py-1">
+      <View className="min-w-0 shrink gap-1">
+        <View className="min-w-0 flex-row items-center gap-2">
+          <Text
+            accessibilityLabel="T3 Code Factory"
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            className="min-w-0 shrink text-lg font-t3-bold tracking-[-0.4px] text-foreground"
+          >
+            T3 Code Factory
+          </Text>
+          <View className="shrink-0 rounded-full bg-subtle px-2 py-1">
             <Text className="text-3xs font-t3-bold tracking-[1.1px] uppercase text-foreground-muted">
               {stageLabel}
             </Text>

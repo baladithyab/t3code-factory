@@ -14,6 +14,9 @@ import {
   AuthPreviewOperateScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
+  CommandId,
+  ProjectId,
+  ProviderInstanceId,
   ThreadId,
   EnvironmentId,
   ORCHESTRATION_V2_WS_METHODS,
@@ -275,6 +278,129 @@ it.effect("requires both destination grants before starting an isolated factory 
     }),
   ),
 );
+
+describe("project coordinator permissions", () => {
+  const input = {
+    commandId: CommandId.make("coordinator-auth"),
+    projectId: ProjectId.make("project"),
+    expectedThreadId: null,
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+    runtimeMode: "approval-required" as const,
+    interactionMode: "default" as const,
+  };
+  const result = {
+    coordinator: {
+      projectId: input.projectId,
+      threadId: ThreadId.make("coordinator"),
+      status: "idle" as const,
+      modelSelection: input.modelSelection,
+      runtimeMode: input.runtimeMode,
+      interactionMode: input.interactionMode,
+      createdAt: "2026-10-24T00:00:00.000Z",
+      current: true,
+    },
+    resumed: false,
+  };
+
+  it.effect(
+    "denies creation before RPC and allows root orientation with only the destination operate grant",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* setup;
+          let calls = 0;
+          const session = {
+            client: {
+              [WS_METHODS.projectCoordinatorsEnsure]: () =>
+                Effect.sync(() => {
+                  calls++;
+                  return result;
+                }),
+            },
+          } as unknown as RpcSession;
+          const supervisor = {
+            target: { environmentId: env, label: "target" },
+            session: yield* SubscriptionRef.make(Option.some(session)),
+          } as unknown as EnvironmentSupervisor["Service"];
+          const ensure = createEnvironmentRpcCommand(runtime, {
+            label: "test.coordinator.ensure",
+            tag: WS_METHODS.projectCoordinatorsEnsure,
+            execute: (payload) =>
+              requestGuarded(WS_METHODS.projectCoordinatorsEnsure, payload).pipe(
+                Effect.provideService(EnvironmentSupervisor, supervisor),
+              ),
+          });
+          const target = { environmentId: env, input };
+
+          for (const permission of [AuthOrchestrationReadScope, AuthSourceControlWriteScope]) {
+            registry.set(
+              sessions(env),
+              AsyncResult.success({
+                ...grant(false),
+                scopes: [permission],
+                permissions: [permission],
+              }),
+            );
+            expect(registry.get(ensure.permissionAtom(env))).toBe(false);
+            const denied = yield* Effect.promise(() => ensure.run(registry, target));
+            expect(denied._tag).toBe("Failure");
+            expect(calls).toBe(0);
+          }
+
+          const operateOnly = AsyncResult.success(grant(true));
+          registry.set(sessions(env), operateOnly);
+          expect(registry.get(ensure.permissionAtom(env))).toBe(true);
+          const accepted = yield* Effect.promise(() => ensure.run(registry, target));
+          expect(accepted._tag).toBe("Success");
+          if (accepted._tag === "Success") expect(accepted.value).toEqual(result);
+          expect(calls).toBe(1);
+          expect(registry.get(sessions(env))).toBe(operateOnly);
+
+          const issueStart = createCommandPermissions(runtime, WS_METHODS.factoryStartIssue);
+          const gitWrite = createCommandPermissions(runtime, WS_METHODS.vcsInit);
+          expect(registry.get(issueStart.permissionAtom(env))).toBe(false);
+          expect(registry.get(gitWrite.permissionAtom(env))).toBe(false);
+
+          registry.set(sessions(env), AsyncResult.success(grant(false)));
+          expect(registry.get(ensure.permissionAtom(env))).toBe(false);
+          const revoked = yield* Effect.promise(() => ensure.run(registry, target));
+          expect(revoked._tag).toBe("Failure");
+          expect(calls).toBe(1);
+        }),
+      ),
+  );
+
+  it.effect(
+    "denies coordinator creation outside the shared command boundary without sending RPC",
+    () =>
+      Effect.gen(function* () {
+        let calls = 0;
+        const session = {
+          client: {
+            [WS_METHODS.projectCoordinatorsEnsure]: () =>
+              Effect.sync(() => {
+                calls++;
+                return result;
+              }),
+          },
+        } as unknown as RpcSession;
+        const supervisor = {
+          target: { environmentId: env, label: "target" },
+          session: yield* SubscriptionRef.make(Option.some(session)),
+        } as unknown as EnvironmentSupervisor["Service"];
+        expect(
+          yield* requestGuarded(WS_METHODS.projectCoordinatorsEnsure, input).pipe(
+            Effect.provideService(EnvironmentSupervisor, supervisor),
+            Effect.flip,
+          ),
+        ).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: AuthOrchestrationOperateScope,
+        });
+        expect(calls).toBe(0);
+      }),
+  );
+});
 
 it.effect(
   "requires source control alone for git, and both grants when attaching a worktree to a thread",
