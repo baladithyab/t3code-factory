@@ -145,8 +145,8 @@ make your first commit before pushing.
 ## Factory
 
 Open **Factory** in the sidebar or command palette. Its sections are **Overview**, **Issues**,
-**Workflows**, and **Orchestrator**. **Sessions** and **New thread** still open ordinary
-conversations; you do not need an orchestrator to use them.
+**Sources**, **Workflows**, and **Orchestrator**. **Sessions** and **New thread** still open
+ordinary conversations; you do not need an orchestrator to use them.
 
 ### Choose the scope
 
@@ -274,6 +274,41 @@ already-admitted task, including when another caller won a concurrent start. It 
 saved prompt and settings; the live issue revision is not revalidated on that path. This also
 preserves reservations made before content-revision checking was added. A revision identifies
 content, not a human approval or permission to execute.
+
+### Start a task from a feed item
+
+Open **Factory → Sources** and choose a checkout. Bind a public RSS 2.0 or Atom 1.0 feed by
+its absolute `https://` URL. The environment fetches that URL itself, so loopback, private and
+link-local hosts are refused, redirects are followed at most three times without changing the
+bound URL, and documents with a `DOCTYPE` or entity declarations, larger than 2 MiB, or with
+more than 200 items are rejected. Nothing is fetched on a schedule: bind performs one fetch,
+and **Check now** fetches again, at most once a minute per feed. Feed text is never sent to a
+model and never written anywhere outside this environment.
+
+Each feed item becomes a candidate identified by its Atom `id`, RSS `guid`, or link. An item
+without one, or with a title over 1 KiB or content over 64 KiB, is shown as unreviewable and
+cannot be admitted. Content is shown exactly as published, as text, so hidden markup stays
+visible. An item that drops out of the feed is labelled as not in the current feed; that is not
+a deletion, and only an explicit Atom tombstone retracts it. An item whose link points at one of
+this project's own GitHub issues cannot be admitted here; start it from **Issues** instead.
+
+**Dismiss** hides a candidate until you **Restore** it. A dismissal is bound to the content you
+saw; an edited item reopens. **Admit** shows the complete item and the model, base, and
+permission-mode controls, plus an optional **Instructions** field for your own requirements.
+The task receives the item exactly as reviewed and your instructions separately labelled.
+If the item changed since you opened the review, admission is refused; close the review and
+open the current item. An admitted task is an ordinary thread in an isolated worktree and is
+not affected by later edits, retraction, or unbinding.
+
+**Unbind** suspends a feed: no fetches, no new admissions. Its candidates and tasks stay, and
+binding the same URL again restores them. Feed tasks are not available in the mobile app.
+
+Listing feeds and candidates needs `orchestration:read`; binding and unbinding need
+`settings:write`; Check now and dismissal need `orchestration:operate`; admitting needs
+`orchestration:operate` and `source-control:write`. Agents can use
+`factory_list_feed_candidates`, `factory_read_feed_candidate` and
+`factory_admit_feed_candidate` under their existing permissions, passing the reviewed
+`revision` as `expectedRevision`. Agents cannot bind, unbind, refresh or dismiss feeds.
 
 ### Start a project orchestrator
 

@@ -6,6 +6,23 @@ import {
   FactoryIssueStartResult,
 } from "./factory.ts";
 import {
+  FactoryFeedCandidateAdmitInput,
+  FactoryFeedCandidateAdmitResult,
+  FactoryFeedCandidateDismissInput,
+  FactoryFeedCandidateDismissResult,
+  FactoryFeedCandidateListInput,
+  FactoryFeedCandidateListResult,
+  FactoryFeedCandidateReadInput,
+  FactoryFeedCandidateReadResult,
+  FactoryFeedError,
+  FactoryFeedSourceBindInput,
+  FactoryFeedSourceListInput,
+  FactoryFeedSourceListResult,
+  FactoryFeedSourceRefreshInput,
+  FactoryFeedSourceResult,
+  FactoryFeedSourceUnbindInput,
+} from "./factoryFeeds.ts";
+import {
   ProjectCoordinatorEnsureInput,
   ProjectCoordinatorEnsureResult,
   ProjectCoordinatorError,
@@ -415,6 +432,14 @@ import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 export const WS_METHODS = {
   factoryListIssues: "factory.listIssues",
   factoryStartIssue: "factory.startIssue",
+  factoryListFeedSources: "factory.listFeedSources",
+  factoryBindFeedSource: "factory.bindFeedSource",
+  factoryUnbindFeedSource: "factory.unbindFeedSource",
+  factoryRefreshFeedSource: "factory.refreshFeedSource",
+  factoryListFeedCandidates: "factory.listFeedCandidates",
+  factoryReadFeedCandidate: "factory.readFeedCandidate",
+  factorySetFeedCandidateDismissed: "factory.setFeedCandidateDismissed",
+  factoryAdmitFeedCandidate: "factory.admitFeedCandidate",
   projectCoordinatorsGet: "projectCoordinators.get",
   projectCoordinatorsList: "projectCoordinators.list",
   projectCoordinatorsEnsure: "projectCoordinators.ensure",
@@ -1960,6 +1985,50 @@ const WsFactoryStartIssueRpc = Rpc.make(WS_METHODS.factoryStartIssue, {
   success: FactoryIssueStartResult,
   error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
 });
+const factoryFeedError = Schema.Union([FactoryFeedError, EnvironmentAuthorizationError]);
+const WsFactoryListFeedSourcesRpc = Rpc.make(WS_METHODS.factoryListFeedSources, {
+  payload: FactoryFeedSourceListInput,
+  success: FactoryFeedSourceListResult,
+  error: factoryFeedError,
+});
+const WsFactoryBindFeedSourceRpc = Rpc.make(WS_METHODS.factoryBindFeedSource, {
+  payload: FactoryFeedSourceBindInput,
+  success: FactoryFeedSourceResult,
+  error: factoryFeedError,
+});
+const WsFactoryUnbindFeedSourceRpc = Rpc.make(WS_METHODS.factoryUnbindFeedSource, {
+  payload: FactoryFeedSourceUnbindInput,
+  success: FactoryFeedSourceResult,
+  error: factoryFeedError,
+});
+const WsFactoryRefreshFeedSourceRpc = Rpc.make(WS_METHODS.factoryRefreshFeedSource, {
+  payload: FactoryFeedSourceRefreshInput,
+  success: FactoryFeedSourceResult,
+  error: factoryFeedError,
+});
+const WsFactoryListFeedCandidatesRpc = Rpc.make(WS_METHODS.factoryListFeedCandidates, {
+  payload: FactoryFeedCandidateListInput,
+  success: FactoryFeedCandidateListResult,
+  error: factoryFeedError,
+});
+const WsFactoryReadFeedCandidateRpc = Rpc.make(WS_METHODS.factoryReadFeedCandidate, {
+  payload: FactoryFeedCandidateReadInput,
+  success: FactoryFeedCandidateReadResult,
+  error: factoryFeedError,
+});
+const WsFactorySetFeedCandidateDismissedRpc = Rpc.make(
+  WS_METHODS.factorySetFeedCandidateDismissed,
+  {
+    payload: FactoryFeedCandidateDismissInput,
+    success: FactoryFeedCandidateDismissResult,
+    error: factoryFeedError,
+  },
+);
+const WsFactoryAdmitFeedCandidateRpc = Rpc.make(WS_METHODS.factoryAdmitFeedCandidate, {
+  payload: FactoryFeedCandidateAdmitInput,
+  success: FactoryFeedCandidateAdmitResult,
+  error: factoryFeedError,
+});
 
 const WsProjectCoordinatorsGetRpc = Rpc.make(WS_METHODS.projectCoordinatorsGet, {
   payload: ProjectCoordinatorGetInput,
@@ -1988,6 +2057,14 @@ export const WsRpcGroup = RpcGroup.make(
   WsGuestShareCreateRpc,
   WsFactoryListIssuesRpc,
   WsFactoryStartIssueRpc,
+  WsFactoryListFeedSourcesRpc,
+  WsFactoryBindFeedSourceRpc,
+  WsFactoryUnbindFeedSourceRpc,
+  WsFactoryRefreshFeedSourceRpc,
+  WsFactoryListFeedCandidatesRpc,
+  WsFactoryReadFeedCandidateRpc,
+  WsFactorySetFeedCandidateDismissedRpc,
+  WsFactoryAdmitFeedCandidateRpc,
   WsProjectCoordinatorsGetRpc,
   WsProjectCoordinatorsListRpc,
   WsProjectCoordinatorsEnsureRpc,

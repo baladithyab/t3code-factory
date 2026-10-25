@@ -16,6 +16,12 @@ import { WS_METHODS } from "./rpc.ts";
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.factoryStartIssue]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryAdmitFeedCandidate]: AuthOrchestrationOperateScope,
+  // Binding causes server-side egress to a user-entered URL, like the OTLP endpoint check.
+  [WS_METHODS.factoryBindFeedSource]: AuthSettingsWriteScope,
+  [WS_METHODS.factoryUnbindFeedSource]: AuthSettingsWriteScope,
+  [WS_METHODS.factoryRefreshFeedSource]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factorySetFeedCandidateDismissed]: AuthOrchestrationOperateScope,
   [WS_METHODS.projectCoordinatorsEnsure]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   // Stopping a server signals its processes, as closing a terminal does.
@@ -78,7 +84,7 @@ export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
-  if (method === WS_METHODS.factoryStartIssue)
+  if (method === WS_METHODS.factoryStartIssue || method === WS_METHODS.factoryAdmitFeedCandidate)
     return [AuthOrchestrationOperateScope, AuthSourceControlWriteScope];
   if (method === WS_METHODS.gitPreparePullRequestThread && input !== undefined) {
     const payload = decodePrepareThread(input);

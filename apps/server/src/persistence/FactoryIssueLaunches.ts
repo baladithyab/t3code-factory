@@ -1,17 +1,8 @@
 import {
-  CommandId,
   FactoryIssue,
   FactoryIssueError,
   FactoryRepository,
-  IsoDateTime,
-  MessageId,
-  ModelSelection,
-  OrchestrationV2Actor,
-  OrchestrationV2CreationSource,
   PositiveInt,
-  ProjectId,
-  ProviderInteractionMode,
-  RuntimeMode,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -21,6 +12,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
+import { FactoryLaunchCore } from "../factory/FactoryTaskLaunch.ts";
 
 export const FactoryLaunchIntent = Schema.Struct({
   repository: FactoryRepository,
@@ -37,21 +29,7 @@ export const FactoryLaunchIntent = Schema.Struct({
     // Always null here; retained because older binaries require the key.
     task: FactoryIssue.fields.task,
   }),
-  projectId: ProjectId,
-  workspaceRoot: Schema.String,
-  requestCommandId: CommandId,
-  commandId: CommandId,
-  threadId: ThreadId,
-  messageId: MessageId,
-  baseRef: Schema.String,
-  modelSelection: ModelSelection,
-  runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode,
-  prompt: Schema.String,
-  createdBy: OrchestrationV2Actor,
-  creationSource: OrchestrationV2CreationSource,
-  createdAt: IsoDateTime,
-  previousThreadId: Schema.NullOr(ThreadId),
+  ...FactoryLaunchCore.fields,
 });
 export type FactoryLaunchIntent = typeof FactoryLaunchIntent.Type;
 

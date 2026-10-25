@@ -293,13 +293,24 @@ function FactoryOverviewEnvironment({
                   </ul>
                 )}
               </div>
-              <Link
-                to="/factory/issues"
-                search={exactSearch}
-                className="inline-block text-sm underline underline-offset-4"
-              >
-                Open issue inbox
-              </Link>
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                <Link
+                  to="/factory/issues"
+                  search={exactSearch}
+                  className="inline-block text-sm underline underline-offset-4"
+                >
+                  Open issue inbox
+                </Link>
+                {environment.serverConfig?.environment.capabilities.factoryFeeds === true ? (
+                  <Link
+                    to="/factory/sources"
+                    search={exactSearch}
+                    className="inline-block text-sm underline underline-offset-4"
+                  >
+                    Open feed sources
+                  </Link>
+                ) : null}
+              </div>
             </article>
           );
         })

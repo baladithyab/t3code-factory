@@ -3,6 +3,12 @@ import { assert, it } from "@effect/vitest";
 import {
   AuthSessionId,
   EnvironmentId,
+  CommandId,
+  FactoryFeedError,
+  FactoryFeedSourceId,
+  ProviderInstanceId,
+  WsRpcGroup,
+  type EnvironmentAuthorizationError,
   ProjectId,
   ThreadId,
   ProviderDriverKind,
@@ -28,9 +34,12 @@ import * as TestClock from "effect/testing/TestClock";
 import { Headers } from "effect/http";
 import { RpcGroup, RpcMessage, RpcServer } from "effect/rpc";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as RpcTest from "effect/rpc/RpcTest";
+import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
+import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
@@ -526,6 +535,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(PullRequestService.PullRequestService)({}),
   Layer.mock(FactoryIssueService.FactoryIssueService)({}),
+  Layer.mock(FactoryFeedService.FactoryFeedService)({}),
   Layer.mock(PullRequestSyncReactor.PullRequestSyncReactor)({}),
   Layer.mock(RelayClient.RelayClient)({}),
   Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
@@ -979,5 +989,119 @@ it.effect("thread resume across compacted history keeps message order and final 
         Layer.provideMerge(ReplayTestLayer),
       ),
     ),
+  ),
+);
+
+it.effect("routes all eight feed RPCs to the service without translating domain refusals", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const refuse = (method: string) =>
+      Effect.sync(() => {
+        calls.push(method);
+      }).pipe(Effect.andThen(Effect.fail(new FactoryFeedError({ reason: "candidate-changed" }))));
+    const services = Layer.mergeAll(
+      layerUnusedConfigRpcServices,
+      Layer.mock(ProjectCoordinatorService.ProjectCoordinatorService)({}),
+      Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+      Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+      Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+      Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+      Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+      Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+      Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+      Layer.mock(FactoryFeedService.FactoryFeedService)({
+        listSources: () => refuse("listSources"),
+        bindSource: () => refuse("bindSource"),
+        unbindSource: () => refuse("unbindSource"),
+        refreshSource: () => refuse("refreshSource"),
+        listCandidates: () => refuse("listCandidates"),
+        readCandidate: () => refuse("readCandidate"),
+        setCandidateDismissed: () => refuse("setCandidateDismissed"),
+        admitCandidate: () => refuse("admitCandidate"),
+      }),
+    );
+    const methods = [
+      WS_METHODS.factoryListFeedSources,
+      WS_METHODS.factoryBindFeedSource,
+      WS_METHODS.factoryUnbindFeedSource,
+      WS_METHODS.factoryRefreshFeedSource,
+      WS_METHODS.factoryListFeedCandidates,
+      WS_METHODS.factoryReadFeedCandidate,
+      WS_METHODS.factorySetFeedCandidateDismissed,
+      WS_METHODS.factoryAdmitFeedCandidate,
+    ] as const;
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RpcAuthorization.RPC_REQUIRED_SCOPES,
+          (typeof methods)[number]
+        > => !(methods as readonly string[]).includes(tag),
+      ),
+    );
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.merge(
+          layerWsRpc(
+            {
+              sessionId: AuthSessionId.make("feed-test"),
+              subject: "feed-test",
+              method: "browser-session-cookie",
+              scopes: [],
+            },
+            {},
+            {},
+            yield* PreviewAutomationBroker.PreviewAutomationBroker,
+            yield* ServerBrowser.ServerBrowser,
+          ).pipe(Layer.provide(services)),
+          RpcAuthorization.layer([
+            "orchestration:read",
+            "orchestration:operate",
+            "settings:write",
+            "source-control:write",
+          ]),
+        ),
+      ),
+    );
+    for (const method of methods) {
+      const request: Effect.Effect<unknown, FactoryFeedError | EnvironmentAuthorizationError> =
+        client[method]({
+          commandId: CommandId.make("feed-test"),
+          projectId: ProjectId.make("project"),
+          sourceId: FactoryFeedSourceId.make("feed"),
+          itemKey: "atom:item",
+          url: "https://news.example.org/feed",
+          expectedRevision: "reviewed",
+          dismissed: false,
+          expectedRepositoryKey: "github.com/owner/repo",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+        });
+      const result = yield* request.pipe(Effect.asVoid, Effect.flip);
+      assert.instanceOf(result, FactoryFeedError);
+      assert.equal(result.reason, "candidate-changed");
+    }
+    assert.deepEqual(calls, [
+      "listSources",
+      "bindSource",
+      "unbindSource",
+      "refreshSource",
+      "listCandidates",
+      "readCandidate",
+      "setCandidateDismissed",
+      "admitCandidate",
+    ]);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.fresh(layerConfigSources),
+        Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+        Layer.mock(ServerBrowser.ServerBrowser)({}),
+      ),
+    ),
+    Effect.scoped,
   ),
 );

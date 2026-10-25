@@ -1,5 +1,8 @@
 import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
 import * as FactoryIssueLaunches from "./persistence/FactoryIssueLaunches.ts";
+import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
+import * as FactoryFeedStore from "./persistence/FactoryFeedStore.ts";
+import * as FeedFetch from "./factory/FeedFetch.ts";
 import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
 import * as ProjectCoordinators from "./persistence/ProjectCoordinators.ts";
 import * as FactoryCommandReceipts from "./orchestration-v2/CommandReceiptStore.ts";
@@ -752,10 +755,16 @@ const layerMakeRoutes = Layer.mergeAll(
   ),
 ).pipe(
   Layer.provide(
-    Layer.merge(FactoryIssueService.layer, ProjectCoordinatorService.layer).pipe(
+    Layer.mergeAll(
+      FactoryIssueService.layer,
+      FactoryFeedService.layer,
+      ProjectCoordinatorService.layer,
+    ).pipe(
       Layer.provide(
         Layer.mergeAll(
           FactoryIssueLaunches.layer,
+          FactoryFeedStore.layer,
+          FeedFetch.layer,
           ProjectCoordinators.layer,
           FactoryCommandReceipts.layerFromApplicationReceipts,
         ),

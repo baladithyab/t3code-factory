@@ -78,6 +78,7 @@ import Migration0072 from "./Migrations/072_WaitingLinkRequestIndex.ts";
 import Migration0073 from "./Migrations/073_ActiveTurnItemIndexes.ts";
 import Migration0193 from "./Migrations/193_FactoryIssueLaunches.ts";
 import Migration0194 from "./Migrations/194_ProjectCoordinators.ts";
+import Migration0195 from "./Migrations/195_FactoryFeeds.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -156,6 +157,7 @@ const migrationEntries = [
   [73, "ActiveTurnItemIndexes", Migration0073],
   [193, "FactoryIssueLaunches", Migration0193],
   [194, "ProjectCoordinators", Migration0194],
+  [195, "FactoryFeeds", Migration0195],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { factoryIssueReviewText } from "@t3tools/client-runtime/state/factory";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -14,7 +13,6 @@ import {
   type FactoryRepository,
   type ModelSelection,
   type ProjectId,
-  type ProviderInstanceId,
 } from "@t3tools/contracts";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
@@ -24,34 +22,18 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
 } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { useEnvironmentSettings } from "../../hooks/useSettings";
-import {
-  getCustomModelOptionsByInstance,
-  resolveEffectiveDefaultModelSelection,
-} from "../../modelSelection";
-import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
-  sortProviderInstanceEntries,
-  type ProviderInstanceEntry,
-} from "../../providerInstances";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import type { ModelEsque } from "../chat/providerIconUtils";
 import { factoryEnvironment } from "../../state/factory";
 import { useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { useEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
-import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { randomUUID } from "../../lib/utils";
-import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { RelativeTime } from "../RelativeTime";
-import { scheduledTaskDefaultModel } from "../settings/scheduledTasksSettings.logic";
-import { SETTINGS_PICKER_TRIGGER_CLASSNAME } from "../settings/settingsLayout";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
 import {
@@ -64,9 +46,6 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
-import { Input } from "../ui/input";
-import { Label } from "../ui/label";
 import { RefreshIcon } from "../ui/refresh-icon";
 import { Skeleton } from "../ui/skeleton";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
@@ -83,29 +62,20 @@ import {
   type FactoryFailure,
   type FactoryIssueStateFilter,
 } from "./factoryIssues.logic";
+import { FactoryCheckoutChooser } from "./FactoryCheckoutChooser";
+import { FactoryEmptyState } from "./FactoryEmptyState";
+import {
+  FactoryLaunchFields,
+  useFactoryLaunchDraft,
+  useFactoryLaunchModelSettings,
+  type FactoryLaunchModelSettings,
+} from "./FactoryLaunchControls";
+import { FactoryReviewFailure, FactoryReviewSnapshot } from "./FactoryReview";
 import { FactoryIssueWorkView } from "./FactoryIssueWorkView";
 import { parseFactoryIssueViewMode, type FactoryIssueViewMode } from "./factoryIssues.views";
 
 import { useSettingsScope } from "../settings/SettingsScopeContext";
-import { factoryScopeSearchForMember, singleFactoryMember } from "./factoryScope";
-
-function FactoryEmptyState(props: {
-  readonly icon: ReactNode;
-  readonly title: string;
-  readonly description: string;
-  readonly action?: ReactNode;
-}) {
-  return (
-    <Empty className="min-h-64">
-      <EmptyMedia variant="icon">{props.icon}</EmptyMedia>
-      <EmptyHeader>
-        <EmptyTitle>{props.title}</EmptyTitle>
-        <EmptyDescription>{props.description}</EmptyDescription>
-      </EmptyHeader>
-      {props.action}
-    </Empty>
-  );
-}
+import { singleFactoryMember } from "./factoryScope";
 
 export function FactoryIssuesPage() {
   const search = useSearch({ from: "/_chat/factory" });
@@ -124,16 +94,6 @@ export function FactoryIssuesPage() {
   );
   const state = search.state;
   const view = parseFactoryIssueViewMode(search.view);
-  const visibleGroups = groups.flatMap((group) => {
-    const members = group.memberProjects.filter((candidate) =>
-      scope.kind === "project" || scope.kind === "checkout"
-        ? scope.members.some(
-            (selected) => selected.physicalProjectKey === candidate.physicalProjectKey,
-          )
-        : scope.environmentIds.includes(candidate.environmentId),
-    );
-    return members.length > 0 ? [{ group, members }] : [];
-  });
 
   if (scope.kind === "unavailable") return null;
   if (!isReady) {
@@ -156,66 +116,27 @@ export function FactoryIssuesPage() {
         </p>
       </div>
       {member === null ? (
-        <>
-          <p className="text-muted-foreground text-sm">
-            Choose a checkout to open its issue inbox. Checkouts of the same repository may share
-            issues; they are not combined into a global queue.
-          </p>
-          {visibleGroups.length === 0 ? (
-            <FactoryEmptyState
-              icon={<FactoryIcon />}
-              title="No checkouts in this scope"
-              description="Connect an environment and add a repository checkout to use the issue inbox."
-            />
-          ) : (
-            visibleGroups.map(({ group, members }) => (
-              <section key={group.projectKey} className="space-y-2">
-                <h3 className="font-medium text-sm">{group.displayName}</h3>
-                <ul className="divide-y rounded-lg border">
-                  {members.map((candidate) => {
-                    const owner = environments.find(
-                      (item) => item.environmentId === candidate.environmentId,
-                    );
-                    const status = !owner
-                      ? "Environment unavailable"
-                      : owner.connection.phase !== "connected"
-                        ? "Offline. Reconnect to read issues"
-                        : owner.serverConfig === null
-                          ? "Server capabilities unknown"
-                          : owner.serverConfig.environment.capabilities.factoryIssues !== true
-                            ? "Issue inbox unsupported. Update this server"
-                            : !readableIds.has(owner.environmentId)
-                              ? "Read access unavailable"
-                              : "Connected · issue inbox available";
-                    return (
-                      <li
-                        key={candidate.physicalProjectKey}
-                        className="flex flex-wrap items-center justify-between gap-3 p-3"
-                      >
-                        <div className="min-w-0 space-y-1">
-                          <p className="font-medium text-sm">
-                            {owner?.label ?? candidate.environmentLabel ?? candidate.environmentId}
-                          </p>
-                          <p className="break-all text-muted-foreground text-xs">
-                            {candidate.workspaceRoot}
-                          </p>
-                          <p className="text-muted-foreground text-xs">{status}</p>
-                        </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => selectScope(factoryScopeSearchForMember(candidate, group))}
-                        >
-                          Choose checkout
-                        </Button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            ))
-          )}
-        </>
+        <FactoryCheckoutChooser
+          scope={scope}
+          groups={groups}
+          environments={environments}
+          intro="Choose a checkout to open its issue inbox. Checkouts of the same repository may share issues; they are not combined into a global queue."
+          emptyDescription="Connect an environment and add a repository checkout to use the issue inbox."
+          statusFor={(owner) =>
+            !owner
+              ? "Environment unavailable"
+              : owner.connection.phase !== "connected"
+                ? "Offline. Reconnect to read issues"
+                : owner.serverConfig === null
+                  ? "Server capabilities unknown"
+                  : owner.serverConfig.environment.capabilities.factoryIssues !== true
+                    ? "Issue inbox unsupported. Update this server"
+                    : !readableIds.has(owner.environmentId)
+                      ? "Read access unavailable"
+                      : "Connected · issue inbox available"
+          }
+          onChoose={selectScope}
+        />
       ) : !environment || !project ? (
         <FactoryEmptyState
           icon={<FactoryIcon />}
@@ -319,23 +240,7 @@ function FactoryInbox(props: {
     reportFailure: false,
   });
 
-  const settings = useEnvironmentSettings(environmentId);
-  const providers =
-    useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
-  const instanceEntries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, project.id),
-  );
-  const normalizeSelection = (selection: ModelSelection) =>
-    resolveEffectiveDefaultModelSelection(settings, providers, selection);
-  const configuredDefault = scheduledTaskDefaultModel(settings, project, instanceEntries);
-  const defaultSelection =
-    configuredDefault === null ? null : normalizeSelection(configuredDefault);
-  const modelOptionsByInstance = getCustomModelOptionsByInstance(
-    settings,
-    providers,
-    defaultSelection?.instanceId ?? null,
-    defaultSelection?.model ?? null,
-  );
+  const launchSettings = useFactoryLaunchModelSettings(environmentId, project);
 
   const [dialog, setDialog] = useState<PendingStart | null>(null);
   const [startingIssue, setStartingIssue] = useState<number | null>(null);
@@ -575,10 +480,7 @@ function FactoryInbox(props: {
           restart={dialog.restart}
           projectTitle={project.title}
           repository={dialog.repository}
-          instanceEntries={instanceEntries}
-          modelOptionsByInstance={modelOptionsByInstance}
-          defaultSelection={defaultSelection}
-          normalizeModelSelection={normalizeSelection}
+          settings={launchSettings}
           canStart={canStart}
           pending={startingIssue === dialog.issue.number}
           failure={startFailure}
@@ -642,10 +544,7 @@ function FactoryStartDialog(props: {
   readonly restart: boolean;
   readonly projectTitle: string;
   readonly repository: FactoryRepository;
-  readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
-  readonly modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
-  readonly defaultSelection: ModelSelection | null;
-  readonly normalizeModelSelection: (selection: ModelSelection) => ModelSelection;
+  readonly settings: FactoryLaunchModelSettings;
   readonly canStart: boolean;
   readonly pending: boolean;
   readonly failure: FactoryFailure | null;
@@ -657,30 +556,10 @@ function FactoryStartDialog(props: {
   }) => void;
 }) {
   const { issue, restart, pending } = props;
-  // Keep defaults and model normalization pinned while the user reviews this issue.
-  const [modelSettings] = useState(() => ({
-    defaultSelection: props.defaultSelection,
-    instanceEntries: props.instanceEntries,
-    modelOptionsByInstance: props.modelOptionsByInstance,
-    normalizeModelSelection: props.normalizeModelSelection,
-  }));
-  const reviewId = useId();
-  const review = {
-    title: factoryIssueReviewText(issue.title),
-    body: issue.body === null ? null : factoryIssueReviewText(issue.body),
-  };
+  // Defaults and model normalization stay pinned while the user reviews this issue.
+  const draft = useFactoryLaunchDraft(props.settings);
+  const { selection } = draft;
   const changed = props.failure?.kind === "changed";
-  const [picked, setPicked] = useState<ModelSelection | null>(null);
-  const [baseRef, setBaseRef] = useState("");
-  const pickedIsAvailable =
-    picked !== null &&
-    modelSettings.instanceEntries.some(
-      (entry) => entry.instanceId === picked.instanceId && entry.enabled,
-    );
-  const candidate = pickedIsAvailable ? picked : modelSettings.defaultSelection;
-  const selection = candidate === null ? null : modelSettings.normalizeModelSelection(candidate);
-  const activeInstanceId: ProviderInstanceId | null =
-    selection?.instanceId ?? modelSettings.instanceEntries[0]?.instanceId ?? null;
 
   return (
     <Dialog
@@ -706,110 +585,33 @@ function FactoryStartDialog(props: {
               {`${props.repository.host}/${props.repository.repository}`} · task project{" "}
               {props.projectTitle}
             </p>
-            <div className="space-y-2">
-              <h3 id={`${reviewId}-title`} className="font-medium text-sm">
-                Full issue snapshot
-              </h3>
-              <p id={`${reviewId}-description`} className="text-muted-foreground text-xs">
-                Review the full title and description before confirming. Backslashes are escaped;
-                control and formatting characters are shown as <code>{"\\uXXXX"}</code>. Tabs and
-                newlines remain literal. No source text is omitted.
-              </p>
-              <div
-                role="region"
-                aria-labelledby={`${reviewId}-title`}
-                aria-describedby={`${reviewId}-description`}
-                tabIndex={0}
-                className="max-h-80 min-w-0 space-y-3 overflow-auto rounded-lg border border-border/60 p-3 focus-visible:outline-2 focus-visible:outline-ring"
-              >
-                <div className="space-y-1">
-                  <h4 className="font-medium text-xs">Title</h4>
-                  {review.title.length === 0 ? (
-                    <p className="text-muted-foreground text-sm">The source title is empty.</p>
-                  ) : (
-                    <pre className="whitespace-pre-wrap font-sans text-sm [overflow-wrap:anywhere]">
-                      {review.title}
-                    </pre>
-                  )}
-                </div>
-                <div className="space-y-1">
-                  <h4 className="font-medium text-xs">Description</h4>
-                  {review.body === null ? (
-                    <p className="text-muted-foreground text-sm">
-                      This issue has no description. The source body is null.
-                    </p>
-                  ) : review.body.length === 0 ? (
-                    <p className="text-muted-foreground text-sm">
-                      The source description is an empty string.
-                    </p>
-                  ) : (
-                    <pre className="whitespace-pre-wrap font-sans text-sm [overflow-wrap:anywhere]">
-                      {review.body}
-                    </pre>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Model</Label>
-              <div>
-                {activeInstanceId !== null ? (
-                  <ProviderModelPicker
-                    environmentId={props.environmentId}
-                    disabled={pending || changed}
-                    activeInstanceId={activeInstanceId}
-                    model={selection?.model ?? ""}
-                    lockedProvider={null}
-                    instanceEntries={modelSettings.instanceEntries}
-                    modelOptionsByInstance={modelSettings.modelOptionsByInstance}
-                    isComposerOwned={false}
-                    triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                    onInstanceModelChange={(instanceId, model) => setPicked({ instanceId, model })}
-                  />
-                ) : (
-                  <p className="text-muted-foreground text-sm">No provider is configured.</p>
-                )}
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="factory-base-ref">
-                Base ref <span className="font-normal text-muted-foreground">optional</span>
-              </Label>
-              <Input
-                id="factory-base-ref"
-                value={baseRef}
-                placeholder="Current HEAD of the project checkout"
-                onChange={(event) => setBaseRef(event.target.value)}
-              />
-              <p className="text-muted-foreground text-xs">
-                A local branch, tag or commit. It is resolved to a fixed commit when the task
-                starts; your checkout is not fetched or changed.
-              </p>
-            </div>
-            <Alert variant="info">
-              <AlertDescription>
-                The task starts with approval required. Issue text is treated as untrusted task
-                data, and nothing here authorizes publishing, merging or releasing. You can change
-                the thread's controls afterwards.
-              </AlertDescription>
-            </Alert>
+            <FactoryReviewSnapshot
+              heading="Full issue snapshot"
+              intro="Review the full title and description before confirming."
+              fields={[
+                { label: "Title", text: issue.title, emptyNote: "The source title is empty." },
+                {
+                  label: "Description",
+                  text: issue.body,
+                  emptyNote: "The source description is an empty string.",
+                  missingNote: "This issue has no description. The source body is null.",
+                },
+              ]}
+            />
+            <FactoryLaunchFields
+              environmentId={props.environmentId}
+              disabled={pending || changed}
+              draft={draft}
+              untrustedText="Issue text"
+            />
           </fieldset>
         </DialogPanel>
         {props.failure ? (
-          <div className="shrink-0 px-6 pt-3">
-            <Alert variant="error">
-              <AlertTitle>{props.failure.title}</AlertTitle>
-              <AlertDescription>
-                <p>{props.failure.message}</p>
-                {changed ? (
-                  <p>
-                    This snapshot is no longer current. Close this dialog and reopen the issue to
-                    review the refreshed content before starting new work.
-                  </p>
-                ) : null}
-              </AlertDescription>
-            </Alert>
-          </div>
+          <FactoryReviewFailure
+            failure={props.failure}
+            changed={changed}
+            staleHint="This snapshot is no longer current. Close this dialog and reopen the issue to review the refreshed content before starting new work."
+          />
         ) : null}
         <DialogFooter>
           <DialogClose render={<Button variant="outline" size="sm" disabled={pending} />}>
@@ -821,7 +623,7 @@ function FactoryStartDialog(props: {
             aria-busy={pending}
             onClick={() => {
               if (!props.canStart || pending || changed || selection === null) return;
-              const normalized = normalizeFactoryBaseRef(baseRef);
+              const normalized = normalizeFactoryBaseRef(draft.baseRef);
               props.onSubmit({
                 modelSelection: selection,
                 restartDeleted: restart,

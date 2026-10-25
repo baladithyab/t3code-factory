@@ -1,23 +1,55 @@
 import {
   OrchestratorMcpFailure,
   type FactoryIssueError,
+  type FactoryFeedError,
   type ProjectCoordinatorError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Factory from "../../../factory/FactoryIssueService.ts";
+import * as Feeds from "../../../factory/FactoryFeedService.ts";
 import { DispatchModeLimit } from "../../../orchestration-v2/DispatchModeLimit.ts";
 import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { readCaller } from "../../threadAccess.ts";
 import { FactoryToolkit } from "./tools.ts";
 
-const failure = (error: FactoryIssueError | ProjectCoordinatorError) =>
+const failure = (error: FactoryIssueError | FactoryFeedError | ProjectCoordinatorError) =>
   new OrchestratorMcpFailure({
     code:
       error.reason === "launch-authority" ? "runtime_mode_escalation_denied" : "invalid_request",
     message: error.message,
   });
 export const layer = McpToolAccess.toLayer(FactoryToolkit, {
+  factory_list_feed_candidates: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      yield* readCaller();
+      const feeds = yield* Feeds.FactoryFeedService;
+      return yield* feeds.listCandidates(input).pipe(Effect.mapError(failure));
+    }),
+  ),
+  factory_read_feed_candidate: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      yield* readCaller();
+      const feeds = yield* Feeds.FactoryFeedService;
+      return yield* feeds.readCandidate(input).pipe(Effect.mapError(failure));
+    }),
+  ),
+  factory_admit_feed_candidate: McpToolAccess.startsThreads(
+    (input) => input,
+    (input, modes) =>
+      Effect.gen(function* () {
+        const caller = yield* readCaller();
+        if (!caller.scope.capabilities.has("worktree"))
+          return yield* new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: "Admitting a feed task requires worktree authority.",
+          });
+        const feeds = yield* Feeds.FactoryFeedService;
+        return yield* feeds
+          .admitCandidate({ ...input, ...modes, creationSource: "mcp" })
+          .pipe(Effect.provideService(DispatchModeLimit, caller.limits), Effect.mapError(failure));
+      }),
+  ),
   factory_list_issues: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       yield* readCaller();
