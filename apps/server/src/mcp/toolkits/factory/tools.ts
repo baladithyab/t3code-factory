@@ -6,10 +6,15 @@ import {
   FactoryIssueStartInput,
   FactoryIssueStartResult,
   OrchestratorMcpFailure,
+  ProjectCoordinatorEnsureInput,
+  ProjectCoordinatorEnsureResult,
+  ProjectCoordinatorGetInput,
+  ProjectCoordinatorGetResult,
 } from "@t3tools/contracts";
 import { Tool, Toolkit } from "effect/ai";
 import * as Factory from "../../../factory/FactoryIssueService.ts";
 import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const shared = {
@@ -48,4 +53,25 @@ const start = Tool.make("factory_start_issue", {
 })
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
-export const FactoryToolkit = Toolkit.make(list, read, start);
+const getOrchestrator = Tool.make("factory_get_orchestrator", {
+  ...shared,
+  dependencies: [...shared.dependencies, Coordinators.ProjectCoordinatorService],
+  description:
+    "Read a registered project's current orchestrator binding and actual thread status, or coordinator:null when none exists. This read never creates a thread, sends an orientation message, resumes a launch, or starts work. Review this binding before explicitly calling factory_start_orchestrator; use its threadId as expectedThreadId, or null for a first creation.",
+  parameters: ProjectCoordinatorGetInput,
+  success: ProjectCoordinatorGetResult,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+const startOrchestrator = Tool.make("factory_start_orchestrator", {
+  ...shared,
+  dependencies: [...shared.dependencies, Coordinators.ProjectCoordinatorService],
+  description:
+    "Explicitly create and start a registered project's root orchestrator with one read-only orientation run, or return/resume its stored binding. Orientation inspects project instructions and available tracker/workflows, then waits; it does not authorize edits, workers, schedules, publication, merges, or spending. Requires orchestration authority, not worktree authority. First call factory_get_orchestrator and pass required expectedThreadId:null for first creation or the reviewed binding's threadId. A missing retired binding can be replaced only with replaceRetired:true and its exact expectedThreadId; stale bindings are rejected. Existing live, archived, or failed threads are returned, not replaced; open them through ordinary thread controls. Reuse commandId for retries of the same request, never for a different project or new operation. A superseded request replay returns its original coordinator with current:false and starts nothing. Stored launch settings and caller mode ceilings remain authoritative; accepted orientation is never resent. Deleting a bound thread also removes its bound scheduled workflows.",
+  parameters: ProjectCoordinatorEnsureInput,
+  success: ProjectCoordinatorEnsureResult,
+})
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.OpenWorld, true);
+export const FactoryToolkit = Toolkit.make(list, read, start, getOrchestrator, startOrchestrator);

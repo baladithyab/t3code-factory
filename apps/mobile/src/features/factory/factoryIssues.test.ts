@@ -18,7 +18,6 @@ import {
   factoryIssueAction,
   factoryIssueStartKey,
   factoryRepositoryLabel,
-  resolveFactoryInboxTarget,
   safeFactoryIssueBody,
   safeFactoryIssueText,
   safeFactoryIssueUrl,
@@ -251,91 +250,5 @@ describe("factoryRepositoryLabel", () => {
     expect(factoryRepositoryLabel({ ...repository, host: "ghe.example.com" })).toBe(
       "ghe.example.com/owner/name",
     );
-  });
-});
-
-describe("resolveFactoryInboxTarget", () => {
-  const environments = [
-    { environmentId: "old", supported: false },
-    { environmentId: "new", supported: true },
-  ];
-  const projects = [
-    { environmentId: "old", projectId: "old-a" },
-    { environmentId: "new", projectId: "new-a" },
-    { environmentId: "new", projectId: "new-b" },
-  ];
-
-  it("keeps the user's last choice while it exists", () => {
-    expect(
-      resolveFactoryInboxTarget({
-        environments,
-        projects,
-        preferred: { environmentId: "new", projectId: "new-b" },
-        hints: [{ environmentId: "new", projectId: "new-a" }],
-      }),
-    ).toEqual({ environmentId: "new", projectId: "new-b" });
-  });
-
-  it("falls back to the project Settings is scoped to, then the first supported environment", () => {
-    expect(
-      resolveFactoryInboxTarget({
-        environments,
-        projects,
-        preferred: { environmentId: null, projectId: null },
-        hints: [
-          { environmentId: "old", projectId: "old-a" },
-          { environmentId: "new", projectId: "new-b" },
-        ],
-      }),
-    ).toEqual({ environmentId: "new", projectId: "new-b" });
-    expect(
-      resolveFactoryInboxTarget({
-        environments,
-        projects,
-        preferred: { environmentId: null, projectId: null },
-        hints: [],
-      }),
-    ).toEqual({ environmentId: "new", projectId: "new-a" });
-  });
-
-  it("drops a preference whose environment or project is gone", () => {
-    expect(
-      resolveFactoryInboxTarget({
-        environments,
-        projects,
-        preferred: { environmentId: "new", projectId: "deleted" },
-        hints: [],
-      }),
-    ).toEqual({ environmentId: "new", projectId: "new-a" });
-    expect(
-      resolveFactoryInboxTarget({
-        environments,
-        projects,
-        preferred: { environmentId: "gone", projectId: "x" },
-        hints: [],
-      }),
-    ).toEqual({ environmentId: "new", projectId: "new-a" });
-  });
-
-  it("still selects an unsupported environment so the screen can say so", () => {
-    expect(
-      resolveFactoryInboxTarget({
-        environments: [{ environmentId: "old", supported: false }],
-        projects,
-        preferred: { environmentId: null, projectId: null },
-        hints: [],
-      }),
-    ).toEqual({ environmentId: "old", projectId: "old-a" });
-  });
-
-  it("resolves nothing without environments", () => {
-    expect(
-      resolveFactoryInboxTarget({
-        environments: [],
-        projects: [],
-        preferred: { environmentId: null, projectId: null },
-        hints: [],
-      }),
-    ).toEqual({ environmentId: null, projectId: null });
   });
 });

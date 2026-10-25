@@ -16,6 +16,7 @@ import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import { THREAD_SIDEBAR_ROW_LAYOUT } from "./threadListAnimations";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useAtomValue } from "@effect/atom-react";
+import { useNavigation } from "@react-navigation/native";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LayoutChangeEvent, TextInputInstance } from "react-native";
 import { Platform, StyleSheet, TextInput, View } from "react-native";
@@ -27,6 +28,7 @@ import type { SearchBarCommands } from "react-native-screens";
 import { AppText as Text } from "../../components/ui/AppText";
 import { CompactBrandTitle } from "../../components/CompactBrandTitle";
 import { Menu } from "../../components/ui/Menu";
+import { NavigationRow } from "../../components/ui/NavigationRow";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
@@ -106,14 +108,27 @@ interface ThreadNavigationSidebarProps {
   readonly searchQuery: string;
 }
 
+type SidebarNavigationProps = ThreadNavigationSidebarProps & {
+  readonly onOpenFactory: () => void;
+};
+
 export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
+  const navigation = useNavigation();
+  const onOpenFactory = () => {
+    navigation.navigate("SettingsSheet", {
+      screen: "SettingsContent",
+      params: { screen: "SettingsFactoryIssues" },
+    });
+  };
   if (Platform.OS !== "ios") {
-    return <ThreadNavigationSidebarPane {...props} nativeChrome={false} />;
+    return (
+      <ThreadNavigationSidebarPane {...props} onOpenFactory={onOpenFactory} nativeChrome={false} />
+    );
   }
-  return <NativeSidebarContainer {...props} />;
+  return <NativeSidebarContainer {...props} onOpenFactory={onOpenFactory} />;
 }
 
-function NativeSidebarContainer(props: ThreadNavigationSidebarProps) {
+function NativeSidebarContainer(props: SidebarNavigationProps) {
   return (
     <View
       testID="thread-navigation-sidebar"
@@ -128,7 +143,7 @@ function NativeSidebarContainer(props: ThreadNavigationSidebarProps) {
 }
 
 function ThreadNavigationSidebarPane(
-  props: ThreadNavigationSidebarProps & { readonly nativeChrome: boolean },
+  props: SidebarNavigationProps & { readonly nativeChrome: boolean },
 ) {
   const { themeVariables: materialTheme } = useAppearancePreferences();
   const drawerColor = materialTheme["--color-drawer"];
@@ -752,6 +767,24 @@ function ThreadNavigationSidebarPane(
               : "No threads yet"}
     </Text>
   );
+  const factoryNavigation = (
+    <View className="mb-2 gap-2">
+      <NavigationRow
+        title="Factory"
+        subtitle="Overview, issues, workflows & orchestrator"
+        onPress={props.onOpenFactory}
+        leading={
+          <SymbolView name="list.number" size={20} tintColorClassName="accent-drawer-foreground" />
+        }
+      />
+      <Text
+        accessibilityRole="header"
+        className="px-4 text-sm font-semibold text-drawer-foreground-muted"
+      >
+        Sessions
+      </Text>
+    </View>
+  );
 
   if (props.nativeChrome) {
     return (
@@ -816,6 +849,7 @@ function ThreadNavigationSidebarPane(
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
                 ListEmptyComponent={listEmpty}
+                ListHeaderComponent={factoryNavigation}
               />
             </GestureDetector>
           </SwipeableScrollGateProvider>
@@ -851,7 +885,10 @@ function ThreadNavigationSidebarPane(
         }
       >
         {Platform.OS === "android" && listItems.length === 0 ? (
-          <View className="flex-1 items-center justify-center">{listEmpty}</View>
+          <>
+            {factoryNavigation}
+            <View className="flex-1 items-center justify-center">{listEmpty}</View>
+          </>
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
@@ -884,6 +921,7 @@ function ThreadNavigationSidebarPane(
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
                 ListEmptyComponent={listEmpty}
+                ListHeaderComponent={factoryNavigation}
               />
             </GestureDetector>
           </SwipeableScrollGateProvider>

@@ -2807,9 +2807,11 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 }
 
 export function resolveDesktopProductName(version: string): string {
+  // Directory-launched dev credentials can depend on package metadata; packaged
+  // display names must not change that startup namespace.
   return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "T3 Code (Nightly)"
-    : (desktopPackageJson.productName ?? "T3 Code");
+    ? "T3 Code Factory (Nightly)"
+    : "T3 Code Factory (Beta)";
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (

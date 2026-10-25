@@ -1,4 +1,5 @@
 import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
+import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -1261,6 +1262,7 @@ export const layerWsRpc = (
       const secretRequests = yield* SecretRequests.SecretRequests;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const factory = yield* FactoryIssueService.FactoryIssueService;
+      const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
@@ -2511,6 +2513,13 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.factoryListIssues]: (input) => factory.list(input),
         [WS_METHODS.factoryStartIssue]: (input) => factory.start(input),
+        [WS_METHODS.projectCoordinatorsGet]: (input) => projectCoordinators.get(input),
+        [WS_METHODS.projectCoordinatorsList]: (_input) => projectCoordinators.list(),
+        [WS_METHODS.projectCoordinatorsEnsure]: (input) =>
+          projectCoordinators.ensure({
+            ...input,
+            creationSource: clientOrigin.surface === "mobile" ? "mobile" : "web",
+          }),
         [WS_METHODS.pullRequestsList]: (input) => pullRequests.list(input),
         [WS_METHODS.pullRequestsListStats]: (input) => pullRequests.listStats(input),
         [WS_METHODS.pullRequestsFilterOptions]: (input) => pullRequests.filterOptions(input),
@@ -3203,6 +3212,7 @@ export const layer = Layer.unwrap(
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const factory = yield* FactoryIssueService.FactoryIssueService;
+    const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
@@ -3289,6 +3299,12 @@ export const layer = Layer.unwrap(
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(Layer.succeed(FactoryIssueService.FactoryIssueService, factory)),
+              Layer.provide(
+                Layer.succeed(
+                  ProjectCoordinatorService.ProjectCoordinatorService,
+                  projectCoordinators,
+                ),
+              ),
               Layer.provide(OtlpEndpointCheck.layer),
               Layer.provide(
                 Layer.succeed(

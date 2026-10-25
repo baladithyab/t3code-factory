@@ -32,7 +32,7 @@ import {
 } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsScreen } from "./components/SettingsScreen";
-import { selectFactoryInboxProject } from "../factory/factory-inbox-state";
+import { openFactoryIssues } from "../factory/factory-inbox-state";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import {
@@ -330,7 +330,7 @@ function ProjectOverviewContent(props: {
           label="Issues"
           description="Browse this project's GitHub issues and start an isolated task."
           onPress={() => {
-            selectFactoryInboxProject(representative.environmentId, representative.id);
+            openFactoryIssues(representative.environmentId, representative.id);
             navigation.navigate("SettingsSheet", {
               screen: "SettingsContent",
               params: { screen: "SettingsFactoryIssues" },

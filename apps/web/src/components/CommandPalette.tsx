@@ -1529,19 +1529,45 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  if (
-    environments.some(
-      (environment) => environment.serverConfig?.environment.capabilities.factoryIssues === true,
-    )
-  ) {
+  actionItems.push({
+    kind: "action",
+    value: "action:factory",
+    searchTerms: ["factory", "overview", "projects", "workspaces", "automation"],
+    title: "Open Factory",
+    icon: <FactoryIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/factory", search: { state: "open", view: "list" } });
+    },
+  });
+
+  for (const section of [
+    {
+      to: "/factory/issues",
+      value: "action:factory-issues",
+      title: "Open Factory issues",
+      searchTerms: ["factory", "issues", "github", "tasks", "inbox", "backlog"],
+    },
+    {
+      to: "/factory/workflows",
+      value: "action:factory-workflows",
+      title: "Open Factory workflows",
+      searchTerms: ["factory", "workflows", "scheduled", "tasks", "automation", "prompts"],
+    },
+    {
+      to: "/factory/orchestrator",
+      value: "action:factory-orchestrator",
+      title: "Open Factory orchestrator",
+      searchTerms: ["factory", "orchestrator", "coordinator", "delegation", "project"],
+    },
+  ] as const) {
     actionItems.push({
       kind: "action",
-      value: "action:factory-issues",
-      searchTerms: ["factory", "issues", "github", "tasks", "inbox", "backlog"],
-      title: "Open factory issues",
+      value: section.value,
+      searchTerms: [...section.searchTerms],
+      title: section.title,
       icon: <FactoryIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
-        await navigate({ to: "/factory", search: { state: "open" } });
+        await navigate({ to: section.to, search: { state: "open", view: "list" } });
       },
     });
   }

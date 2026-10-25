@@ -17,7 +17,6 @@ import type {
   EnvironmentId,
   ModelSelection,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
-  ProjectId,
   ScheduledTask,
   ScheduledTaskId,
   ScheduledTaskSchedule,
@@ -56,7 +55,7 @@ import {
 import { usePrimaryCloudLinkState } from "../../cloud/primaryCloudLinkState";
 import { requestConfirmDialog } from "../../confirmDialog";
 import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import {
@@ -64,7 +63,13 @@ import {
   useEnvironmentHttpBaseUrl,
   type EnvironmentPresentation,
 } from "../../state/environments";
-import { useProjects } from "../../state/entities";
+import { useProjects, useQuietThreadShells } from "../../state/entities";
+import { factoryEnvironment } from "../../state/factory";
+import {
+  factoryScopeSearchForMember,
+  singleFactoryMember,
+  validateFactorySearch,
+} from "../factory/factoryScope";
 import { environmentAtomList, environmentIdsKey } from "../../state/environmentAtomList";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
@@ -85,6 +90,7 @@ import {
   matchesScheduledTaskScope,
   scheduleFromDraft,
   scheduledTaskDefaultModel,
+  scheduledTaskDispatchLabel,
   taskToDraft,
   type DraftState,
   type ScheduleMode,
@@ -358,12 +364,53 @@ export function ScheduledTasksSettings(target: {
   readonly environmentId?: EnvironmentId;
   readonly taskId?: ScheduledTaskId | undefined;
 }) {
-  const { scope, environments, connectedEnvironments, environment } = useSettingsScope();
+  return (
+    <SettingsPageContainer>
+      <ScheduledTasksManager {...target} />
+    </SettingsPageContainer>
+  );
+}
+
+export function ScheduledTasksManager(target: {
+  readonly environmentId?: EnvironmentId | undefined;
+  readonly taskId?: ScheduledTaskId | undefined;
+  readonly factory?: boolean | undefined;
+}) {
+  const { scope, groups, environments, connectedEnvironments, environment } = useSettingsScope();
+  const navigate = useNavigate();
   const [editor, setEditor] = useState<{
     environmentId: EnvironmentId;
     task: ScheduledTask | null;
   } | null>(null);
   const openForEdit = (environmentId: EnvironmentId, task: ScheduledTask) => {
+    if (target.factory) {
+      const group = groups.find((entry) =>
+        entry.memberProjects.some(
+          (member) => member.environmentId === environmentId && member.id === task.projectId,
+        ),
+      );
+      const member = group?.memberProjects.find(
+        (entry) => entry.environmentId === environmentId && entry.id === task.projectId,
+      );
+      if (!group || !member) return;
+      const selected = singleFactoryMember(scope);
+      if (
+        selected?.environmentId !== environmentId ||
+        selected.id !== task.projectId ||
+        target.taskId !== task.id
+      ) {
+        void navigate({
+          to: "/factory/workflows",
+          replace: target.taskId === task.id,
+          search: (previous) => ({
+            ...validateFactorySearch(previous),
+            ...factoryScopeSearchForMember(member, group),
+            taskId: task.id,
+          }),
+        });
+        return;
+      }
+    }
     setEditor({ environmentId, task });
   };
   const defaultEnvironment = environment ?? connectedEnvironments[0];
@@ -371,29 +418,43 @@ export function ScheduledTasksSettings(target: {
     serverEnvironment.upsertScheduledTask.permissionAtom(defaultEnvironment?.environmentId ?? null),
   );
   return (
-    <SettingsPageContainer>
+    <>
       <SettingsSection
-        title="Scheduled tasks"
+        title={target.factory ? "Workflows" : "Scheduled tasks"}
         variant="plain"
         headerAction={
           <Button
             size="xs"
             variant="ghost-muted"
-            disabled={!defaultEnvironment || !canCreate}
+            disabled={scope.kind === "unavailable" || !defaultEnvironment || !canCreate}
             onClick={() =>
               defaultEnvironment &&
               setEditor({ environmentId: defaultEnvironment.environmentId, task: null })
             }
           >
             <PlusIcon className="size-3" />
-            New task
+            {target.factory ? "New workflow" : "New task"}
           </Button>
         }
       >
+        {target.factory ? (
+          <p className="px-3 pb-3 text-sm text-muted-foreground sm:px-4">
+            Scheduled agent prompts; latest dispatch only, not a DAG or historical run timeline. New
+            workflows start paused and supervised until you explicitly enable them.
+          </p>
+        ) : null}
         {scope.kind === "unavailable" ? (
           <SettingsSection title="Unavailable selection">
             <SettingsRow title={scope.message} />
           </SettingsSection>
+        ) : target.taskId &&
+          (!target.environmentId ||
+            !environments.some((entry) => entry.environmentId === target.environmentId)) ? (
+          <SettingsRow
+            title="Task unavailable"
+            description="This task's owning environment is outside the selected scope."
+            role="status"
+          />
         ) : environments.length === 0 ? (
           <Empty>
             <EmptyHeader>
@@ -430,15 +491,20 @@ export function ScheduledTasksSettings(target: {
           </div>
         )}
       </SettingsSection>
-      {editor ? (
+      {editor &&
+      scope.kind !== "unavailable" &&
+      environments.some((entry) => entry.environmentId === editor.environmentId) &&
+      (!editor.task ||
+        matchesScheduledTaskScope(scope, editor.environmentId, editor.task.projectId)) ? (
         <ScheduledTaskEditorDialog
           key={`${editor.environmentId}:${editor.task?.id ?? "new"}`}
           initialEnvironmentId={editor.environmentId}
           task={editor.task}
+          factory={target.factory}
           onClose={() => setEditor(null)}
         />
       ) : null}
-    </SettingsPageContainer>
+    </>
   );
 }
 
@@ -679,6 +745,7 @@ function ScheduledTaskRow({
   );
   const [busy, setBusy] = useState(false);
   const [deliveriesOpen, setDeliveriesOpen] = useState(false);
+  const [dispatchedThreadId, setDispatchedThreadId] = useState<ThreadId | null>(null);
   const isWebhook = task.schedule.type === "webhook";
   const toggle = useAtomCommand(serverEnvironment.setScheduledTaskEnabled, {
     label: "scheduled task enabled",
@@ -692,12 +759,39 @@ function ScheduledTaskRow({
   const act = async (action: "toggle" | "run" | "delete") => {
     if (busy || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
     setBusy(true);
+    if (action === "run") {
+      setDispatchedThreadId(null);
+      const result = await run({ environmentId, input: { id: task.id } });
+      setBusy(false);
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Dispatch failed",
+              description: String(squashAtomCommandFailure(result)),
+            }),
+          );
+        }
+        return;
+      }
+      const failed = result.value.task.lastRunStatus === "failed";
+      if (!failed) setDispatchedThreadId(result.value.threadId ?? null);
+      toastManager.add(
+        stackedThreadToast({
+          type: failed ? "error" : "success",
+          title: failed ? "Dispatch failed" : "Dispatch accepted",
+          description: failed
+            ? (result.value.task.lastRunError ?? "The scheduler could not dispatch this prompt.")
+            : "The prompt was dispatched or queued. This does not mean the agent has finished.",
+        }),
+      );
+      return;
+    }
     const result =
       action === "toggle"
         ? await toggle({ environmentId, input: { id: task.id, enabled: !task.enabled } })
-        : action === "run"
-          ? await run({ environmentId, input: { id: task.id } })
-          : await remove({ environmentId, input: { id: task.id } });
+        : await remove({ environmentId, input: { id: task.id } });
     setBusy(false);
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       toastManager.add(
@@ -730,7 +824,27 @@ function ScheduledTaskRow({
             )}
           </span>
           {task.lastRunStatus !== "never" ? (
-            <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
+            <Badge variant={statusVariant(task.lastRunStatus)}>
+              {scheduledTaskDispatchLabel(task.lastRunStatus)}
+            </Badge>
+          ) : null}
+          <span>
+            {task.runCount} dispatch {task.runCount === 1 ? "attempt" : "attempts"}
+          </span>
+          {task.lastRunAt ? (
+            <span>
+              Latest dispatch <ScheduledRelativeLabel value={task.lastRunAt} />
+            </span>
+          ) : null}
+          <span>{task.threadId ? "Bound thread (queued delivery)" : "New thread each run"}</span>
+          {dispatchedThreadId ? (
+            <Link
+              to="/$environmentId/$threadId"
+              params={{ environmentId, threadId: dispatchedThreadId }}
+              className="underline underline-offset-2"
+            >
+              Open dispatched thread
+            </Link>
           ) : null}
           {task.lastRunError ? <span className="text-destructive">{task.lastRunError}</span> : null}
         </div>
@@ -1060,10 +1174,12 @@ function WebhookDeliveryMode({ environmentId }: { readonly environmentId: Enviro
 function ScheduledTaskEditorDialog({
   initialEnvironmentId,
   task,
+  factory,
   onClose,
 }: {
   readonly initialEnvironmentId: EnvironmentId;
   readonly task: ScheduledTask | null;
+  readonly factory?: boolean | undefined;
   readonly onClose: () => void;
 }) {
   const [saving, setSaving] = useState(false);
@@ -1079,6 +1195,7 @@ function ScheduledTaskEditorDialog({
         <ScheduledTaskEditorForm
           initialEnvironmentId={initialEnvironmentId}
           task={task}
+          factory={factory}
           saving={saving}
           onSavingChange={setSaving}
           onClose={onClose}
@@ -1091,12 +1208,14 @@ function ScheduledTaskEditorDialog({
 function ScheduledTaskEditorForm({
   initialEnvironmentId,
   task,
+  factory,
   saving,
   onSavingChange: setSaving,
   onClose,
 }: {
   readonly initialEnvironmentId: EnvironmentId;
   readonly task: ScheduledTask | null;
+  readonly factory?: boolean | undefined;
   readonly saving: boolean;
   readonly onSavingChange: (saving: boolean) => void;
   readonly onClose: () => void;
@@ -1125,8 +1244,19 @@ function ScheduledTaskEditorForm({
     label: "scheduled task upsert",
   });
   const [draft, setDraft] = useState<DraftState>(() =>
-    task ? taskToDraft(task) : { ...EMPTY_DRAFT, projectId: projects[0]?.id ?? "" },
+    task
+      ? taskToDraft(task)
+      : {
+          ...EMPTY_DRAFT,
+          projectId: projects[0]?.id ?? "",
+          ...(factory ? { enabled: false, runtimeMode: "approval-required" } : {}),
+        },
   );
+  const [bindingTarget, setBindingTarget] = useState({
+    environmentId: initialEnvironmentId,
+    projectId: task?.projectId ?? "",
+  });
+  const threadShells = useQuietThreadShells();
   const submissionPending = useRef(false);
   const editingTaskMissing =
     draft.editingId !== null &&
@@ -1135,8 +1265,66 @@ function ScheduledTaskEditorForm({
   const liveTask = tasksQuery.data
     ? (tasksQuery.data.tasks.find((entry) => entry.id === draft.editingId) ?? null)
     : task;
-  const selectedProjectId = draft.projectId || projects[0]?.id || "";
+  const selectedProjectId = draft.projectId;
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const coordinatorsSupported =
+    environment?.serverConfig?.environment.capabilities.projectCoordinators === true;
+  const coordinatorQuery = useEnvironmentQuery(
+    connected && coordinatorsSupported && selectedProject
+      ? factoryEnvironment.coordinatorsGet({
+          environmentId,
+          input: { projectId: selectedProject.id },
+        })
+      : null,
+  );
+  const coordinator = coordinatorQuery.data?.coordinator ?? null;
+  const coordinatorAvailable =
+    connected &&
+    coordinatorsSupported &&
+    coordinatorQuery.error === null &&
+    !coordinatorQuery.isPending &&
+    coordinator !== null &&
+    coordinator.current &&
+    (coordinator.status === "idle" || coordinator.status === "running");
+  const coordinatorReason = !selectedProject
+    ? "Select a project first."
+    : !connected
+      ? "Reconnect this environment to load its orchestrator."
+      : !coordinatorsSupported
+        ? "This server does not support project orchestrators."
+        : coordinatorQuery.error
+          ? coordinatorQuery.error
+          : !coordinatorQuery.data || coordinatorQuery.isPending
+            ? "Loading project orchestrator."
+            : !coordinator
+              ? "No project orchestrator exists. Create one in the Orchestrator section."
+              : !coordinatorAvailable
+                ? `The project orchestrator is ${coordinator.status}. Open it before binding a workflow.`
+                : null;
+  const boundThread = draft.threadId
+    ? threadShells.find(
+        (entry) =>
+          entry.environmentId === bindingTarget.environmentId && entry.id === draft.threadId,
+      )
+    : null;
+  const bindingError = !draft.threadId
+    ? null
+    : bindingTarget.environmentId !== environmentId ||
+        bindingTarget.projectId !== selectedProjectId ||
+        (boundThread !== null &&
+          boundThread !== undefined &&
+          boundThread.projectId !== selectedProjectId)
+      ? "This binding belongs to another checkout or environment. Choose a destination explicitly."
+      : boundThread?.deletedAt
+        ? "The bound thread has been deleted. Choose a destination explicitly."
+        : null;
+  const preservedThreadId = task?.threadId ?? draft.threadId;
+  const usesCurrentCoordinator =
+    draft.threadId !== "" &&
+    coordinatorAvailable &&
+    draft.threadId === coordinator?.threadId &&
+    bindingTarget.environmentId === environmentId &&
+    bindingTarget.projectId === selectedProjectId;
   const instanceEntries = sortProviderInstanceEntries(
     applyProviderInstanceSettings(
       deriveProviderInstanceEntries(providers),
@@ -1147,9 +1335,17 @@ function ScheduledTaskEditorForm({
 
   const firstInstance = instanceEntries[0];
   const draftSelection = draft.modelKey ? splitModelKey(draft.modelKey) : null;
-  const activeSelection =
-    draftSelection &&
-    instanceEntries.some((entry) => entry.instanceId === draftSelection.instanceId && entry.enabled)
+  // Bound delivery resolves the live thread; metadata lag must not block saving its definition.
+  const activeSelection = draft.threadId
+    ? (boundThread?.modelSelection ??
+      draft.baseModelSelection ??
+      draftSelection ??
+      scheduledTaskDefaultModel(settings, selectedProject ?? null, instanceEntries) ??
+      (coordinator?.threadId === draft.threadId ? coordinator.modelSelection : null))
+    : draftSelection &&
+        instanceEntries.some(
+          (entry) => entry.instanceId === draftSelection.instanceId && entry.enabled,
+        )
       ? draftSelection
       : scheduledTaskDefaultModel(settings, selectedProject ?? null, instanceEntries);
   const activeInstanceId =
@@ -1178,6 +1374,7 @@ function ScheduledTaskEditorForm({
       submissionPending.current ||
       saving ||
       editingTaskMissing ||
+      bindingError !== null ||
       !connected ||
       tasksQuery.data === null
     )
@@ -1219,16 +1416,23 @@ function ScheduledTaskEditorForm({
       reportFailure("Invalid interval", "Enter an interval of at least one minute.");
       return;
     }
-    if (draft.workspaceMode === "existing_worktree" && !draft.existingWorktreePath.trim()) {
+    if (
+      !draft.threadId &&
+      draft.workspaceMode === "existing_worktree" &&
+      !draft.existingWorktreePath.trim()
+    ) {
       reportFailure("Checkout path is required", "Enter the path of the checkout to run in.");
       return;
     }
+    const storedSelection = draft.baseModelSelection ?? draftSelection;
     const modelSelection =
-      draft.baseModelSelection !== null &&
-      draft.baseModelSelection.instanceId === selection.instanceId &&
-      draft.baseModelSelection.model === selection.model
-        ? draft.baseModelSelection
-        : selection;
+      draft.threadId && storedSelection
+        ? storedSelection
+        : draft.baseModelSelection !== null &&
+            draft.baseModelSelection.instanceId === selection.instanceId &&
+            draft.baseModelSelection.model === selection.model
+          ? draft.baseModelSelection
+          : selection;
     const workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy =
       draft.workspaceMode === "root"
         ? { type: "root" }
@@ -1239,13 +1443,14 @@ function ScheduledTaskEditorForm({
               baseRef: draft.baseRef.trim() || "main",
               startFromOrigin: draft.startFromOrigin,
             };
+    if (!selectedProject) return;
     const input: ScheduledTaskUpsertInput = {
       ...(draft.editingId ? { id: draft.editingId as ScheduledTaskId, requireExisting: true } : {}),
       title: draft.title.trim(),
       prompt: draft.prompt.trim(),
       enabled: draft.enabled,
       schedule,
-      projectId: selectedProjectId as ProjectId,
+      projectId: selectedProject.id,
       threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
       workspaceStrategy,
       modelSelection,
@@ -1271,9 +1476,18 @@ function ScheduledTaskEditorForm({
   return (
     <>
       <DialogHeader>
-        <DialogTitle>{draft.editingId ? "Edit task" : "New task"}</DialogTitle>
+        <DialogTitle>
+          {draft.editingId
+            ? factory
+              ? "Edit workflow"
+              : "Edit task"
+            : factory
+              ? "New workflow"
+              : "New task"}
+        </DialogTitle>
         <DialogDescription>
-          Run a prompt automatically on an interval, at a fixed time, or when a webhook is called.
+          Schedule an agent prompt. Latest dispatch status does not indicate agent completion.
+          {factory && !task ? " New workflows are paused and require approvals by default." : ""}
         </DialogDescription>
       </DialogHeader>
 
@@ -1399,6 +1613,7 @@ function ScheduledTaskEditorForm({
 
             <Field label="Workspace" htmlFor="scheduled-task-workspace">
               <Select
+                disabled={draft.threadId !== ""}
                 value={draft.workspaceMode}
                 onValueChange={(value) =>
                   setDraft((current) => ({ ...current, workspaceMode: value as WorkspaceMode }))
@@ -1416,7 +1631,96 @@ function ScheduledTaskEditorForm({
             </Field>
           </div>
 
-          {draft.workspaceMode === "worktree" ? (
+          <Field label="Run in" htmlFor="scheduled-task-run-in">
+            <Select
+              value={
+                !draft.threadId ? "direct" : usesCurrentCoordinator ? "coordinator" : "preserved"
+              }
+              onValueChange={(value) => {
+                if (value === "direct") {
+                  setDraft((current) => ({ ...current, threadId: "" }));
+                } else if (
+                  value === "coordinator" &&
+                  coordinatorAvailable &&
+                  coordinator &&
+                  selectedProject
+                ) {
+                  setBindingTarget({ environmentId, projectId: selectedProject.id });
+                  setDraft((current) => ({ ...current, threadId: coordinator.threadId }));
+                } else if (value === "preserved" && task?.threadId) {
+                  setBindingTarget({
+                    environmentId: initialEnvironmentId,
+                    projectId: task.projectId,
+                  });
+                  setDraft((current) => ({ ...current, threadId: task.threadId ?? "" }));
+                }
+              }}
+            >
+              <SelectTrigger size="sm" id="scheduled-task-run-in">
+                <SelectValue>
+                  {!draft.threadId
+                    ? "New thread each run"
+                    : usesCurrentCoordinator
+                      ? "Current project orchestrator"
+                      : `Bound thread: ${boundThread?.title ?? draft.threadId}`}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup>
+                <SelectItem value="direct">New thread each run</SelectItem>
+                <SelectItem value="coordinator" disabled={!coordinatorAvailable}>
+                  Current project orchestrator
+                </SelectItem>
+                {preservedThreadId ? (
+                  <SelectItem value="preserved">
+                    Keep existing bound thread ({task?.threadId ?? draft.threadId})
+                  </SelectItem>
+                ) : null}
+              </SelectPopup>
+            </Select>
+            {coordinatorReason ? (
+              <p className="text-xs text-muted-foreground" role="status">
+                {coordinatorReason}
+              </p>
+            ) : null}
+            {connected && coordinatorsSupported && selectedProject ? (
+              <Button
+                size="xs"
+                variant="ghost-muted"
+                disabled={coordinatorQuery.isPending}
+                onClick={coordinatorQuery.refresh}
+              >
+                Refresh orchestrator
+              </Button>
+            ) : null}
+            {draft.threadId ? (
+              <div className="space-y-1 text-xs text-muted-foreground">
+                <p>
+                  Prompts queue in this thread and follow its current provider, model, permissions,
+                  and workspace, not this workflow's stored new-thread settings.
+                  {boundThread
+                    ? ` Current provider: ${boundThread.providerInstanceId}, model: ${boundThread.modelSelection.model}.`
+                    : ""}
+                </p>
+                <p>Deleting the bound thread also deletes its bound workflows.</p>
+                {boundThread ? (
+                  <Link
+                    to="/$environmentId/$threadId"
+                    params={{ environmentId: boundThread.environmentId, threadId: boundThread.id }}
+                    className="underline underline-offset-2"
+                  >
+                    Open bound thread
+                  </Link>
+                ) : null}
+              </div>
+            ) : null}
+            {bindingError ? (
+              <p className="text-xs text-destructive" role="alert">
+                {bindingError}
+              </p>
+            ) : null}
+          </Field>
+
+          {!draft.threadId && draft.workspaceMode === "worktree" ? (
             <Field label="Base branch" htmlFor="scheduled-task-base-ref">
               <WorktreeBaseBranchPicker
                 key={`${environmentId}:${selectedProjectId}`}
@@ -1433,7 +1737,7 @@ function ScheduledTaskEditorForm({
               />
             </Field>
           ) : null}
-          {draft.workspaceMode === "existing_worktree" ? (
+          {!draft.threadId && draft.workspaceMode === "existing_worktree" ? (
             <Field label="Checkout path" htmlFor="scheduled-task-checkout">
               <Input
                 id="scheduled-task-checkout"
@@ -1461,24 +1765,86 @@ function ScheduledTaskEditorForm({
             />
           </Field>
 
-          <Field label="Model">
-            <div>
-              <ProviderModelPicker
-                environmentId={environmentId}
-                disabled={saving || !connected}
-                activeInstanceId={activeInstanceId}
-                model={activeModel}
-                lockedProvider={null}
-                instanceEntries={instanceEntries}
-                modelOptionsByInstance={modelOptionsByInstance}
-                isComposerOwned={false}
-                triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                onInstanceModelChange={(instanceId, model) =>
-                  setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
-                }
-              />
-            </div>
+          <Field label="Model" hint={draft.threadId ? "Current bound-thread model" : ""}>
+            {draft.threadId ? (
+              <p className="text-sm text-muted-foreground">
+                {boundThread
+                  ? `${boundThread.modelSelection.model} (${boundThread.providerInstanceId})`
+                  : "The server resolves the bound thread's current provider and model at dispatch."}
+              </p>
+            ) : (
+              <div>
+                <ProviderModelPicker
+                  environmentId={environmentId}
+                  disabled={saving || !connected}
+                  activeInstanceId={activeInstanceId}
+                  model={activeModel}
+                  lockedProvider={null}
+                  instanceEntries={instanceEntries}
+                  modelOptionsByInstance={modelOptionsByInstance}
+                  isComposerOwned={false}
+                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                  onInstanceModelChange={(instanceId, model) =>
+                    setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
+                  }
+                />
+              </div>
+            )}
           </Field>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Permissions" htmlFor="scheduled-task-runtime-mode">
+              <Select
+                value={draft.runtimeMode}
+                disabled={draft.threadId !== ""}
+                onValueChange={(runtimeMode) => {
+                  if (
+                    runtimeMode === "approval-required" ||
+                    runtimeMode === "auto-accept-edits" ||
+                    runtimeMode === "auto" ||
+                    runtimeMode === "full-access"
+                  ) {
+                    setDraft((current) => ({ ...current, runtimeMode }));
+                  }
+                }}
+              >
+                <SelectTrigger size="sm" id="scheduled-task-runtime-mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value="approval-required">Supervised (require approvals)</SelectItem>
+                  <SelectItem value="auto-accept-edits">Auto-accept edits</SelectItem>
+                  <SelectItem value="auto">Auto</SelectItem>
+                  <SelectItem value="full-access">Full access</SelectItem>
+                </SelectPopup>
+              </Select>
+            </Field>
+            <Field label="Interaction" htmlFor="scheduled-task-interaction-mode">
+              <Select
+                value={draft.interactionMode}
+                disabled={draft.threadId !== ""}
+                onValueChange={(interactionMode) => {
+                  if (interactionMode === "default" || interactionMode === "plan") {
+                    setDraft((current) => ({ ...current, interactionMode }));
+                  }
+                }}
+              >
+                <SelectTrigger size="sm" id="scheduled-task-interaction-mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value="default">Default</SelectItem>
+                  <SelectItem value="plan">Plan</SelectItem>
+                </SelectPopup>
+              </Select>
+            </Field>
+          </div>
+          {draft.threadId && boundThread ? (
+            <p className="text-xs text-muted-foreground">
+              Bound thread permissions: {boundThread.runtimeMode}; interaction:{" "}
+              {boundThread.interactionMode}.
+            </p>
+          ) : null}
 
           <div className="space-y-3">
             {task?.schedule.type === "interval" &&
@@ -1763,10 +2129,24 @@ function ScheduledTaskEditorForm({
         </DialogClose>
         <Button
           size="sm"
-          disabled={!canOperate || saving || editingTaskMissing || !connected || !tasksQuery.data}
+          disabled={
+            !canOperate ||
+            saving ||
+            editingTaskMissing ||
+            bindingError !== null ||
+            !selectedProject ||
+            !connected ||
+            !tasksQuery.data
+          }
           onClick={() => void submit()}
         >
-          {draft.editingId ? "Save task" : "Create task"}
+          {draft.editingId
+            ? "Save"
+            : factory
+              ? draft.enabled
+                ? "Create enabled workflow"
+                : "Create paused workflow"
+              : "Create task"}
         </Button>
       </DialogFooter>
     </>

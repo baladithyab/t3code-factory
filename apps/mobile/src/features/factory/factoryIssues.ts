@@ -244,65 +244,6 @@ export function factoryIssueStartKey(input: {
   ]);
 }
 
-export interface FactoryInboxTargetCandidate<
-  EnvironmentKey extends string,
-  ProjectKey extends string,
-> {
-  readonly environments: ReadonlyArray<{
-    readonly environmentId: EnvironmentKey;
-    readonly supported: boolean;
-  }>;
-  readonly projects: ReadonlyArray<{
-    readonly environmentId: EnvironmentKey;
-    readonly projectId: ProjectKey;
-  }>;
-  readonly preferred: {
-    readonly environmentId: EnvironmentKey | null;
-    readonly projectId: ProjectKey | null;
-  };
-  /** Projects the rest of settings currently points at, in priority order. */
-  readonly hints: ReadonlyArray<{
-    readonly environmentId: EnvironmentKey;
-    readonly projectId: ProjectKey;
-  }>;
-}
-
-/**
- * Picks the environment and project the inbox shows. The user's last choice wins while it still
- * exists; otherwise the project Settings is scoped to, then the first supported environment.
- */
-export function resolveFactoryInboxTarget<EnvironmentKey extends string, ProjectKey extends string>(
-  input: FactoryInboxTargetCandidate<EnvironmentKey, ProjectKey>,
-): {
-  readonly environmentId: EnvironmentKey | null;
-  readonly projectId: ProjectKey | null;
-} {
-  const known = new Set(input.environments.map((entry) => entry.environmentId));
-  const supported = input.environments.filter((entry) => entry.supported);
-  const environmentId =
-    (input.preferred.environmentId !== null && known.has(input.preferred.environmentId)
-      ? input.preferred.environmentId
-      : null) ??
-    input.hints.find((hint) =>
-      supported.some((entry) => entry.environmentId === hint.environmentId),
-    )?.environmentId ??
-    supported[0]?.environmentId ??
-    input.environments[0]?.environmentId ??
-    null;
-  if (environmentId === null) return { environmentId: null, projectId: null };
-  const inEnvironment = input.projects.filter((project) => project.environmentId === environmentId);
-  const projectId =
-    inEnvironment.find((project) => project.projectId === input.preferred.projectId)?.projectId ??
-    input.hints.find(
-      (hint) =>
-        hint.environmentId === environmentId &&
-        inEnvironment.some((project) => project.projectId === hint.projectId),
-    )?.projectId ??
-    inEnvironment[0]?.projectId ??
-    null;
-  return { environmentId, projectId };
-}
-
 /** The server returns the issue URL, but only an https link is worth handing to the system. */
 export function safeFactoryIssueUrl(url: string): string | null {
   try {

@@ -35,6 +35,10 @@ import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$proje
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
 import { Route as ChatFactoryRouteImport } from './routes/_chat.factory'
+import { Route as ChatFactoryIndexRouteImport } from './routes/_chat.factory.index'
+import { Route as ChatFactoryWorkflowsRouteImport } from './routes/_chat.factory.workflows'
+import { Route as ChatFactoryOrchestratorRouteImport } from './routes/_chat.factory.orchestrator'
+import { Route as ChatFactoryIssuesRouteImport } from './routes/_chat.factory.issues'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 
@@ -168,6 +172,26 @@ const ChatFactoryRoute = ChatFactoryRouteImport.update({
   path: '/factory',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatFactoryIndexRoute = ChatFactoryIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ChatFactoryRoute,
+} as any)
+const ChatFactoryWorkflowsRoute = ChatFactoryWorkflowsRouteImport.update({
+  id: '/workflows',
+  path: '/workflows',
+  getParentRoute: () => ChatFactoryRoute,
+} as any)
+const ChatFactoryOrchestratorRoute = ChatFactoryOrchestratorRouteImport.update({
+  id: '/orchestrator',
+  path: '/orchestrator',
+  getParentRoute: () => ChatFactoryRoute,
+} as any)
+const ChatFactoryIssuesRoute = ChatFactoryIssuesRouteImport.update({
+  id: '/issues',
+  path: '/issues',
+  getParentRoute: () => ChatFactoryRoute,
+} as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
   path: '/draft/$draftId',
@@ -188,7 +212,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
-  '/factory': typeof ChatFactoryRoute
+  '/factory': typeof ChatFactoryRouteWithChildren
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -208,6 +232,10 @@ export interface FileRoutesByFullPath {
   '/settings/storage': typeof SettingsStorageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/factory/issues': typeof ChatFactoryIssuesRoute
+  '/factory/orchestrator': typeof ChatFactoryOrchestratorRoute
+  '/factory/workflows': typeof ChatFactoryWorkflowsRoute
+  '/factory/': typeof ChatFactoryIndexRoute
 }
 export interface FileRoutesByTo {
   '/connect': typeof ConnectRoute
@@ -216,7 +244,6 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
-  '/factory': typeof ChatFactoryRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -237,6 +264,10 @@ export interface FileRoutesByTo {
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/factory/issues': typeof ChatFactoryIssuesRoute
+  '/factory/orchestrator': typeof ChatFactoryOrchestratorRoute
+  '/factory/workflows': typeof ChatFactoryWorkflowsRoute
+  '/factory': typeof ChatFactoryIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -247,7 +278,7 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
-  '/_chat/factory': typeof ChatFactoryRoute
+  '/_chat/factory': typeof ChatFactoryRouteWithChildren
   '/_chat/new': typeof ChatNewRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -268,6 +299,10 @@ export interface FileRoutesById {
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/_chat/factory/issues': typeof ChatFactoryIssuesRoute
+  '/_chat/factory/orchestrator': typeof ChatFactoryOrchestratorRoute
+  '/_chat/factory/workflows': typeof ChatFactoryWorkflowsRoute
+  '/_chat/factory/': typeof ChatFactoryIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -299,6 +334,10 @@ export interface FileRouteTypes {
     | '/settings/storage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/factory/issues'
+    | '/factory/orchestrator'
+    | '/factory/workflows'
+    | '/factory/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/connect'
@@ -307,7 +346,6 @@ export interface FileRouteTypes {
     | '/settings'
     | '/usage'
     | '/welcome'
-    | '/factory'
     | '/new'
     | '/pull-requests'
     | '/projects/$projectKey'
@@ -328,6 +366,10 @@ export interface FileRouteTypes {
     | '/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/factory/issues'
+    | '/factory/orchestrator'
+    | '/factory/workflows'
+    | '/factory'
   id:
     | '__root__'
     | '/_chat'
@@ -358,6 +400,10 @@ export interface FileRouteTypes {
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
+    | '/_chat/factory/issues'
+    | '/_chat/factory/orchestrator'
+    | '/_chat/factory/workflows'
+    | '/_chat/factory/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -555,6 +601,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatFactoryRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/factory/': {
+      id: '/_chat/factory/'
+      path: '/'
+      fullPath: '/factory/'
+      preLoaderRoute: typeof ChatFactoryIndexRouteImport
+      parentRoute: typeof ChatFactoryRoute
+    }
+    '/_chat/factory/workflows': {
+      id: '/_chat/factory/workflows'
+      path: '/workflows'
+      fullPath: '/factory/workflows'
+      preLoaderRoute: typeof ChatFactoryWorkflowsRouteImport
+      parentRoute: typeof ChatFactoryRoute
+    }
+    '/_chat/factory/orchestrator': {
+      id: '/_chat/factory/orchestrator'
+      path: '/orchestrator'
+      fullPath: '/factory/orchestrator'
+      preLoaderRoute: typeof ChatFactoryOrchestratorRouteImport
+      parentRoute: typeof ChatFactoryRoute
+    }
+    '/_chat/factory/issues': {
+      id: '/_chat/factory/issues'
+      path: '/issues'
+      fullPath: '/factory/issues'
+      preLoaderRoute: typeof ChatFactoryIssuesRouteImport
+      parentRoute: typeof ChatFactoryRoute
+    }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'
       path: '/draft/$draftId'
@@ -572,8 +646,26 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface ChatFactoryRouteChildren {
+  ChatFactoryIssuesRoute: typeof ChatFactoryIssuesRoute
+  ChatFactoryOrchestratorRoute: typeof ChatFactoryOrchestratorRoute
+  ChatFactoryWorkflowsRoute: typeof ChatFactoryWorkflowsRoute
+  ChatFactoryIndexRoute: typeof ChatFactoryIndexRoute
+}
+
+const ChatFactoryRouteChildren: ChatFactoryRouteChildren = {
+  ChatFactoryIssuesRoute: ChatFactoryIssuesRoute,
+  ChatFactoryOrchestratorRoute: ChatFactoryOrchestratorRoute,
+  ChatFactoryWorkflowsRoute: ChatFactoryWorkflowsRoute,
+  ChatFactoryIndexRoute: ChatFactoryIndexRoute,
+}
+
+const ChatFactoryRouteWithChildren = ChatFactoryRoute._addFileChildren(
+  ChatFactoryRouteChildren,
+)
+
 interface ChatRouteChildren {
-  ChatFactoryRoute: typeof ChatFactoryRoute
+  ChatFactoryRoute: typeof ChatFactoryRouteWithChildren
   ChatNewRoute: typeof ChatNewRoute
   ChatPullRequestsRoute: typeof ChatPullRequestsRoute
   ChatIndexRoute: typeof ChatIndexRoute
@@ -582,7 +674,7 @@ interface ChatRouteChildren {
 }
 
 const ChatRouteChildren: ChatRouteChildren = {
-  ChatFactoryRoute: ChatFactoryRoute,
+  ChatFactoryRoute: ChatFactoryRouteWithChildren,
   ChatNewRoute: ChatNewRoute,
   ChatPullRequestsRoute: ChatPullRequestsRoute,
   ChatIndexRoute: ChatIndexRoute,

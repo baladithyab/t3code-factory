@@ -14,9 +14,9 @@ import { useFactoryLaunchModel } from "./useFactoryLaunch";
 
 function MissingInboxSelection() {
   return (
-    <SettingsScreen title="Factory issues">
+    <SettingsScreen title="Factory">
       <Text className="p-5 text-base text-foreground-muted">
-        Choose a project in the issue inbox first.
+        Choose a project in Factory first.
       </Text>
     </SettingsScreen>
   );
@@ -46,7 +46,7 @@ export function FactoryModelPickerRouteScreen() {
       projectId={selection.projectId}
       providerGroups={providerGroups}
       selectedModel={launch.modelSelection}
-      // Issue tasks start from the issue itself, so there is no composer prompt to steer traits.
+      // Factory launches seed their prompts on the server, not in this picker.
       prompt=""
       onPromptChange={() => {}}
       onSelectModel={(option) => updateFactoryInboxSelection({ modelSelection: option.selection })}

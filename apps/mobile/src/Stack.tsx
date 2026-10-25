@@ -122,7 +122,7 @@ import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRouteScreen";
 import { SettingsNotificationsRouteScreen } from "./features/settings/SettingsNotificationsRouteScreen";
-import { FactoryIssuesRouteScreen } from "./features/factory/FactoryIssuesRouteScreen";
+import { FactoryRouteScreen } from "./features/factory/FactoryRouteScreen";
 import {
   FactoryBranchPickerRouteScreen,
   FactoryModelPickerRouteScreen,
@@ -434,17 +434,18 @@ const SettingsContentStack = createV5SheetStackNavigator({
       },
     }),
     SettingsFactoryIssues: createNativeStackScreen({
-      screen: FactoryIssuesRouteScreen,
+      screen: FactoryRouteScreen,
       linking: "factory-issues",
-      options: { title: "Factory issues" },
+      options: { title: "Factory" },
     }),
     SettingsFactoryBranch: createNativeStackScreen({
       screen: FactoryBranchPickerRouteScreen,
-      options: { title: "Base branch" },
+      options: { title: "Factory base branch" },
     }),
     SettingsFactoryModel: createNativeStackScreen({
       screen: FactoryModelPickerRouteScreen,
       options: {
+        title: "Factory model",
         headerShown: false,
         ...(Platform.OS === "android"
           ? { presentation: "card" as const }

@@ -35,3 +35,33 @@ export function useFactoryIssuesSupported(): boolean {
 export function useFactoryIssueEnvironmentIds(): ReadonlyArray<EnvironmentId> {
   return useAtomValue(factoryIssueEnvironmentIdsAtom);
 }
+
+export const factoryCoordinatorSupportedAtom = Atom.family((environmentId: EnvironmentId | null) =>
+  Atom.make(
+    (get) =>
+      environmentId !== null &&
+      get(environmentPresentations.presentationAtom(environmentId))?.serverConfig?.environment
+        .capabilities.projectCoordinators === true,
+  ).pipe(Atom.withLabel(`web-factory-coordinators-supported:${environmentId}`)),
+);
+
+// Missing capability on an older server is unsupported, never an empty coordinator list.
+export const factoryCoordinatorEnvironmentIdsAtom = Atom.make((get) => {
+  const next = get(environmentSummaries.environmentIdsAtom).filter((environmentId) =>
+    get(factoryCoordinatorSupportedAtom(environmentId)),
+  );
+  const previous = Option.getOrNull(get.self<ReadonlyArray<EnvironmentId>>());
+  return previous !== null && arrayElementsEqual(previous, next) ? previous : next;
+}).pipe(Atom.withLabel("web-factory-coordinator-environment-ids"));
+
+const factoryCoordinatorsSupportedAtom = Atom.make(
+  (get) => get(factoryCoordinatorEnvironmentIdsAtom).length > 0,
+).pipe(Atom.withLabel("web-factory-coordinators-supported"));
+
+export function useFactoryCoordinatorsSupported(): boolean {
+  return useAtomValue(factoryCoordinatorsSupportedAtom);
+}
+
+export function useFactoryCoordinatorEnvironmentIds(): ReadonlyArray<EnvironmentId> {
+  return useAtomValue(factoryCoordinatorEnvironmentIdsAtom);
+}

@@ -152,6 +152,10 @@ function SettingsIndexSections() {
       : (selectedProject?.label ?? "Unavailable project");
   return (
     <>
+      <SettingsSection title="Workspace">
+        <SettingsRow icon="list.number" label="Factory" target="SettingsFactoryIssues" />
+      </SettingsSection>
+
       <SettingsSection title="Interface">
         <SettingsRow icon="paintbrush" label="Appearance" target="SettingsAppearance" />
         {Platform.OS === "ios" ? (
@@ -164,12 +168,6 @@ function SettingsIndexSections() {
 
       <SettingsSection title="Automations">
         <SettingsRow icon="clock" label="Scheduled tasks" target="SettingsScheduledTasks" />
-        <SettingsRow
-          icon="list.number"
-          label="Factory issues"
-          target="SettingsFactoryIssues"
-          disabled={noServerTargets}
-        />
       </SettingsSection>
 
       <SettingsSection title="Projects & threads">
@@ -222,7 +220,7 @@ function SettingsIndexSections() {
 
       <SettingsSection title="App">
         <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
-        <SettingsRow icon="info.circle" label="About T3 Code" target="SettingsAbout" />
+        <SettingsRow icon="info.circle" label="About T3 Code Factory" target="SettingsAbout" />
       </SettingsSection>
     </>
   );
