@@ -1,13 +1,14 @@
 # T3 Code Factory
 
 T3 Code Factory is a fork of [T3 Code](https://github.com/pingdotgg/t3code) for
-project-scoped issue intake, scheduled agent prompts, and an explicit project orchestrator.
+project-scoped issue and feed intake, scheduled agent prompts, and an explicit project orchestrator.
 It retains T3 Code's provider-backed threads and web, Electron desktop, and native mobile clients.
 Upstream T3 Code is developed by T3 Tools; its attribution and license remain unchanged.
 
-Open **Factory** for Overview, Issues, Workflows, and Orchestrator. Use **Sessions** or
+Open **Factory** for Overview, Issues, Sources, Workflows, and Orchestrator. Use **Sessions** or
 **New thread** for ordinary conversations. The [Factory guide](./docs/user/source-control.md#factory)
-explains scope selection, reviewed issue starts, orchestrator orientation, and workflow dispatch limits.
+explains scope selection, reviewed issue and feed-item starts, orchestrator orientation, and
+workflow dispatch limits.
 
 Fork work is tracked in [this repository's issues](https://github.com/baladithyab/t3code-factory/issues),
 including [the Factory UX specification](https://github.com/baladithyab/t3code-factory/issues/29).

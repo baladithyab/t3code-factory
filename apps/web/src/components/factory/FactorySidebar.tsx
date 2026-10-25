@@ -7,6 +7,7 @@ import {
   GlobeIcon,
   LayoutDashboardIcon,
   ListTodoIcon,
+  RssIcon,
   SquarePenIcon,
 } from "lucide-react";
 
@@ -14,6 +15,7 @@ import { openCommandPalette } from "../../commandPaletteBus";
 import { isElectron } from "../../env";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useEnvironments } from "../../state/environments";
+import { useFactoryFeedsSupported } from "../../state/factory";
 import { SidebarChromeFooter, SidebarChromeHeader } from "../sidebar/SidebarChrome";
 import { resolveSettingsScope, type SettingsScopeSearch } from "../settings/settingsScope";
 import { useSettingsProjectGroups } from "../settings/useSettingsProjectGroups";
@@ -34,6 +36,7 @@ import {
 const FACTORY_SECTIONS = [
   { to: "/factory", label: "Overview", icon: LayoutDashboardIcon },
   { to: "/factory/issues", label: "Issues", icon: ListTodoIcon },
+  { to: "/factory/sources", label: "Sources", icon: RssIcon },
   { to: "/factory/workflows", label: "Workflows", icon: CalendarClockIcon },
   { to: "/factory/orchestrator", label: "Orchestrator", icon: BotIcon },
 ] as const;
@@ -47,12 +50,17 @@ export function FactorySidebar() {
   const scope = resolveSettingsScope(search, groups, environments);
   const member = singleFactoryMember(scope);
   const newThread = useNewThreadHandler();
+  const feedsSupported = useFactoryFeedsSupported();
   const { isMobile, setOpenMobile } = useSidebar();
   const section =
     FACTORY_SECTIONS.find(
       (candidate) =>
         candidate.to === pathname || (candidate.to === "/factory" && pathname === "/factory/"),
     ) ?? FACTORY_SECTIONS[0];
+  // An older server omits the capability; its Sources page would be a dead end.
+  const visibleSections = feedsSupported
+    ? FACTORY_SECTIONS
+    : FACTORY_SECTIONS.filter(({ to }) => to !== "/factory/sources");
   const closeMobileSidebar = () => {
     if (isMobile) setOpenMobile(false);
   };
@@ -86,7 +94,7 @@ export function FactorySidebar() {
         fixedHeader={
           <SidebarGroup>
             <SidebarMenu aria-label="Factory sections">
-              {FACTORY_SECTIONS.map(({ to, label, icon: Icon }) => (
+              {visibleSections.map(({ to, label, icon: Icon }) => (
                 <SidebarMenuItem key={to}>
                   <SidebarMenuButton
                     isActive={section.to === to}

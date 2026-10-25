@@ -96,6 +96,7 @@ import { useStableCallback } from "../hooks/useStableCallback";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
+import { useFactoryFeedsSupported } from "../state/factory";
 import { filesystemEnvironment, useFilesystemReadAccess } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
@@ -522,6 +523,7 @@ function OpenCommandPaletteDialog(props: {
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
+  const factoryFeedsSupported = useFactoryFeedsSupported();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const paletteRouteTarget = useThreadRouteTarget();
@@ -1568,6 +1570,19 @@ function OpenCommandPaletteDialog(props: {
       icon: <FactoryIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
         await navigate({ to: section.to, search: { state: "open", view: "list" } });
+      },
+    });
+  }
+
+  if (factoryFeedsSupported) {
+    actionItems.push({
+      kind: "action",
+      value: "action:factory-sources",
+      searchTerms: ["factory", "sources", "feeds", "rss", "atom", "candidates", "tasks"],
+      title: "Open Factory sources",
+      icon: <FactoryIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/factory/sources", search: { state: "open", view: "list" } });
       },
     });
   }

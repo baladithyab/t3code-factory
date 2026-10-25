@@ -73,6 +73,8 @@ export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
   factoryIssues: Schema.optionalKey(Schema.Boolean),
+  /** Absent on older servers; clients must not offer feed sources without it. */
+  factoryFeeds: Schema.optionalKey(Schema.Boolean),
   /** Absent on older servers; clients must not query or start project orchestrators without it. */
   projectCoordinators: Schema.optionalKey(Schema.Boolean),
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),

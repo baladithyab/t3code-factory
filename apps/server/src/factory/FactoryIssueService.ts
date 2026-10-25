@@ -11,14 +11,8 @@ import {
   type FactoryIssueReadResult,
   type FactoryIssueStartInput,
   type FactoryIssueStartResult,
-  type FactoryIssueTask,
   FactoryRepository,
-  type RepositoryIdentity,
 } from "@t3tools/contracts";
-import {
-  detectSourceControlProviderFromGitRemoteUrl,
-  normalizeGitRemoteUrl,
-} from "@t3tools/shared/git";
 import * as GitHubRest from "@t3tools/source-control-github/server/GitHubRest";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -29,17 +23,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Launches from "../persistence/FactoryIssueLaunches.ts";
-import * as Projects from "../project/ProjectService.ts";
-import * as Identities from "../project/RepositoryIdentityResolver.ts";
 import * as ManagedFolders from "../project/ManagedProjectFolders.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
-import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
-import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
-import {
-  DispatchModeLimit,
-  exceededDispatchModeLimit,
-} from "../orchestration-v2/DispatchModeLimit.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
+import * as TaskLaunch from "./FactoryTaskLaunch.ts";
 
 const GitHubIssue = Schema.Struct({
   number: PositiveInt,
@@ -76,29 +63,6 @@ const toIssue = (issue: typeof GitHubIssue.Type): Launches.FactoryLaunchIntent["
   task: null,
 });
 
-function repositoryTarget(identity: RepositoryIdentity, remote: string): FactoryRepository | null {
-  const canonicalKey = normalizeGitRemoteUrl(remote);
-  const detected = detectSourceControlProviderFromGitRemoteUrl(remote)?.kind;
-  const provider =
-    detected === "unknown" && canonicalKey === identity.canonicalKey ? identity.provider : detected;
-  if (provider !== "github") return null;
-  const match = /^([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)\/([a-z0-9_.-]+)\/([a-z0-9_.-]+)$/.exec(
-    canonicalKey,
-  );
-  if (match === null) return null;
-  const [, host, owner, name] = match;
-  if (!host || !owner || !name || owner === "." || owner === ".." || name === "." || name === "..")
-    return null;
-  const repository = `${owner}/${name}`;
-  return {
-    provider: "github",
-    host,
-    repository,
-    canonicalKey,
-    url: `https://${host}/${repository}`,
-  };
-}
-
 export class FactoryIssueService extends Context.Service<
   FactoryIssueService,
   {
@@ -115,52 +79,32 @@ export class FactoryIssueService extends Context.Service<
 >()("t3/factory/FactoryIssueService") {}
 
 const make = Effect.gen(function* () {
-  const projects = yield* Projects.ProjectService;
-  const identities = yield* Identities.RepositoryIdentityResolver;
   const github = yield* GitHubRest.GitHubRest;
   const launches = yield* Launches.FactoryIssueLaunches;
   const threads = yield* Threads.ThreadManagementService;
-  const launcher = yield* ThreadLaunch.ThreadLaunchService;
-  const receipts = yield* Receipts.CommandReceiptStoreV2;
   const git = yield* Git.GitVcsDriver;
   const crypto = yield* Crypto.Crypto;
   const folders = yield* ManagedFolders.ManagedProjectFolders;
 
-  const resolve = Effect.fn("FactoryIssueService.resolve")(function* (
-    projectId: FactoryIssueListInput["projectId"],
-  ) {
-    const project = yield* projects
-      .getById(projectId)
-      .pipe(
-        Effect.mapError((cause) => new FactoryIssueError({ reason: "persistence-failure", cause })),
-      );
-    if (Option.isNone(project)) return yield* new FactoryIssueError({ reason: "missing-project" });
-    const identity = yield* identities.resolve(project.value.workspaceRoot, { refresh: true });
-    if (identity === null) return yield* new FactoryIssueError({ reason: "missing-repository" });
-    // `remote get-url` distinguishes a missing origin and applies Git's insteadOf rewrites.
-    const origin = yield* git
-      .execute({
-        operation: "FactoryIssueService.resolveOrigin",
-        cwd: project.value.workspaceRoot,
-        args: ["remote", "get-url", "--", "origin"],
-        allowNonZeroExit: true,
-        maxOutputBytes: 64 * 1024,
-      })
-      .pipe(
-        Effect.mapError((cause) => new FactoryIssueError({ reason: "missing-repository", cause })),
-      );
-    if (
-      origin.exitCode !== 0 ||
-      origin.stdoutTruncated ||
-      origin.stderrTruncated ||
-      origin.stdout.trim().length === 0
-    )
-      return yield* new FactoryIssueError({ reason: "missing-repository" });
-    const repository = repositoryTarget(identity, origin.stdout.trim());
-    if (repository === null)
-      return yield* new FactoryIssueError({ reason: "unsupported-provider" });
-    return { project: project.value, repository };
+  const resolve = yield* TaskLaunch.makeRepositoryResolver;
+  const taskLaunch = yield* TaskLaunch.make<Launches.FactoryLaunchIntent, FactoryIssueError>({
+    span: "FactoryIssueService",
+    error: (reason, cause) =>
+      new FactoryIssueError({ reason, ...(cause === undefined ? {} : { cause }) }),
+    accept: launches.accept,
+    title: (intent) => `#${intent.issue.number} ${intent.issue.title}`,
+    precondition: Effect.fn("FactoryIssueService.launchPrecondition")(function* (intent) {
+      const owner = yield* resolve(intent.projectId);
+      if (yield* folders.isScratchProject(intent.projectId))
+        return yield* new FactoryIssueError({ reason: "repository-changed" });
+      if (
+        owner.repository.canonicalKey !== intent.repository.canonicalKey ||
+        owner.project.workspaceRoot !== intent.workspaceRoot
+      )
+        return yield* new FactoryIssueError({ reason: "repository-changed" });
+    }),
   });
+  const inspect = taskLaunch.inspect;
   const request = Effect.fn("FactoryIssueService.request")(function* (
     repository: FactoryRepository,
     path: string,
@@ -226,66 +170,6 @@ const make = Effect.gen(function* () {
         ),
       )
       .pipe(Effect.map(Hex.encode), Effect.orDie);
-  const inspect = Effect.fn("FactoryIssueService.inspect")(function* (
-    binding: Launches.FactoryIssueBinding,
-  ) {
-    const { intent } = binding;
-    const shell = yield* threads
-      .getThreadShell(intent.threadId)
-      .pipe(
-        Effect.mapError((cause) => new FactoryIssueError({ reason: "persistence-failure", cause })),
-      );
-    let status: FactoryIssueTask["status"];
-    if (shell === null) {
-      // Receipt and tombstone distinguish an interrupted reservation from a deletion even
-      // when the process died before recording the launch response in this table.
-      const receipt = yield* receipts
-        .getByCommandId(intent.commandId)
-        .pipe(
-          Effect.mapError(
-            (cause) => new FactoryIssueError({ reason: "persistence-failure", cause }),
-          ),
-        );
-      status =
-        binding.accepted === 1 || (Option.isSome(receipt) && receipt.value.status === "accepted")
-          ? "missing"
-          : "launching";
-      if (status === "launching") {
-        const owner = yield* projects
-          .getById(intent.projectId)
-          .pipe(
-            Effect.mapError(
-              (cause) => new FactoryIssueError({ reason: "persistence-failure", cause }),
-            ),
-          );
-        if (Option.isNone(owner)) status = "missing";
-      }
-    } else if (shell.deletedAt !== null) status = "missing";
-    else if (shell.archivedAt !== null) status = "archived";
-    else if (shell.status === "preparing") status = "preparing";
-    else if (shell.status === "failed") status = "failed";
-    else if (
-      shell.status === "running" ||
-      shell.status === "starting" ||
-      shell.status === "waiting" ||
-      shell.status === "queued"
-    )
-      status = "running";
-    else status = binding.accepted === 0 && shell.latestRunId === null ? "launching" : "idle";
-    return {
-      shell,
-      task: {
-        projectId: intent.projectId,
-        threadId: intent.threadId,
-        baseRef: intent.baseRef,
-        createdAt: intent.createdAt,
-        status,
-        modelSelection: intent.modelSelection,
-        runtimeMode: intent.runtimeMode,
-        interactionMode: intent.interactionMode,
-      } satisfies FactoryIssueTask,
-    };
-  });
   const present = Effect.fn("FactoryIssueService.present")(function* (
     repository: FactoryRepository,
     issue: Launches.FactoryLaunchIntent["issue"],
@@ -339,56 +223,13 @@ const make = Effect.gen(function* () {
     resumed: boolean,
   ): Effect.fn.Return<FactoryIssueStartResult, FactoryIssueError> {
     const { intent } = binding;
-    let inspected = yield* inspect(binding);
-    if (inspected.task.status === "missing")
-      return yield* new FactoryIssueError({ reason: "deleted-task" });
-    if (binding.accepted === 0 && inspected.task.status !== "archived") {
-      const limit = yield* DispatchModeLimit;
-      if (limit !== undefined && exceededDispatchModeLimit(limit, intent) !== undefined)
-        return yield* new FactoryIssueError({ reason: "launch-authority" });
-      const owner = yield* resolve(intent.projectId);
-      if (yield* folders.isScratchProject(intent.projectId))
-        return yield* new FactoryIssueError({ reason: "repository-changed" });
-      if (
-        owner.repository.canonicalKey !== intent.repository.canonicalKey ||
-        owner.project.workspaceRoot !== intent.workspaceRoot
-      )
-        return yield* new FactoryIssueError({ reason: "repository-changed" });
-      yield* launcher
-        .launch({
-          commandId: intent.commandId,
-          threadId: intent.threadId,
-          projectId: intent.projectId,
-          title: `#${intent.issue.number} ${intent.issue.title}`,
-          modelSelection: intent.modelSelection,
-          runtimeMode: intent.runtimeMode,
-          interactionMode: intent.interactionMode,
-          workspaceStrategy: { type: "worktree", baseRef: intent.baseRef, startFromOrigin: false },
-          initialMessage: { messageId: intent.messageId, text: intent.prompt, attachments: [] },
-          createdBy: intent.createdBy,
-          creationSource: intent.creationSource,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new FactoryIssueError({
-                reason:
-                  cause._tag === "ThreadManagementProviderInstanceDisabledError"
-                    ? "provider-unavailable"
-                    : "launch-failure",
-                cause,
-              }),
-          ),
-        );
-      yield* launches.accept(intent.threadId);
-      inspected = yield* inspect({ ...binding, accepted: 1 });
-    }
+    const task = yield* taskLaunch.resume(binding);
     return {
       repository: intent.repository,
       issueNumber: intent.issue.number,
       projectId: intent.projectId,
       threadId: intent.threadId,
-      task: inspected.task,
+      task,
       resumed,
     };
   });

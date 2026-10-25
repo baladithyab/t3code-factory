@@ -1,4 +1,5 @@
 import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
+import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
 import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -1262,6 +1263,7 @@ export const layerWsRpc = (
       const secretRequests = yield* SecretRequests.SecretRequests;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const factory = yield* FactoryIssueService.FactoryIssueService;
+      const factoryFeeds = yield* FactoryFeedService.FactoryFeedService;
       const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2513,6 +2515,15 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.factoryListIssues]: (input) => factory.list(input),
         [WS_METHODS.factoryStartIssue]: (input) => factory.start(input),
+        [WS_METHODS.factoryListFeedSources]: (input) => factoryFeeds.listSources(input),
+        [WS_METHODS.factoryBindFeedSource]: (input) => factoryFeeds.bindSource(input),
+        [WS_METHODS.factoryUnbindFeedSource]: (input) => factoryFeeds.unbindSource(input),
+        [WS_METHODS.factoryRefreshFeedSource]: (input) => factoryFeeds.refreshSource(input),
+        [WS_METHODS.factoryListFeedCandidates]: (input) => factoryFeeds.listCandidates(input),
+        [WS_METHODS.factoryReadFeedCandidate]: (input) => factoryFeeds.readCandidate(input),
+        [WS_METHODS.factorySetFeedCandidateDismissed]: (input) =>
+          factoryFeeds.setCandidateDismissed(input),
+        [WS_METHODS.factoryAdmitFeedCandidate]: (input) => factoryFeeds.admitCandidate(input),
         [WS_METHODS.projectCoordinatorsGet]: (input) => projectCoordinators.get(input),
         [WS_METHODS.projectCoordinatorsList]: (_input) => projectCoordinators.list(),
         [WS_METHODS.projectCoordinatorsEnsure]: (input) =>
@@ -3212,6 +3223,7 @@ export const layer = Layer.unwrap(
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const factory = yield* FactoryIssueService.FactoryIssueService;
+    const factoryFeeds = yield* FactoryFeedService.FactoryFeedService;
     const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const sql = yield* SqlClient.SqlClient;
@@ -3299,6 +3311,7 @@ export const layer = Layer.unwrap(
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(Layer.succeed(FactoryIssueService.FactoryIssueService, factory)),
+              Layer.provide(Layer.succeed(FactoryFeedService.FactoryFeedService, factoryFeeds)),
               Layer.provide(
                 Layer.succeed(
                   ProjectCoordinatorService.ProjectCoordinatorService,

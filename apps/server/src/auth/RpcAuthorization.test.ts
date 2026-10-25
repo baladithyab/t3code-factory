@@ -1,6 +1,9 @@
 import {
   CommandId,
   ProjectId,
+  FactoryFeedError,
+  FactoryFeedSourceId,
+  type EnvironmentAuthorizationError,
   AuthEnvironmentMaintainScope,
   AuthDiagnosticsReadScope,
   AuthFilesystemReadScope,
@@ -449,6 +452,94 @@ describe("factory authorization", () => {
         result,
       );
     }).pipe(Effect.scoped),
+  );
+});
+
+describe("feed factory authorization", () => {
+  const cases = [
+    { method: WS_METHODS.factoryListFeedSources, scopes: [AuthOrchestrationReadScope] },
+    { method: WS_METHODS.factoryListFeedCandidates, scopes: [AuthOrchestrationReadScope] },
+    { method: WS_METHODS.factoryReadFeedCandidate, scopes: [AuthOrchestrationReadScope] },
+    { method: WS_METHODS.factoryBindFeedSource, scopes: [AuthSettingsWriteScope] },
+    { method: WS_METHODS.factoryUnbindFeedSource, scopes: [AuthSettingsWriteScope] },
+    { method: WS_METHODS.factoryRefreshFeedSource, scopes: [AuthOrchestrationOperateScope] },
+    {
+      method: WS_METHODS.factorySetFeedCandidateDismissed,
+      scopes: [AuthOrchestrationOperateScope],
+    },
+    {
+      method: WS_METHODS.factoryAdmitFeedCandidate,
+      scopes: [AuthOrchestrationOperateScope, AuthSourceControlWriteScope],
+    },
+  ] as const;
+  const input = {
+    commandId: CommandId.make("feed-auth"),
+    projectId: ProjectId.make("project"),
+    sourceId: FactoryFeedSourceId.make("feed"),
+    itemKey: "atom:item",
+    url: "https://news.example.org/feed",
+    expectedRevision: "reviewed",
+    dismissed: true,
+    expectedRepositoryKey: "github.com/owner/repo",
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+    runtimeMode: "approval-required" as const,
+    interactionMode: "default" as const,
+  };
+  const tested = cases.map(({ method }) => method);
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
+        !(tested as ReadonlyArray<string>).includes(tag),
+    ),
+  );
+  const handlers = group.toLayer({
+    [WS_METHODS.factoryListFeedSources]: () =>
+      Effect.fail(new FactoryFeedError({ reason: "missing-project" })),
+    [WS_METHODS.factoryListFeedCandidates]: () =>
+      Effect.fail(new FactoryFeedError({ reason: "missing-project" })),
+    [WS_METHODS.factoryReadFeedCandidate]: () =>
+      Effect.fail(new FactoryFeedError({ reason: "missing-project" })),
+    [WS_METHODS.factoryBindFeedSource]: () =>
+      Effect.fail(new FactoryFeedError({ reason: "missing-project" })),
+    [WS_METHODS.factoryUnbindFeedSource]: () =>
+      Effect.fail(new FactoryFeedError({ reason: "missing-project" })),
+    [WS_METHODS.factoryRefreshFeedSource]: () =>
+      Effect.fail(new FactoryFeedError({ reason: "missing-project" })),
+    [WS_METHODS.factorySetFeedCandidateDismissed]: () =>
+      Effect.fail(new FactoryFeedError({ reason: "missing-project" })),
+    [WS_METHODS.factoryAdmitFeedCandidate]: () =>
+      Effect.fail(new FactoryFeedError({ reason: "missing-project" })),
+  });
+  it.effect.each(cases)(
+    "requires every declared scope for $method before calling the service",
+    ({ method, scopes }) =>
+      Effect.gen(function* () {
+        for (const missing of scopes) {
+          const client = yield* RpcTest.makeClient(group).pipe(
+            Effect.provide(
+              Layer.merge(
+                handlers,
+                RpcAuthorization.layer(scopes.filter((scope) => scope !== missing)),
+              ),
+            ),
+          );
+          const request: Effect.Effect<unknown, FactoryFeedError | EnvironmentAuthorizationError> =
+            client[method](input);
+          expect(yield* request.pipe(Effect.asVoid, Effect.flip)).toMatchObject({
+            _tag: "EnvironmentAuthorizationError",
+            requiredPermission: missing,
+          });
+        }
+        const client = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(Layer.merge(handlers, RpcAuthorization.layer(scopes))),
+        );
+        const request: Effect.Effect<unknown, FactoryFeedError | EnvironmentAuthorizationError> =
+          client[method](input);
+        expect(yield* request.pipe(Effect.asVoid, Effect.flip)).toMatchObject({
+          _tag: "FactoryFeedError",
+          reason: "missing-project",
+        });
+      }).pipe(Effect.scoped),
   );
 });
 

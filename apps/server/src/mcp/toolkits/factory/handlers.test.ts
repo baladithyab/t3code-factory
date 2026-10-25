@@ -3,6 +3,8 @@ import { assert, it } from "@effect/vitest";
 import {
   CommandId,
   EnvironmentId,
+  FactoryFeedError,
+  FactoryFeedSourceId,
   MessageId,
   ProjectId,
   ProjectCoordinatorError,
@@ -18,6 +20,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Factory from "../../../factory/FactoryIssueService.ts";
+import * as Feeds from "../../../factory/FactoryFeedService.ts";
+import { DispatchModeLimit } from "../../../orchestration-v2/DispatchModeLimit.ts";
 import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
 import * as Bindings from "../../../persistence/ProjectCoordinators.ts";
@@ -76,6 +80,12 @@ it.effect.each([
         }),
         Layer.mock(Threads.ThreadManagementService)({}),
         Layer.mock(Coordinators.ProjectCoordinatorService)({}),
+        Layer.mock(Feeds.FactoryFeedService)({
+          admitCandidate: () => {
+            called = true;
+            return Effect.die("Unauthorized feed admission reached the service");
+          },
+        }),
         Layer.mock(Factory.FactoryIssueService)({
           start: () => {
             called = true;
@@ -101,6 +111,21 @@ it.effect.each([
         })
         .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
       assert.deepInclude(outputs.at(-1)?.result, { code });
+      assert.isFalse(called);
+      const feedOutputs = yield* toolkit
+        .handle("factory_admit_feed_candidate", {
+          commandId: CommandId.make("feed-admit"),
+          projectId: ProjectId.make("project"),
+          sourceId: FactoryFeedSourceId.make("feed"),
+          itemKey: "atom:item",
+          expectedRepositoryKey: "github.com/owner/repo",
+          expectedRevision: "reviewed",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+          runtimeMode: requested,
+          interactionMode: "default",
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      assert.deepInclude(feedOutputs.at(-1)?.result, { code });
       assert.isFalse(called);
     }),
 );
@@ -469,4 +494,99 @@ it.effect("denies replay of a stored broader launch before any launch or binding
     assert.deepInclude(outputs.at(-1)?.result, { code: "runtime_mode_escalation_denied" });
     assert.equal(sideEffects, 0);
   }),
+);
+
+it.effect("allows read-only feed review without worktree authority or fetching intake", () =>
+  Effect.gen(function* () {
+    const dependencies = Layer.mergeAll(
+      Layer.succeed(Context.McpInvocationContext, {
+        environmentId: EnvironmentId.make("test"),
+        requestNamespace: "feed-review",
+        issuedAt: 0,
+        thread: undefined,
+        client: { sessionId: "test", label: "test", access: "read-only" },
+        capabilities: new Set<Context.McpCapability>(["orchestration"]),
+      }),
+      Layer.mock(Threads.ThreadManagementService)({}),
+      Layer.mock(Feeds.FactoryFeedService)({
+        listCandidates: () =>
+          Effect.succeed({
+            repository: null,
+            candidates: [],
+            fetchedAt: "2026-10-24T00:00:00.000Z",
+          }),
+        readCandidate: () => Effect.fail(new FactoryFeedError({ reason: "missing-candidate" })),
+        refreshSource: () => Effect.die("MCP cannot fetch intake"),
+        admitCandidate: () => Effect.die("Passive review cannot admit work"),
+      }),
+    );
+    const toolkit = yield* FactoryToolkit.pipe(
+      Effect.provide(Access.HandlersLayer.layer(Handlers.layer).pipe(Layer.provide(dependencies))),
+    );
+    const listed = yield* toolkit
+      .handle("factory_list_feed_candidates", { projectId: ProjectId.make("project") })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    assert.deepInclude(listed.at(-1)?.result, { candidates: [] });
+    const read = yield* toolkit
+      .handle("factory_read_feed_candidate", {
+        projectId: ProjectId.make("project"),
+        sourceId: FactoryFeedSourceId.make("feed"),
+        itemKey: "atom:item",
+      })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    assert.deepInclude(read.at(-1)?.result, {
+      code: "invalid_request",
+      message: new FactoryFeedError({ reason: "missing-candidate" }).message,
+    });
+  }),
+);
+
+it.effect(
+  "feed admission carries MCP attribution and the caller's mode ceiling to the service",
+  () =>
+    Effect.gen(function* () {
+      let called = false;
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(Context.McpInvocationContext, {
+          environmentId: EnvironmentId.make("test"),
+          requestNamespace: "feed-admit",
+          issuedAt: 0,
+          thread: undefined,
+          client: { sessionId: "test", label: "test", access: "approval-required" },
+          capabilities: new Set<Context.McpCapability>(["orchestration", "worktree"]),
+        }),
+        Layer.mock(Threads.ThreadManagementService)({}),
+        Layer.mock(Feeds.FactoryFeedService)({
+          admitCandidate: (input) =>
+            Effect.gen(function* () {
+              called = true;
+              assert.equal(input.creationSource, "mcp");
+              assert.equal(input.runtimeMode, "approval-required");
+              assert.isDefined(yield* DispatchModeLimit);
+              return yield* new FactoryFeedError({ reason: "launch-authority" });
+            }),
+        }),
+      );
+      const toolkit = yield* FactoryToolkit.pipe(
+        Effect.provide(
+          Access.HandlersLayer.layer(Handlers.layer).pipe(Layer.provide(dependencies)),
+        ),
+      );
+      const outputs = yield* toolkit
+        .handle("factory_admit_feed_candidate", {
+          commandId: CommandId.make("admit"),
+          projectId: ProjectId.make("project"),
+          sourceId: FactoryFeedSourceId.make("feed"),
+          itemKey: "atom:item",
+          expectedRepositoryKey: "github.com/owner/repo",
+          expectedRevision: "reviewed",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          creationSource: "web",
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      assert.deepInclude(outputs.at(-1)?.result, { code: "runtime_mode_escalation_denied" });
+      assert.isTrue(called);
+    }),
 );

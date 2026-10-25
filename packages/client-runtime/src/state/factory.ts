@@ -39,6 +39,80 @@ export function createFactoryEnvironmentAtoms<R, E>(
           ]),
       },
     }),
+    listFeedSources: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:factory:feed-sources",
+      tag: WS_METHODS.factoryListFeedSources,
+      staleTimeMs: 0,
+    }),
+    listFeedCandidates: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:factory:feed-candidates",
+      tag: WS_METHODS.factoryListFeedCandidates,
+      staleTimeMs: 0,
+    }),
+    readFeedCandidate: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:factory:feed-candidate",
+      tag: WS_METHODS.factoryReadFeedCandidate,
+      staleTimeMs: 0,
+    }),
+    bindFeedSource: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:bind-feed-source",
+      tag: WS_METHODS.factoryBindFeedSource,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.projectId, input.url]),
+      },
+    }),
+    unbindFeedSource: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:unbind-feed-source",
+      tag: WS_METHODS.factoryUnbindFeedSource,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.projectId, input.sourceId]),
+      },
+    }),
+    refreshFeedSource: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:refresh-feed-source",
+      tag: WS_METHODS.factoryRefreshFeedSource,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.projectId, input.sourceId]),
+      },
+    }),
+    setFeedCandidateDismissed: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:set-feed-candidate-dismissed",
+      tag: WS_METHODS.factorySetFeedCandidateDismissed,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([
+            environmentId,
+            input.projectId,
+            input.sourceId,
+            input.itemKey,
+            input.expectedRevision,
+            input.dismissed,
+          ]),
+      },
+    }),
+    admitFeedCandidate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:admit-feed-candidate",
+      tag: WS_METHODS.factoryAdmitFeedCandidate,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([
+            environmentId,
+            input.projectId,
+            input.expectedRepositoryKey,
+            input.sourceId,
+            input.itemKey,
+            input.expectedRevision,
+          ]),
+      },
+    }),
     coordinatorsGet,
     coordinatorsList,
     coordinatorsEnsure: createEnvironmentRpcCommand(runtime, {
