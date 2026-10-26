@@ -54,14 +54,18 @@ export const layer = McpToolAccess.toLayer(FactoryToolkit, {
             code: "capability_denied",
             message: "Research runs require worktree authority.",
           });
+        // The launcher is recorded so a verify run it or its descendants start is refused as not
+        // independent; a client outside a thread has no identity to record.
+        const { thread } = yield* McpInvocationContext.requireThreadScope(
+          caller.scope,
+          "This tool",
+        );
         return yield* (yield* Research.FactoryResearchService)
           .launchRun({
             ...input,
             ...modes,
             creationSource: "mcp",
-            ...(caller.scope.thread === undefined
-              ? {}
-              : { launchedByThreadId: caller.scope.thread.threadId }),
+            launchedByThreadId: thread.threadId,
           })
           .pipe(Effect.provideService(DispatchModeLimit, caller.limits), Effect.mapError(failure));
       }),

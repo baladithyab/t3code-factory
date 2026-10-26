@@ -4,9 +4,12 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   CommandId,
   ProjectId,
+  FACTORY_RESEARCH_CITED_LINE_MAX_BYTES,
   ProviderDriverKind,
   ProviderInstanceId,
+  RunId,
   ThreadId,
+  type OrchestrationV2ThreadShell,
   type FactoryResearchProtocol,
   type FactoryResearchRunLaunchInput,
   type RepositoryIdentity,
@@ -14,6 +17,7 @@ import {
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -104,6 +108,12 @@ const harness = Effect.gen(function* () {
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "factory-research-test-" });
   const commits: string[] = [];
   const gitCalls: string[][] = [];
+  // The replay harness never executes a provider, so its runs never complete on their own. Tests
+  // pin the run lifecycle the service observes here; every other shell field stays real.
+  const lifecycle = new Map<
+    ThreadId,
+    Pick<OrchestrationV2ThreadShell, "activeRunId" | "latestRunCompletedAt">
+  >();
   const database = Sqlite.layerMemory;
   const settings = Settings.layerTest();
   const registry = Registry.layerFromAdapters([
@@ -220,12 +230,32 @@ const harness = Effect.gen(function* () {
     Store.layer.pipe(Layer.provide(database)),
     database,
   );
-  const layer = Layer.mergeAll(Factory.layer.pipe(Layer.provide(dependencies)), dependencies).pipe(
+  const observedThreads = Layer.effect(
+    Threads.ThreadManagementService,
+    Effect.gen(function* () {
+      const real = yield* Threads.ThreadManagementService;
+      return Threads.ThreadManagementService.of({
+        ...real,
+        getThreadShell: (threadId) =>
+          real
+            .getThreadShell(threadId)
+            .pipe(
+              Effect.map((shell) =>
+                shell === null ? null : { ...shell, ...lifecycle.get(threadId) },
+              ),
+            ),
+      });
+    }),
+  );
+  const layer = Layer.mergeAll(
+    Factory.layer.pipe(Layer.provide(observedThreads), Layer.provide(dependencies)),
+    dependencies,
+  ).pipe(
     Layer.provideMerge(Config.layerTest(process.cwd(), { prefix: "factory-research-config-" })),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(NodeServices.layer),
   );
-  return { layer, commits, gitCalls };
+  return { layer, commits, gitCalls, lifecycle };
 });
 const seed = Effect.gen(function* () {
   yield* (yield* Projects.ProjectService).create({
@@ -547,6 +577,140 @@ it.effect(
           (yield* factory.readProtocol({ projectId, protocolId: undeclared.id })).finding.reasons,
           ["rule-not-declared"],
         );
+      }).pipe(Effect.provide(test.layer));
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+it.effect(
+  "the finding revision binds the selected verifier, its cited line and value; a stale admit fails",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* harness;
+      yield* Effect.gen(function* () {
+        const { factory, protocol } = yield* seed;
+        const baseline = yield* factory.launchRun(launchInput(protocol, "baseline"));
+        yield* record(baseline.threadId, B, "1.000000");
+        const explore = yield* factory.launchRun(launchInput(protocol, "explore"));
+        yield* record(explore.threadId, C1, "0.950000");
+        const verifyInput = (command: string) => ({
+          ...launchInput(protocol, command),
+          role: "verify" as const,
+          targetCommit: C1,
+        });
+        // Both verifiers launch before either reports and produce byte-identical files.
+        const first = yield* factory.launchRun(verifyInput("verify-a"));
+        const second = yield* factory.launchRun(verifyInput("verify-b"));
+        const shared = "val_bpb: 0.95\nval_bpb: 0.96\n";
+        yield* writeLog(first.threadId, shared);
+        yield* writeLog(second.threadId, shared);
+        const cite = (threadId: ThreadId, line: number) =>
+          factory.recordEvidence(
+            { ...evidenceInput(threadId, C1), citations: [{ path: "run.log", line }] },
+            threadId,
+          );
+        const view = factory
+          .readProtocol({ projectId, protocolId: protocol.id })
+          .pipe(Effect.map(({ finding }) => finding));
+        yield* TestClock.adjust("1 second");
+        const earlier = (yield* cite(first.threadId, 1)).observation;
+        const reviewed = yield* view;
+        assert.equal(reviewed.status, "supported");
+        assert.equal(reviewed.verifyThreadId, first.threadId);
+        assert.equal(reviewed.verifyValue, 0.95);
+        yield* TestClock.adjust("1 second");
+        const later = (yield* cite(second.threadId, 2)).observation;
+        // Identical file digests alone could not tell these two verifications apart.
+        assert.equal(later.artifacts[0]?.sha256, earlier.artifacts[0]?.sha256);
+        const current = yield* view;
+        assert.equal(current.status, "supported");
+        assert.equal(current.verifyThreadId, second.threadId);
+        assert.equal(current.verifyValue, 0.96);
+        assert.notEqual(current.revision, reviewed.revision);
+        assert.equal(
+          (yield* factory
+            .admitImplementation({
+              ...launchInput(protocol, "admit"),
+              expectedFindingRevision: reviewed.revision,
+            })
+            .pipe(Effect.flip)).reason,
+          "finding-changed",
+        );
+        const sql = yield* SqlClient.SqlClient;
+        assert.equal(
+          (yield* sql`SELECT * FROM factory_research_launches WHERE role = 'implementation'`)
+            .length,
+          0,
+        );
+      }).pipe(Effect.provide(test.layer));
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+it.effect("an overlong cited line is an invalid citation and is never retained", () =>
+  Effect.gen(function* () {
+    const test = yield* harness;
+    yield* Effect.gen(function* () {
+      const { factory, protocol } = yield* seed;
+      const run = yield* factory.launchRun(launchInput(protocol, "overlong"));
+      const text = `measurement\nval_bpb: 0.95${" ".repeat(1024 * 1024)}\n`;
+      yield* writeLog(run.threadId, text);
+      const { observation } = yield* factory.recordEvidence(
+        evidenceInput(run.threadId, C1),
+        run.threadId,
+      );
+      assert.equal(observation.disposition, "citation-invalid");
+      assert.isNull(observation.metricValue);
+      const bytes = new TextEncoder().encode(text);
+      assert.deepInclude(observation.artifacts[0], {
+        lineText: null,
+        retention: "digest-only",
+        bytes: bytes.byteLength,
+        sha256: yield* (yield* Crypto.Crypto)
+          .digest("SHA-256", bytes)
+          .pipe(Effect.map(Hex.encode), Effect.orDie),
+      });
+      const sql = yield* SqlClient.SqlClient;
+      const [row] = yield* sql<{
+        readonly size: number;
+      }>`SELECT length(evidence_json) AS size FROM factory_research_evidence WHERE thread_id = ${run.threadId}`;
+      assert.isBelow(row?.size ?? Number.POSITIVE_INFINITY, FACTORY_RESEARCH_CITED_LINE_MAX_BYTES);
+    }).pipe(Effect.provide(test.layer));
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+it.effect(
+  "budget use follows the run lifecycle: still running past the limit is over budget, an early completion is not",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* harness;
+      yield* Effect.gen(function* () {
+        const { factory, protocol } = yield* seed;
+        const run = yield* factory.launchRun(launchInput(protocol, "lifecycle"));
+        test.lifecycle.set(run.threadId, {
+          activeRunId: RunId.make("still-running"),
+          latestRunCompletedAt: null,
+        });
+        yield* TestClock.adjust("1 minute");
+        const recorded = (yield* record(run.threadId, C1, "0.95")).observation;
+        assert.equal(recorded.disposition, "acceptable");
+        assert.equal(recorded.elapsedMinutes, 1);
+        yield* TestClock.adjust("59 minutes");
+        const observed = factory
+          .readProtocol({ projectId, protocolId: protocol.id })
+          .pipe(
+            Effect.map(
+              ({ runs }) => runs.find((entry) => entry.threadId === run.threadId)?.observation,
+            ),
+          );
+        assert.deepInclude(yield* observed, { disposition: "over-budget", elapsedMinutes: 60 });
+        test.lifecycle.set(run.threadId, {
+          activeRunId: null,
+          latestRunCompletedAt: DateTime.makeUnsafe(3 * 60_000),
+        });
+        assert.deepInclude(yield* observed, { disposition: "acceptable", elapsedMinutes: 3 });
+        const stored = Option.getOrThrow(
+          yield* (yield* Store.FactoryResearchStore).getEvidence(run.threadId),
+        );
+        assert.equal(stored.recordedAfterMinutes, 1);
       }).pipe(Effect.provide(test.layer));
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );
