@@ -33,6 +33,28 @@ export function useFactoryFeedsSupported(): boolean {
 }
 
 /**
+ * Research protocols are read and launched per checkout, so the sidebar only offers them once an
+ * environment advertises `factoryResearch`; older servers omit it and would reject the methods.
+ */
+const factoryResearchEnvironmentIdsAtom = Atom.make((get) => {
+  const next = get(environmentSummaries.environmentIdsAtom).filter(
+    (environmentId) =>
+      get(environmentPresentations.presentationAtom(environmentId))?.serverConfig?.environment
+        .capabilities.factoryResearch === true,
+  );
+  const previous = Option.getOrNull(get.self<ReadonlyArray<EnvironmentId>>());
+  return previous !== null && arrayElementsEqual(previous, next) ? previous : next;
+}).pipe(Atom.withLabel("web-factory-research-environment-ids"));
+
+const factoryResearchSupportedAtom = Atom.make(
+  (get) => get(factoryResearchEnvironmentIdsAtom).length > 0,
+).pipe(Atom.withLabel("web-factory-research-supported"));
+
+export function useFactoryResearchSupported(): boolean {
+  return useAtomValue(factoryResearchSupportedAtom);
+}
+
+/**
  * Readiness is requested from one environment at a time, so support is read per environment: an
  * older server omits `factoryReadiness`, and asking it would fail with an unknown method.
  */

@@ -31,6 +31,19 @@ import {
   FactoryReadinessOverrideSetInput,
 } from "./factoryReadiness.ts";
 import {
+  FactoryResearchError,
+  FactoryResearchImplementationAdmitInput,
+  FactoryResearchImplementationAdmitResult,
+  FactoryResearchProtocolListInput,
+  FactoryResearchProtocolListResult,
+  FactoryResearchProtocolReadInput,
+  FactoryResearchProtocolReadResult,
+  FactoryResearchProtocolSealInput,
+  FactoryResearchProtocolSealResult,
+  FactoryResearchRunLaunchInput,
+  FactoryResearchRunLaunchResult,
+} from "./factoryResearch.ts";
+import {
   ProjectCoordinatorEnsureInput,
   ProjectCoordinatorEnsureResult,
   ProjectCoordinatorError,
@@ -452,6 +465,11 @@ export const WS_METHODS = {
   factorySetIssueReadinessOverride: "factory.setIssueReadinessOverride",
   factoryRevokeIssueReadinessOverride: "factory.revokeIssueReadinessOverride",
   factoryReadIssueFrontier: "factory.readIssueFrontier",
+  factoryListResearchProtocols: "factory.listResearchProtocols",
+  factoryReadResearchProtocol: "factory.readResearchProtocol",
+  factorySealResearchProtocol: "factory.sealResearchProtocol",
+  factoryLaunchResearchRun: "factory.launchResearchRun",
+  factoryAdmitResearchImplementation: "factory.admitResearchImplementation",
   projectCoordinatorsGet: "projectCoordinators.get",
   projectCoordinatorsList: "projectCoordinators.list",
   projectCoordinatorsEnsure: "projectCoordinators.ensure",
@@ -2023,6 +2041,35 @@ const WsFactoryReadIssueFrontierRpc = Rpc.make(WS_METHODS.factoryReadIssueFronti
   success: FactoryIssueFrontierReadResult,
   error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
 });
+const factoryResearchError = Schema.Union([FactoryResearchError, EnvironmentAuthorizationError]);
+const WsFactoryListResearchProtocolsRpc = Rpc.make(WS_METHODS.factoryListResearchProtocols, {
+  payload: FactoryResearchProtocolListInput,
+  success: FactoryResearchProtocolListResult,
+  error: factoryResearchError,
+});
+const WsFactoryReadResearchProtocolRpc = Rpc.make(WS_METHODS.factoryReadResearchProtocol, {
+  payload: FactoryResearchProtocolReadInput,
+  success: FactoryResearchProtocolReadResult,
+  error: factoryResearchError,
+});
+const WsFactorySealResearchProtocolRpc = Rpc.make(WS_METHODS.factorySealResearchProtocol, {
+  payload: FactoryResearchProtocolSealInput,
+  success: FactoryResearchProtocolSealResult,
+  error: factoryResearchError,
+});
+const WsFactoryLaunchResearchRunRpc = Rpc.make(WS_METHODS.factoryLaunchResearchRun, {
+  payload: FactoryResearchRunLaunchInput,
+  success: FactoryResearchRunLaunchResult,
+  error: factoryResearchError,
+});
+const WsFactoryAdmitResearchImplementationRpc = Rpc.make(
+  WS_METHODS.factoryAdmitResearchImplementation,
+  {
+    payload: FactoryResearchImplementationAdmitInput,
+    success: FactoryResearchImplementationAdmitResult,
+    error: factoryResearchError,
+  },
+);
 const factoryFeedError = Schema.Union([FactoryFeedError, EnvironmentAuthorizationError]);
 const WsFactoryListFeedSourcesRpc = Rpc.make(WS_METHODS.factoryListFeedSources, {
   payload: FactoryFeedSourceListInput,
@@ -2107,6 +2154,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsFactorySetIssueReadinessOverrideRpc,
   WsFactoryRevokeIssueReadinessOverrideRpc,
   WsFactoryReadIssueFrontierRpc,
+  WsFactoryListResearchProtocolsRpc,
+  WsFactoryReadResearchProtocolRpc,
+  WsFactorySealResearchProtocolRpc,
+  WsFactoryLaunchResearchRunRpc,
+  WsFactoryAdmitResearchImplementationRpc,
   WsProjectCoordinatorsGetRpc,
   WsProjectCoordinatorsListRpc,
   WsProjectCoordinatorsEnsureRpc,

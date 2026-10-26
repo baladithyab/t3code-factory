@@ -8,6 +8,8 @@ import {
   EnvironmentId,
   FactoryFeedSourceId,
   FactoryIssueError,
+  FactoryResearchError,
+  FactoryResearchProtocolId,
   FactoryReadinessOverrideId,
   ProjectCoordinatorError,
   ProjectId,
@@ -27,8 +29,17 @@ import {
   type FactoryIssueFrontierReadResult,
   type FactoryIssueReadinessReadInput,
   type FactoryIssueReadinessReadResult,
+  type FactoryIssueTask,
   type FactoryReadinessOverrideRevokeInput,
   type FactoryReadinessOverrideSetInput,
+  type FactoryResearchFinding,
+  type FactoryResearchImplementationAdmitInput,
+  type FactoryResearchProtocol,
+  type FactoryResearchProtocolListInput,
+  type FactoryResearchProtocolReadInput,
+  type FactoryResearchProtocolReadResult,
+  type FactoryResearchProtocolSealInput,
+  type FactoryResearchRunLaunchInput,
   type ProjectCoordinator,
   type ProjectCoordinatorEnsureInput,
   type ProjectCoordinatorGetInput,
@@ -1062,5 +1073,463 @@ describe("Factory feed permissions", () => {
         AuthSourceControlWriteScope,
       ]);
     }).pipe(Effect.scoped),
+  );
+});
+
+const researchProtocolId = FactoryResearchProtocolId.make("protocol-1");
+const researchProtocol: FactoryResearchProtocol = {
+  id: researchProtocolId,
+  projectId,
+  repository: readinessRepository,
+  baseCommit: "b".repeat(40),
+  hypothesis: "A smaller batch lowers validation loss.",
+  runCommand: "uv run train.py",
+  evaluators: [{ path: "prepare.py", blobOid: "p0" }],
+  metric: { name: "val_bpb", linePrefix: "val_bpb:", direction: "lower", minimumEffect: 0.01 },
+  budget: { maxRuns: 3, maxRunMinutes: 10, expiresAt: "2026-11-01T00:00:00.000Z" },
+  revision: "protocol-revision-1",
+  sealedAt: fetchedAt,
+};
+const researchFinding: FactoryResearchFinding = {
+  protocolId: researchProtocolId,
+  protocolRevision: researchProtocol.revision,
+  status: "supported",
+  reasons: [],
+  selectedCommit: "c".repeat(40),
+  baselineValue: 0.95,
+  exploreValue: 0.93,
+  verifyValue: 0.93,
+  baselineThreadId: ThreadId.make("baseline-thread"),
+  exploreThreadId: ThreadId.make("explore-thread"),
+  verifyThreadId: ThreadId.make("verify-thread"),
+  revision: "finding-revision-1",
+};
+const researchTask: FactoryIssueTask = {
+  projectId,
+  threadId: ThreadId.make("research-thread"),
+  status: "preparing",
+  baseRef: "b".repeat(40),
+  createdAt: fetchedAt,
+  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+  runtimeMode: "approval-required",
+  interactionMode: "default",
+};
+
+const researchReadResult = (
+  input: FactoryResearchProtocolReadInput,
+  observedAt: string,
+): FactoryResearchProtocolReadResult => ({
+  repository: readinessRepository,
+  protocol: { ...researchProtocol, id: input.protocolId, projectId: input.projectId },
+  runs: [],
+  finding: { ...researchFinding, protocolId: input.protocolId },
+  fetchedAt: observedAt,
+});
+
+function sealInput(command: string, overrides: Partial<FactoryResearchProtocolSealInput> = {}) {
+  const input: FactoryResearchProtocolSealInput = {
+    commandId: CommandId.make(command),
+    projectId,
+    expectedRepositoryKey: readinessRepository.canonicalKey,
+    hypothesis: researchProtocol.hypothesis,
+    runCommand: researchProtocol.runCommand,
+    evaluatorPaths: ["prepare.py"],
+    metric: researchProtocol.metric,
+    budget: researchProtocol.budget,
+    ...overrides,
+  };
+  return input;
+}
+
+function launchInput(command: string, overrides: Partial<FactoryResearchRunLaunchInput> = {}) {
+  const input: FactoryResearchRunLaunchInput = {
+    commandId: CommandId.make(command),
+    projectId,
+    expectedRepositoryKey: readinessRepository.canonicalKey,
+    protocolId: researchProtocolId,
+    expectedProtocolRevision: researchProtocol.revision,
+    role: "explore",
+    modelSelection: researchTask.modelSelection,
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+    ...overrides,
+  };
+  return input;
+}
+
+function researchAdmitInput(
+  command: string,
+  overrides: Partial<FactoryResearchImplementationAdmitInput> = {},
+) {
+  const input: FactoryResearchImplementationAdmitInput = {
+    commandId: CommandId.make(command),
+    projectId,
+    expectedRepositoryKey: readinessRepository.canonicalKey,
+    protocolId: researchProtocolId,
+    expectedFindingRevision: researchFinding.revision,
+    modelSelection: researchTask.modelSelection,
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+    ...overrides,
+  };
+  return input;
+}
+
+const makeResearchHarness = Effect.fn("TestFactory.makeResearchHarness")(function* (
+  grants: ReadonlyArray<AuthEnvironmentScope> = [
+    AuthOrchestrationOperateScope,
+    AuthSourceControlWriteScope,
+  ],
+  failCommands = false,
+) {
+  const entered = yield* Queue.unbounded<FeedCall>();
+  const release = yield* Deferred.make<void>();
+  const calls: FeedCall[] = [];
+  const read =
+    (environment: EnvironmentId, method: string, respond: (input: never) => unknown) =>
+    (input: unknown) =>
+      Effect.sync(() => {
+        calls.push({ method, environmentId: environment, input });
+        return respond(input as never);
+      });
+  // Commands hold until the test releases them so overlap is observable.
+  const held =
+    (environment: EnvironmentId, method: string, respond: (input: never) => unknown) =>
+    (input: unknown) =>
+      Effect.gen(function* () {
+        const call = { method, environmentId: environment, input };
+        calls.push(call);
+        yield* Queue.offer(entered, call);
+        yield* Deferred.await(release);
+        if (failCommands) return yield* new FactoryResearchError({ reason: "protocol-changed" });
+        return respond(input as never);
+      });
+  const h = yield* makeEnvironmentHarness(
+    (id) => ({
+      [WS_METHODS.factoryListResearchProtocols]: read(
+        id,
+        WS_METHODS.factoryListResearchProtocols,
+        () => ({ repository: readinessRepository, protocols: [researchProtocol], fetchedAt }),
+      ),
+      [WS_METHODS.factoryReadResearchProtocol]: read(
+        id,
+        WS_METHODS.factoryReadResearchProtocol,
+        (input: FactoryResearchProtocolReadInput) => researchReadResult(input, fetchedAt),
+      ),
+      [WS_METHODS.factorySealResearchProtocol]: held(
+        id,
+        WS_METHODS.factorySealResearchProtocol,
+        () => ({ repository: readinessRepository, protocol: researchProtocol }),
+      ),
+      [WS_METHODS.factoryLaunchResearchRun]: held(
+        id,
+        WS_METHODS.factoryLaunchResearchRun,
+        (input: FactoryResearchRunLaunchInput) => ({
+          repository: readinessRepository,
+          protocolId: input.protocolId,
+          role: input.role,
+          projectId: input.projectId,
+          threadId: researchTask.threadId,
+          task: researchTask,
+          resumed: false,
+        }),
+      ),
+      [WS_METHODS.factoryAdmitResearchImplementation]: held(
+        id,
+        WS_METHODS.factoryAdmitResearchImplementation,
+        (input: FactoryResearchImplementationAdmitInput) => ({
+          repository: readinessRepository,
+          protocolId: input.protocolId,
+          projectId: input.projectId,
+          threadId: researchTask.threadId,
+          task: researchTask,
+          resumed: false,
+        }),
+      ),
+    }),
+    grants,
+  );
+  return { ...h, entered, release, calls };
+});
+
+const researchReads = (calls: ReadonlyArray<FeedCall>, method: string) =>
+  calls.filter((call) => call.method === method).length;
+
+describe("Factory research queries", () => {
+  it.effect(
+    "reads the list and each protocol through their own requests, and again on refresh",
+    () =>
+      Effect.gen(function* () {
+        // Read access alone must be enough: a protocol and its finding are evidence, not a command.
+        const h = yield* makeResearchHarness([AuthOrchestrationReadScope]);
+        const list = h.atoms.listResearchProtocols({ environmentId, input: { projectId } });
+        const target = { environmentId, input: { projectId, protocolId: researchProtocolId } };
+        const protocol = h.atoms.readResearchProtocol(target);
+        expect(h.atoms.readResearchProtocol(target)).toBe(protocol);
+        const otherProtocol = h.atoms.readResearchProtocol({
+          environmentId,
+          input: { projectId, protocolId: FactoryResearchProtocolId.make("protocol-2") },
+        });
+        const otherEnvironment = h.atoms.readResearchProtocol({
+          environmentId: otherEnvironmentId,
+          input: target.input,
+        });
+        yield* AtomRegistry.mount(h.registry, list);
+        yield* AtomRegistry.getResult(h.registry, list, { suspendOnWaiting: true });
+        for (const atom of [protocol, otherProtocol, otherEnvironment]) {
+          yield* AtomRegistry.mount(h.registry, atom);
+          yield* AtomRegistry.getResult(h.registry, atom, { suspendOnWaiting: true });
+        }
+        expect(h.calls).toEqual([
+          {
+            method: WS_METHODS.factoryListResearchProtocols,
+            environmentId,
+            input: { projectId } satisfies FactoryResearchProtocolListInput,
+          },
+          { method: WS_METHODS.factoryReadResearchProtocol, environmentId, input: target.input },
+          {
+            method: WS_METHODS.factoryReadResearchProtocol,
+            environmentId,
+            input: { projectId, protocolId: "protocol-2" },
+          },
+          {
+            method: WS_METHODS.factoryReadResearchProtocol,
+            environmentId: otherEnvironmentId,
+            input: target.input,
+          },
+        ]);
+        const first = yield* AtomRegistry.getResult(h.registry, protocol, {
+          suspendOnWaiting: true,
+        });
+        expect(first.finding.revision).toBe(researchFinding.revision);
+        expect(h.calls).toHaveLength(4);
+        h.registry.refresh(protocol);
+        yield* AtomRegistry.getResult(h.registry, protocol, { suspendOnWaiting: true });
+        expect(researchReads(h.calls, WS_METHODS.factoryReadResearchProtocol)).toBe(4);
+      }).pipe(Effect.scoped),
+  );
+});
+
+describe("Factory research commands", () => {
+  it.effect("coalesces one sealing attempt per command id and project", () =>
+    Effect.gen(function* () {
+      const h = yield* makeResearchHarness();
+      const targets = [
+        { environmentId, input: sealInput("seal") },
+        { environmentId, input: sealInput("seal", { hypothesis: "A retry with other words." }) },
+        { environmentId, input: sealInput("other-attempt") },
+        {
+          environmentId,
+          input: sealInput("seal", { projectId: ProjectId.make("other-project") }),
+        },
+        { environmentId: otherEnvironmentId, input: sealInput("seal") },
+      ];
+      const pending = targets.map((value) => h.atoms.sealResearchProtocol.run(h.registry, value));
+      const dispatched: FeedCall[] = [];
+      for (let index = 0; index < 4; index++) dispatched.push(yield* Queue.take(h.entered));
+      expect(dispatched.map(({ environmentId: id }) => id).sort()).toEqual(
+        [environmentId, environmentId, environmentId, otherEnvironmentId].sort(),
+      );
+      yield* Deferred.succeed(h.release, undefined);
+      const results = yield* Effect.promise(() => Promise.all(pending));
+      expect(results.every(AsyncResult.isSuccess)).toBe(true);
+      expect(results[1]).toEqual(results[0]);
+      expect(h.calls).toHaveLength(4);
+      expect(h.calls.every(({ method }) => method === WS_METHODS.factorySealResearchProtocol)).toBe(
+        true,
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "coalesces one reviewed launch without conflating protocols, roles, revisions or environments",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeResearchHarness();
+        const targets = [
+          { environmentId, input: launchInput("first", { instructions: "Try a smaller batch." }) },
+          { environmentId, input: launchInput("duplicate", { instructions: "Other words." }) },
+          { environmentId, input: launchInput("verify", { role: "verify" }) },
+          {
+            environmentId,
+            input: launchInput("replaced", { expectedProtocolRevision: "protocol-revision-2" }),
+          },
+          {
+            environmentId,
+            input: launchInput("other-protocol", {
+              protocolId: FactoryResearchProtocolId.make("protocol-2"),
+            }),
+          },
+          { environmentId: otherEnvironmentId, input: launchInput("other-environment") },
+        ];
+        const pending = targets.map((value) => h.atoms.launchResearchRun.run(h.registry, value));
+        const dispatched: FeedCall[] = [];
+        for (let index = 0; index < 5; index++) dispatched.push(yield* Queue.take(h.entered));
+        expect(
+          dispatched.map(({ input }) => (input as FactoryResearchRunLaunchInput).commandId).sort(),
+        ).toEqual(["first", "other-environment", "other-protocol", "replaced", "verify"]);
+        yield* Deferred.succeed(h.release, undefined);
+        const results = yield* Effect.promise(() => Promise.all(pending));
+        expect(results.every(AsyncResult.isSuccess)).toBe(true);
+        expect(results[1]).toEqual(results[0]);
+        expect(
+          h.calls.filter(({ method }) => method === WS_METHODS.factoryLaunchResearchRun),
+        ).toHaveLength(5);
+        expect(
+          h.calls.find(
+            ({ input }) =>
+              (input as FactoryResearchRunLaunchInput).commandId === "other-environment",
+          )?.environmentId,
+        ).toBe(otherEnvironmentId);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "coalesces one admission per reviewed finding revision without conflating protocols or environments",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeResearchHarness();
+        const targets = [
+          { environmentId, input: researchAdmitInput("first", { instructions: "Keep it small." }) },
+          { environmentId, input: researchAdmitInput("duplicate", { instructions: "Other." }) },
+          {
+            environmentId,
+            input: researchAdmitInput("re-evidenced", {
+              expectedFindingRevision: "finding-revision-2",
+            }),
+          },
+          {
+            environmentId,
+            input: researchAdmitInput("other-protocol", {
+              protocolId: FactoryResearchProtocolId.make("protocol-2"),
+            }),
+          },
+          { environmentId: otherEnvironmentId, input: researchAdmitInput("other-environment") },
+        ];
+        const pending = targets.map((value) =>
+          h.atoms.admitResearchImplementation.run(h.registry, value),
+        );
+        const dispatched: FeedCall[] = [];
+        for (let index = 0; index < 4; index++) dispatched.push(yield* Queue.take(h.entered));
+        expect(
+          dispatched
+            .map(({ input }) => (input as FactoryResearchImplementationAdmitInput).commandId)
+            .sort(),
+        ).toEqual(["first", "other-environment", "other-protocol", "re-evidenced"]);
+        yield* Deferred.succeed(h.release, undefined);
+        const results = yield* Effect.promise(() => Promise.all(pending));
+        expect(results.every(AsyncResult.isSuccess)).toBe(true);
+        expect(results[1]).toEqual(results[0]);
+        expect(h.calls).toHaveLength(4);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("requires operate to seal a protocol, and read alone is not enough", () =>
+    Effect.gen(function* () {
+      const h = yield* makeResearchHarness();
+      h.registry.set(
+        sessions(environmentId),
+        AsyncResult.success(sessionWith([AuthOrchestrationReadScope])),
+      );
+      expect(h.registry.get(h.atoms.sealResearchProtocol.permissionAtom(environmentId))).toBe(
+        false,
+      );
+      yield* expectGuarded(h, h.atoms.sealResearchProtocol, sealInput("seal"), [
+        AuthOrchestrationOperateScope,
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("requires both operate and source-control write to launch a run", () =>
+    Effect.gen(function* () {
+      const h = yield* makeResearchHarness();
+      yield* expectGuarded(h, h.atoms.launchResearchRun, launchInput("launch"), [
+        AuthOrchestrationOperateScope,
+        AuthSourceControlWriteScope,
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("requires both operate and source-control write to admit an implementation", () =>
+    Effect.gen(function* () {
+      const h = yield* makeResearchHarness();
+      yield* expectGuarded(h, h.atoms.admitResearchImplementation, researchAdmitInput("admit"), [
+        AuthOrchestrationOperateScope,
+        AuthSourceControlWriteScope,
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([false, true])(
+    "reads only the affected protocol again once a launch or admission settles, even a failed one: %s",
+    (failCommands) =>
+      Effect.gen(function* () {
+        const h = yield* makeResearchHarness(undefined, failCommands);
+        const changed = h.atoms.readResearchProtocol({
+          environmentId,
+          input: { projectId, protocolId: researchProtocolId },
+        });
+        const untouched = h.atoms.readResearchProtocol({
+          environmentId,
+          input: { projectId, protocolId: FactoryResearchProtocolId.make("protocol-2") },
+        });
+        for (const atom of [changed, untouched]) {
+          yield* AtomRegistry.mount(h.registry, atom);
+          yield* AtomRegistry.getResult(h.registry, atom, { suspendOnWaiting: true });
+        }
+        const reads = (protocolId: string) =>
+          h.calls.filter(
+            (call) =>
+              call.method === WS_METHODS.factoryReadResearchProtocol &&
+              (call.input as FactoryResearchProtocolReadInput).protocolId === protocolId,
+          ).length;
+        expect([reads("protocol-1"), reads("protocol-2")]).toEqual([1, 1]);
+
+        const launching = h.atoms.launchResearchRun.run(h.registry, {
+          environmentId,
+          input: launchInput("launch"),
+        });
+        yield* Queue.take(h.entered);
+        yield* Deferred.succeed(h.release, undefined);
+        const launched = yield* Effect.promise(() => launching);
+        expect(AsyncResult.isFailure(launched)).toBe(failCommands);
+        yield* AtomRegistry.getResult(h.registry, changed, { suspendOnWaiting: true });
+        expect([reads("protocol-1"), reads("protocol-2")]).toEqual([2, 1]);
+
+        const admitting = h.atoms.admitResearchImplementation.run(h.registry, {
+          environmentId,
+          input: researchAdmitInput("admit", {
+            protocolId: FactoryResearchProtocolId.make("protocol-2"),
+          }),
+        });
+        yield* Queue.take(h.entered);
+        const admitted = yield* Effect.promise(() => admitting);
+        expect(AsyncResult.isFailure(admitted)).toBe(failCommands);
+        yield* AtomRegistry.getResult(h.registry, untouched, { suspendOnWaiting: true });
+        expect([reads("protocol-1"), reads("protocol-2")]).toEqual([2, 2]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([false, true])(
+    "reads the protocol list again once a seal settles, even a failed one: %s",
+    (failCommands) =>
+      Effect.gen(function* () {
+        const h = yield* makeResearchHarness(undefined, failCommands);
+        const list = h.atoms.listResearchProtocols({ environmentId, input: { projectId } });
+        yield* AtomRegistry.mount(h.registry, list);
+        yield* AtomRegistry.getResult(h.registry, list, { suspendOnWaiting: true });
+        expect(researchReads(h.calls, WS_METHODS.factoryListResearchProtocols)).toBe(1);
+
+        const sealing = h.atoms.sealResearchProtocol.run(h.registry, {
+          environmentId,
+          input: sealInput("seal"),
+        });
+        yield* Queue.take(h.entered);
+        yield* Deferred.succeed(h.release, undefined);
+        const sealed = yield* Effect.promise(() => sealing);
+        expect(AsyncResult.isFailure(sealed)).toBe(failCommands);
+        yield* AtomRegistry.getResult(h.registry, list, { suspendOnWaiting: true });
+        expect(researchReads(h.calls, WS_METHODS.factoryListResearchProtocols)).toBe(2);
+      }).pipe(Effect.scoped),
   );
 });

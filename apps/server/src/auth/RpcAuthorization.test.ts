@@ -2,6 +2,8 @@ import {
   CommandId,
   ProjectId,
   FactoryFeedError,
+  FactoryResearchError,
+  FactoryResearchProtocolId,
   FactoryIssueError,
   FactoryReadinessOverrideId,
   FactoryFeedSourceId,
@@ -820,6 +822,89 @@ describe("readiness override and frontier authorization", () => {
         expect(result._tag).toBe(allowed ? "FactoryIssueError" : "EnvironmentAuthorizationError");
         expect(calls).toBe(allowed ? 1 : 0);
       }
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("research factory authorization", () => {
+  const cases = [
+    { method: WS_METHODS.factoryListResearchProtocols, scopes: [AuthOrchestrationReadScope] },
+    { method: WS_METHODS.factoryReadResearchProtocol, scopes: [AuthOrchestrationReadScope] },
+    { method: WS_METHODS.factorySealResearchProtocol, scopes: [AuthOrchestrationOperateScope] },
+    {
+      method: WS_METHODS.factoryLaunchResearchRun,
+      scopes: [AuthOrchestrationOperateScope, AuthSourceControlWriteScope],
+    },
+    {
+      method: WS_METHODS.factoryAdmitResearchImplementation,
+      scopes: [AuthOrchestrationOperateScope, AuthSourceControlWriteScope],
+    },
+  ] as const;
+  const input = {
+    commandId: CommandId.make("research-auth"),
+    projectId: ProjectId.make("project"),
+    protocolId: FactoryResearchProtocolId.make("protocol"),
+    expectedRepositoryKey: "github.com/owner/repo",
+    expectedProtocolRevision: "protocol-revision",
+    expectedFindingRevision: "finding-revision",
+    hypothesis: "Lower loss",
+    runCommand: "python train.py",
+    evaluatorPaths: ["prepare.py"],
+    metric: { name: "loss", linePrefix: "loss:", direction: "lower" as const, minimumEffect: 0.01 },
+    budget: { maxRuns: 3, maxRunMinutes: 5, expiresAt: "2099-01-01T00:00:00.000Z" },
+    role: "explore" as const,
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+    runtimeMode: "approval-required" as const,
+    interactionMode: "default" as const,
+  };
+  const tested = cases.map(({ method }) => method);
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
+        !(tested as ReadonlyArray<string>).includes(tag),
+    ),
+  );
+  const handlers = group.toLayer({
+    [WS_METHODS.factoryListResearchProtocols]: () =>
+      Effect.fail(new FactoryResearchError({ reason: "missing-project" })),
+    [WS_METHODS.factoryReadResearchProtocol]: () =>
+      Effect.fail(new FactoryResearchError({ reason: "missing-project" })),
+    [WS_METHODS.factorySealResearchProtocol]: () =>
+      Effect.fail(new FactoryResearchError({ reason: "missing-project" })),
+    [WS_METHODS.factoryLaunchResearchRun]: () =>
+      Effect.fail(new FactoryResearchError({ reason: "missing-project" })),
+    [WS_METHODS.factoryAdmitResearchImplementation]: () =>
+      Effect.fail(new FactoryResearchError({ reason: "missing-project" })),
+  });
+  it.effect.each(cases)("requires every research scope for $method", ({ method, scopes }) =>
+    Effect.gen(function* () {
+      for (const missing of scopes) {
+        const client = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.merge(
+              handlers,
+              RpcAuthorization.layer(scopes.filter((scope) => scope !== missing)),
+            ),
+          ),
+        );
+        const request: Effect.Effect<
+          unknown,
+          FactoryResearchError | EnvironmentAuthorizationError
+        > = client[method](input);
+        expect(yield* request.pipe(Effect.asVoid, Effect.flip)).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: missing,
+        });
+      }
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(Layer.merge(handlers, RpcAuthorization.layer(scopes))),
+      );
+      const request: Effect.Effect<unknown, FactoryResearchError | EnvironmentAuthorizationError> =
+        client[method](input);
+      expect(yield* request.pipe(Effect.asVoid, Effect.flip)).toMatchObject({
+        _tag: "FactoryResearchError",
+        reason: "missing-project",
+      });
     }).pipe(Effect.scoped),
   );
 });

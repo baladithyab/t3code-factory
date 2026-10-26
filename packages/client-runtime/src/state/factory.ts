@@ -1,4 +1,9 @@
-import { WS_METHODS, type EnvironmentId, type ProjectId } from "@t3tools/contracts";
+import {
+  WS_METHODS,
+  type EnvironmentId,
+  type FactoryResearchProtocolId,
+  type ProjectId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { Atom, type AtomRegistry } from "effect/reactivity";
 
@@ -39,6 +44,39 @@ export function createFactoryEnvironmentAtoms<R, E>(
         readIssueReadiness({
           environmentId: target.environmentId,
           input: { projectId: target.input.projectId, issueNumber: target.input.issueNumber },
+        }),
+      );
+    });
+  // The protocol, its runs and the derived finding are read together so the reviewer never sees a
+  // finding paired with runs from another read. Every mount and refresh observes again because the
+  // server derives acceptability and the finding on each read rather than storing them.
+  const listResearchProtocols = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:factory:research-protocols",
+    tag: WS_METHODS.factoryListResearchProtocols,
+    staleTimeMs: 0,
+  });
+  const readResearchProtocol = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:factory:research-protocol",
+    tag: WS_METHODS.factoryReadResearchProtocol,
+    staleTimeMs: 0,
+  });
+  // A launch or admission can persist a run or a reserved intent before a failed response, so every
+  // outcome reads the protocol again rather than trusting what the page last showed.
+  const refreshResearchProtocol = (
+    target: {
+      readonly environmentId: EnvironmentId;
+      readonly input: {
+        readonly projectId: ProjectId;
+        readonly protocolId: FactoryResearchProtocolId;
+      };
+    },
+    registry: AtomRegistry.AtomRegistry,
+  ) =>
+    Effect.sync(() => {
+      registry.refresh(
+        readResearchProtocol({
+          environmentId: target.environmentId,
+          input: { projectId: target.input.projectId, protocolId: target.input.protocolId },
         }),
       );
     });
@@ -174,6 +212,62 @@ export function createFactoryEnvironmentAtoms<R, E>(
             input.expectedRevision,
           ]),
       },
+    }),
+    listResearchProtocols,
+    readResearchProtocol,
+    // Sealing hashes the base commit's evaluators server-side. One command id is one sealing
+    // attempt, so only a retry of the same attempt coalesces; two distinct protocols never do.
+    sealResearchProtocol: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:seal-research-protocol",
+      tag: WS_METHODS.factorySealResearchProtocol,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.projectId, input.commandId]),
+      },
+      // The new protocol has no read of its own yet; the list is what changed, even after a
+      // failed response that followed a persisted seal.
+      onSettled: ({ environmentId, input }, registry) =>
+        Effect.sync(() => {
+          registry.refresh(
+            listResearchProtocols({ environmentId, input: { projectId: input.projectId } }),
+          );
+        }),
+    }),
+    // A launch spends one run of the sealed budget. The revision the reviewer saw is part of the
+    // key so a launch against a replaced protocol is never merged into an earlier request.
+    launchResearchRun: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:launch-research-run",
+      tag: WS_METHODS.factoryLaunchResearchRun,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([
+            environmentId,
+            input.projectId,
+            input.protocolId,
+            input.role,
+            input.expectedProtocolRevision,
+          ]),
+      },
+      onSettled: refreshResearchProtocol,
+    }),
+    // The finding revision is the evidence the reviewer approved; a different revision is a
+    // different decision and never joins an in-flight admission.
+    admitResearchImplementation: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:admit-research-implementation",
+      tag: WS_METHODS.factoryAdmitResearchImplementation,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([
+            environmentId,
+            input.projectId,
+            input.protocolId,
+            input.expectedFindingRevision,
+          ]),
+      },
+      onSettled: refreshResearchProtocol,
     }),
     coordinatorsGet,
     coordinatorsList,

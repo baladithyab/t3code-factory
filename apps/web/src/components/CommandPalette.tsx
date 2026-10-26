@@ -104,7 +104,7 @@ import { useClientSettings } from "../hooks/useSettings";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
-import { useFactoryFeedsSupported } from "../state/factory";
+import { useFactoryFeedsSupported, useFactoryResearchSupported } from "../state/factory";
 import { filesystemEnvironment, useFilesystemReadAccess } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
@@ -432,6 +432,7 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const factoryFeedsSupported = useFactoryFeedsSupported();
+  const factoryResearchSupported = useFactoryResearchSupported();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const paletteRouteTarget = useThreadRouteTarget();
@@ -1548,6 +1549,19 @@ function OpenCommandPaletteDialog(props: {
       icon: <FactoryIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
         await navigate({ to: "/factory/sources", search: { state: "open", view: "list" } });
+      },
+    });
+  }
+
+  if (factoryResearchSupported) {
+    actionItems.push({
+      kind: "action",
+      value: "action:factory-research",
+      searchTerms: ["factory", "research", "protocol", "experiment", "hypothesis", "evidence"],
+      title: "Open Factory research",
+      icon: <FactoryIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/factory/research", search: { state: "open", view: "list" } });
       },
     });
   }
