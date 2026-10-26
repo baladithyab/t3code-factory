@@ -1,10 +1,24 @@
-import type { EnvironmentId, FactoryIssue, FactoryIssueTask, ProjectId } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
+  CommandId,
+  type EnvironmentId,
+  type FactoryIssue,
+  type FactoryIssueTask,
+  type FactoryReadinessOverrideId,
+  type ProjectId,
+} from "@t3tools/contracts";
 import { ChevronDownIcon, CircleDotIcon } from "lucide-react";
-import { Fragment, useId, useState } from "react";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
 
 import { useNowSecond } from "../../hooks/useNowSecond";
+import { randomUUID } from "../../lib/utils";
 import { factoryEnvironment, useFactoryReadinessSupported } from "../../state/factory";
 import { useEnvironmentQuery } from "../../state/query";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { RelativeTime } from "../RelativeTime";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
@@ -12,15 +26,22 @@ import { Button } from "../ui/button";
 import { RefreshIcon } from "../ui/refresh-icon";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import {
+  FACTORY_OVERRIDE_ACTIONS,
   boundedIssueBody,
+  buildFactoryReadinessOverrideInput,
   describeFactoryFailure,
   factoryReadinessPresentation,
   factoryTaskPresentation,
   resolveFactoryIssueAction,
   safeExternalUrl,
+  type FactoryFailure,
+  type FactoryReadinessEdgeRow,
+  type FactoryReadinessOverrideAction,
   type FactoryReadinessTone,
 } from "./factoryIssues.logic";
 import { groupFactoryIssuesByStage, type FactoryIssueViewMode } from "./factoryIssues.views";
+import { FactoryIssueFrontier } from "./FactoryIssueFrontier";
+import { FactoryReadinessOverrideDialog } from "./FactoryReadinessOverrideDialog";
 
 const MAX_VISIBLE_LABELS = 5;
 
@@ -286,11 +307,18 @@ function FactoryIssueEntry(
         </>
       )}
       {issue.state === "open" && props.readinessSupported ? (
-        <FactoryIssueBlockers
-          environmentId={props.environmentId}
-          projectId={props.selectedProjectId}
-          issueNumber={issue.number}
-        />
+        <>
+          <FactoryIssueBlockers
+            environmentId={props.environmentId}
+            projectId={props.selectedProjectId}
+            issueNumber={issue.number}
+          />
+          <FactoryIssueFrontier
+            environmentId={props.environmentId}
+            projectId={props.selectedProjectId}
+            issueNumber={issue.number}
+          />
+        </>
       ) : null}
     </div>
   ) : null;
@@ -345,30 +373,119 @@ const READINESS_ALERT_VARIANT = {
   neutral: "default",
 } as const satisfies Record<FactoryReadinessTone, "success" | "warning" | "info" | "default">;
 
+/** The edge exactly as the reviewer saw it; a refreshed table never changes what is confirmed. */
+type PendingOverride = {
+  readonly row: FactoryReadinessEdgeRow;
+  readonly action: FactoryReadinessOverrideAction;
+};
+
 /**
  * Observed blocker evidence for one open issue. It mounts only while Details is expanded, so the
  * read happens once per expand: collapsing unmounts the query and expanding observes again.
- * Nothing here reaches Start; the verdict is information and never a gate.
+ * Nothing here reaches Start; the verdict is information and never a gate. Disputes and waivers
+ * are the reviewer's recorded decisions about single edges: they change this verdict only.
  */
 function FactoryIssueBlockers(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly issueNumber: number;
 }) {
+  const { environmentId, projectId, issueNumber } = props;
   const headingId = useId();
   const nowMs = useNowSecond();
   const query = useEnvironmentQuery(
     factoryEnvironment.readIssueReadiness({
-      environmentId: props.environmentId,
-      input: { projectId: props.projectId, issueNumber: props.issueNumber },
+      environmentId,
+      input: { projectId, issueNumber },
     }),
   );
+  const canOverride = useAtomValue(
+    factoryEnvironment.setIssueReadinessOverride.permissionAtom(environmentId),
+  );
+  const canRevoke = useAtomValue(
+    factoryEnvironment.revokeIssueReadinessOverride.permissionAtom(environmentId),
+  );
+  const runSet = useAtomCommand(factoryEnvironment.setIssueReadinessOverride, {
+    label: "factory readiness override",
+    reportFailure: false,
+  });
+  const runRevoke = useAtomCommand(factoryEnvironment.revokeIssueReadinessOverride, {
+    label: "factory readiness override revoke",
+    reportFailure: false,
+  });
+  const [dialog, setDialog] = useState<PendingOverride | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [revokingId, setRevokingId] = useState<FactoryReadinessOverrideId | null>(null);
+  const [dialogFailure, setDialogFailure] = useState<FactoryFailure | null>(null);
+  const [revokeFailure, setRevokeFailure] = useState<FactoryFailure | null>(null);
+  const inFlight = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   const failure = query.error === null ? null : describeFactoryFailure(query.failure, query.error);
   const presentation =
     failure === null && query.data !== null
       ? factoryReadinessPresentation(query.data.readiness, nowMs)
       : null;
   const refreshing = query.isPending;
+  const busy = saving || revokingId !== null || refreshing;
+  const hasControls =
+    presentation?.edgeRows.some((row) => row.overrideAction !== null || row.overrideId !== null) ??
+    false;
+  const hasNewDecision = presentation?.edgeRows.some((row) => row.overrideAction !== null) ?? false;
+
+  const submitOverride = async (pending: PendingOverride, reason: string) => {
+    // The server owns deduplication; this only stops the same client double-submitting.
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setSaving(true);
+    setDialogFailure(null);
+    const result = await runSet({
+      environmentId,
+      input: buildFactoryReadinessOverrideInput({
+        commandId: CommandId.make(randomUUID()),
+        projectId,
+        issueNumber,
+        row: pending.row,
+        action: pending.action,
+        reason,
+      }),
+    }).finally(() => {
+      inFlight.current = false;
+      if (mounted.current) setSaving(false);
+    });
+    if (!mounted.current) return;
+    if (result._tag === "Success") {
+      setDialog(null);
+      return;
+    }
+    if (isAtomCommandInterrupted(result)) return;
+    // The command observes the issue again, so the table behind the dialog already shows the
+    // current edge while the dialog keeps the one that was reviewed.
+    setDialogFailure(describeFactoryFailure(squashAtomCommandFailure(result)));
+  };
+
+  const revoke = async (overrideId: FactoryReadinessOverrideId) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setRevokingId(overrideId);
+    setRevokeFailure(null);
+    const result = await runRevoke({
+      environmentId,
+      input: { commandId: CommandId.make(randomUUID()), projectId, issueNumber, overrideId },
+    }).finally(() => {
+      inFlight.current = false;
+      if (mounted.current) setRevokingId(null);
+    });
+    if (!mounted.current) return;
+    if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
+    setRevokeFailure(describeFactoryFailure(squashAtomCommandFailure(result)));
+  };
 
   return (
     <div
@@ -384,9 +501,12 @@ function FactoryIssueBlockers(props: {
         <Button
           size="sm"
           variant="outline"
-          onClick={query.refresh}
+          onClick={() => {
+            setRevokeFailure(null);
+            query.refresh();
+          }}
           disabled={refreshing}
-          aria-label={`Refresh blockers for issue #${props.issueNumber}`}
+          aria-label={`Refresh blockers for issue #${issueNumber}`}
         >
           <RefreshIcon size="sm" refreshing={refreshing} />
           Refresh
@@ -407,9 +527,15 @@ function FactoryIssueBlockers(props: {
           <Alert variant={READINESS_ALERT_VARIANT[presentation.tone]} role="group">
             <AlertDescription>{presentation.label}</AlertDescription>
           </Alert>
+          {revokeFailure !== null ? (
+            <Alert variant="error">
+              <AlertTitle>{revokeFailure.title}</AlertTitle>
+              <AlertDescription>{revokeFailure.message}</AlertDescription>
+            </Alert>
+          ) : null}
           {presentation.edgeRows.length > 0 ? (
             <Table>
-              <caption className="sr-only">Blockers of issue #{props.issueNumber}</caption>
+              <caption className="sr-only">Blockers of issue #{issueNumber}</caption>
               <TableHeader>
                 <TableRow>
                   <TableHead scope="col">Blocker</TableHead>
@@ -417,54 +543,142 @@ function FactoryIssueBlockers(props: {
                   <TableHead scope="col">State</TableHead>
                   <TableHead scope="col">Resolution</TableHead>
                   <TableHead scope="col">Status</TableHead>
+                  <TableHead scope="col">Override</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {presentation.edgeRows.map((row) => (
-                  <TableRow key={row.key}>
-                    <TableCell>
-                      {row.url !== null ? (
-                        <a
-                          href={row.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="underline-offset-4 hover:underline"
-                        >
-                          {row.locator}
-                        </a>
-                      ) : (
-                        row.locator
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="min-w-40 max-w-96 whitespace-normal [overflow-wrap:anywhere]">
-                        {row.title}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {row.stateLabel}
-                      {row.closedAt !== null ? (
-                        <>
-                          {" · "}
-                          <time dateTime={row.closedAt}>
-                            <RelativeTime timestamp={row.closedAt} />
-                          </time>
-                        </>
-                      ) : null}
-                    </TableCell>
-                    <TableCell>{row.resolutionLabel}</TableCell>
-                    <TableCell>{row.statusLabel}</TableCell>
-                  </TableRow>
-                ))}
+                {presentation.edgeRows.map((row) => {
+                  const action = row.overrideAction;
+                  const overrideId = row.overrideId;
+                  return (
+                    <TableRow key={row.key}>
+                      <TableCell>
+                        {row.url !== null ? (
+                          <a
+                            href={row.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="underline-offset-4 hover:underline"
+                          >
+                            {row.locator}
+                          </a>
+                        ) : (
+                          row.locator
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className="min-w-40 max-w-96 whitespace-normal [overflow-wrap:anywhere]">
+                          {row.title}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {row.stateLabel}
+                        {row.closedAt !== null ? (
+                          <>
+                            {" · "}
+                            <time dateTime={row.closedAt}>
+                              <RelativeTime timestamp={row.closedAt} />
+                            </time>
+                          </>
+                        ) : null}
+                      </TableCell>
+                      <TableCell>
+                        <div className="max-w-96 whitespace-normal [overflow-wrap:anywhere]">
+                          <div>{row.resolutionLabel}</div>
+                          {row.overrideLabel !== null ? (
+                            <div className="text-muted-foreground">{row.overrideLabel}</div>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                      <TableCell>{row.statusLabel}</TableCell>
+                      <TableCell>
+                        {action !== null ? (
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            disabled={
+                              !canOverride || presentation.overridesLockedReason !== null || busy
+                            }
+                            aria-label={`${FACTORY_OVERRIDE_ACTIONS[action].buttonLabel} blocker ${row.locator}`}
+                            onClick={() => {
+                              setRevokeFailure(null);
+                              setDialogFailure(null);
+                              setDialog({ row, action });
+                            }}
+                          >
+                            {FACTORY_OVERRIDE_ACTIONS[action].buttonLabel}
+                          </Button>
+                        ) : overrideId !== null ? (
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            disabled={!canRevoke || busy}
+                            aria-busy={revokingId === overrideId}
+                            aria-label={`Revoke override on blocker ${row.locator}`}
+                            onClick={() => void revoke(overrideId)}
+                          >
+                            {revokingId === overrideId ? "Revoking…" : "Revoke"}
+                          </Button>
+                        ) : null}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           ) : null}
+          {hasNewDecision && presentation.overridesLockedReason !== null ? (
+            <p className="text-muted-foreground text-xs" role="status">
+              {presentation.overridesLockedReason}
+            </p>
+          ) : null}
+          {hasControls && (!canOverride || !canRevoke) ? (
+            <p className="text-muted-foreground text-xs">
+              Recording or revoking overrides needs operate permission on this environment.
+            </p>
+          ) : null}
+          {presentation.inactiveOverrides.length > 0 ? (
+            <div className="space-y-1">
+              <p className="font-medium text-xs">Past overrides</p>
+              <ul className="space-y-1 text-muted-foreground text-xs">
+                {presentation.inactiveOverrides.map((override) => (
+                  <li key={override.key} className="flex flex-wrap items-baseline gap-x-2">
+                    <Badge variant="outline" size="sm">
+                      {override.statusLabel}
+                    </Badge>
+                    <span className="[overflow-wrap:anywhere]">
+                      {override.kindLabel} on {override.locator}: {override.reason}
+                    </span>
+                    <span>
+                      {override.revokedAt !== null ? "revoked " : "recorded "}
+                      <RelativeTime timestamp={override.revokedAt ?? override.createdAt} />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <p className="text-muted-foreground text-xs">
             Observed from GitHub blocked-by links. Evidence only: it never allows or prevents
-            starting work. Refresh observes again.
+            starting work. A dispute or waiver records your decision here and changes nothing on
+            GitHub. Refresh observes again.
           </p>
         </>
       )}
+      {dialog !== null ? (
+        <FactoryReadinessOverrideDialog
+          row={dialog.row}
+          action={dialog.action}
+          canOperate={canOverride}
+          pending={saving}
+          failure={dialogFailure}
+          onClose={() => {
+            setDialog(null);
+            setDialogFailure(null);
+          }}
+          onSubmit={(reason) => void submitOverride(dialog, reason)}
+        />
+      ) : null}
     </div>
   );
 }

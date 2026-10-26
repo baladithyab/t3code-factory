@@ -7,6 +7,8 @@ import {
   CommandId,
   EnvironmentId,
   FactoryFeedSourceId,
+  FactoryIssueError,
+  FactoryReadinessOverrideId,
   ProjectCoordinatorError,
   ProjectId,
   ProviderInstanceId,
@@ -21,8 +23,12 @@ import {
   type FactoryFeedSourceBindInput,
   type FactoryFeedSourceRefreshInput,
   type FactoryFeedSourceUnbindInput,
+  type FactoryIssueFrontierReadInput,
+  type FactoryIssueFrontierReadResult,
   type FactoryIssueReadinessReadInput,
   type FactoryIssueReadinessReadResult,
+  type FactoryReadinessOverrideRevokeInput,
+  type FactoryReadinessOverrideSetInput,
   type ProjectCoordinator,
   type ProjectCoordinatorEnsureInput,
   type ProjectCoordinatorGetInput,
@@ -491,30 +497,47 @@ describe("Factory feed queries", () => {
   );
 });
 
-describe("Factory issue readiness query", () => {
-  const readinessResult = (
-    issueNumber: number,
-    observedAt: string,
-  ): FactoryIssueReadinessReadResult => ({
-    repository: {
-      provider: "github",
-      host: "github.com",
-      repository: "example/repo",
-      canonicalKey: "github.com/example/repo",
-      url: "https://github.com/example/repo",
-    },
-    issueNumber,
-    readiness: {
-      status: "ready",
-      reasons: [],
-      edges: [],
-      complete: true,
-      listedCount: 0,
-      summaryTotal: 0,
-      observedAt,
-    },
-  });
+const readinessRepository = {
+  provider: "github",
+  host: "github.com",
+  repository: "example/repo",
+  canonicalKey: "github.com/example/repo",
+  url: "https://github.com/example/repo",
+} as const;
 
+const readinessResult = (
+  issueNumber: number,
+  observedAt: string,
+): FactoryIssueReadinessReadResult => ({
+  repository: readinessRepository,
+  issueNumber,
+  readiness: {
+    status: "ready",
+    reasons: [],
+    basis: "source",
+    edges: [],
+    overrides: [],
+    complete: true,
+    listedCount: 0,
+    summaryTotal: 0,
+    observedAt,
+  },
+});
+
+const frontierResult = (
+  parentIssueNumber: number,
+  observedAt: string,
+): FactoryIssueFrontierReadResult => ({
+  repository: readinessRepository,
+  parentIssueNumber,
+  parentTitle: "Map",
+  complete: true,
+  summaryTotal: 0,
+  children: [],
+  observedAt,
+});
+
+describe("Factory issue readiness query", () => {
   it.effect(
     "observes each environment and issue through its own request, and again on refresh",
     () =>
@@ -575,6 +598,297 @@ describe("Factory issue readiness query", () => {
         expect(calls[3]).toEqual(calls[0]);
         expect(second.readiness.observedAt).not.toBe(first.readiness.observedAt);
       }).pipe(Effect.scoped),
+  );
+});
+
+const makeReadinessHarness = Effect.fn("TestFactory.makeReadinessHarness")(function* (
+  grants: ReadonlyArray<AuthEnvironmentScope> = [AuthOrchestrationOperateScope],
+  failCommands = false,
+) {
+  const entered = yield* Queue.unbounded<FeedCall>();
+  const release = yield* Deferred.make<void>();
+  const calls: FeedCall[] = [];
+  const read =
+    (environment: EnvironmentId, method: string, respond: (input: never) => unknown) =>
+    (input: unknown) =>
+      Effect.sync(() => {
+        calls.push({ method, environmentId: environment, input });
+        return respond(input as never);
+      });
+  // Commands hold until the test releases them so overlap is observable.
+  const held =
+    (environment: EnvironmentId, method: string) =>
+    (input: FactoryReadinessOverrideSetInput | FactoryReadinessOverrideRevokeInput) =>
+      Effect.gen(function* () {
+        const call = { method, environmentId: environment, input };
+        calls.push(call);
+        yield* Queue.offer(entered, call);
+        yield* Deferred.await(release);
+        if (failCommands) return yield* new FactoryIssueError({ reason: "remote-failure" });
+        return readinessResult(input.issueNumber, fetchedAt);
+      });
+  const h = yield* makeEnvironmentHarness(
+    (id) => ({
+      [WS_METHODS.factoryReadIssueReadiness]: read(
+        id,
+        WS_METHODS.factoryReadIssueReadiness,
+        (input: FactoryIssueReadinessReadInput) => readinessResult(input.issueNumber, fetchedAt),
+      ),
+      [WS_METHODS.factoryReadIssueFrontier]: read(
+        id,
+        WS_METHODS.factoryReadIssueFrontier,
+        (input: FactoryIssueFrontierReadInput) =>
+          frontierResult(input.parentIssueNumber, fetchedAt),
+      ),
+      [WS_METHODS.factorySetIssueReadinessOverride]: held(
+        id,
+        WS_METHODS.factorySetIssueReadinessOverride,
+      ),
+      [WS_METHODS.factoryRevokeIssueReadinessOverride]: held(
+        id,
+        WS_METHODS.factoryRevokeIssueReadinessOverride,
+      ),
+    }),
+    grants,
+  );
+  return { ...h, entered, release, calls };
+});
+
+function overrideSetTarget(
+  command: string,
+  overrides: Partial<FactoryReadinessOverrideSetInput> = {},
+  targetEnvironmentId: EnvironmentId = environmentId,
+) {
+  const input: FactoryReadinessOverrideSetInput = {
+    commandId: CommandId.make(command),
+    projectId,
+    issueNumber: 12,
+    targetHost: "github.com",
+    targetId: 7007,
+    expectedFingerprint: "fingerprint-1",
+    kind: "waive",
+    reason: "The blocker was deleted upstream.",
+    ...overrides,
+  };
+  return { environmentId: targetEnvironmentId, input };
+}
+
+function overrideRevokeTarget(
+  command: string,
+  overrides: Partial<FactoryReadinessOverrideRevokeInput> = {},
+  targetEnvironmentId: EnvironmentId = environmentId,
+) {
+  const input: FactoryReadinessOverrideRevokeInput = {
+    commandId: CommandId.make(command),
+    projectId,
+    issueNumber: 12,
+    overrideId: FactoryReadinessOverrideId.make("override-1"),
+    ...overrides,
+  };
+  return { environmentId: targetEnvironmentId, input };
+}
+
+const readCalls = (calls: ReadonlyArray<FeedCall>, method: string, issueNumber: number) =>
+  calls.filter(
+    (call) =>
+      call.method === method &&
+      (call.input as FactoryIssueReadinessReadInput).issueNumber === issueNumber,
+  );
+
+describe("Factory readiness override commands", () => {
+  it.effect(
+    "coalesces one reviewed decision without conflating edges, kinds, fingerprints, issues or environments",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeReadinessHarness();
+        const targets = [
+          overrideSetTarget("first"),
+          overrideSetTarget("duplicate", { reason: "Different words, same decision." }),
+          overrideSetTarget("other-edge", { targetId: 8008 }),
+          overrideSetTarget("other-kind", { kind: "force-not-ready" }),
+          overrideSetTarget("other-fingerprint", { expectedFingerprint: "fingerprint-2" }),
+          overrideSetTarget("other-issue", { issueNumber: 13 }),
+          overrideSetTarget("other-environment", {}, otherEnvironmentId),
+        ];
+        const pending = targets.map((value) =>
+          h.atoms.setIssueReadinessOverride.run(h.registry, value),
+        );
+        const dispatched: FeedCall[] = [];
+        for (let index = 0; index < 6; index++) dispatched.push(yield* Queue.take(h.entered));
+        expect(
+          dispatched
+            .map(({ input }) => (input as FactoryReadinessOverrideSetInput).commandId)
+            .sort(),
+        ).toEqual([
+          "first",
+          "other-edge",
+          "other-environment",
+          "other-fingerprint",
+          "other-issue",
+          "other-kind",
+        ]);
+        yield* Deferred.succeed(h.release, undefined);
+        const results = yield* Effect.promise(() => Promise.all(pending));
+        expect(results.every(AsyncResult.isSuccess)).toBe(true);
+        expect(results[1]).toEqual(results[0]);
+        expect(h.calls).toHaveLength(6);
+        expect(
+          h.calls.every(({ method }) => method === WS_METHODS.factorySetIssueReadinessOverride),
+        ).toBe(true);
+        expect(
+          h.calls.find(
+            ({ input }) => (input as FactoryReadinessOverrideSetInput).commandId === "first",
+          )?.environmentId,
+        ).toBe(environmentId);
+        expect(
+          h.calls.find(
+            ({ input }) =>
+              (input as FactoryReadinessOverrideSetInput).commandId === "other-environment",
+          )?.environmentId,
+        ).toBe(otherEnvironmentId);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("coalesces one revocation per override without conflating issues or environments", () =>
+    Effect.gen(function* () {
+      const h = yield* makeReadinessHarness();
+      const targets = [
+        overrideRevokeTarget("first"),
+        overrideRevokeTarget("duplicate"),
+        overrideRevokeTarget("other-override", {
+          overrideId: FactoryReadinessOverrideId.make("override-2"),
+        }),
+        overrideRevokeTarget("other-issue", { issueNumber: 13 }),
+        overrideRevokeTarget("other-environment", {}, otherEnvironmentId),
+      ];
+      const pending = targets.map((value) =>
+        h.atoms.revokeIssueReadinessOverride.run(h.registry, value),
+      );
+      for (let index = 0; index < 4; index++) yield* Queue.take(h.entered);
+      yield* Deferred.succeed(h.release, undefined);
+      const results = yield* Effect.promise(() => Promise.all(pending));
+      expect(results.every(AsyncResult.isSuccess)).toBe(true);
+      expect(results[1]).toEqual(results[0]);
+      expect(h.calls).toHaveLength(4);
+      expect(
+        h.calls.every(({ method }) => method === WS_METHODS.factoryRevokeIssueReadinessOverride),
+      ).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("requires operate to set or revoke an override, and read alone is not enough", () =>
+    Effect.gen(function* () {
+      const setHarness = yield* makeReadinessHarness();
+      setHarness.registry.set(
+        sessions(environmentId),
+        AsyncResult.success(sessionWith([AuthOrchestrationReadScope])),
+      );
+      expect(
+        setHarness.registry.get(
+          setHarness.atoms.setIssueReadinessOverride.permissionAtom(environmentId),
+        ),
+      ).toBe(false);
+      yield* expectGuarded(
+        setHarness,
+        setHarness.atoms.setIssueReadinessOverride,
+        overrideSetTarget("set").input,
+        [AuthOrchestrationOperateScope],
+      );
+      const revokeHarness = yield* makeReadinessHarness();
+      yield* expectGuarded(
+        revokeHarness,
+        revokeHarness.atoms.revokeIssueReadinessOverride,
+        overrideRevokeTarget("revoke").input,
+        [AuthOrchestrationOperateScope],
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([false, true])(
+    "observes only the changed issue again once a request settles, even a failed one: %s",
+    (failCommands) =>
+      Effect.gen(function* () {
+        const h = yield* makeReadinessHarness([AuthOrchestrationOperateScope], failCommands);
+        const changed = h.atoms.readIssueReadiness({
+          environmentId,
+          input: { projectId, issueNumber: 12 },
+        });
+        const untouched = h.atoms.readIssueReadiness({
+          environmentId,
+          input: { projectId, issueNumber: 13 },
+        });
+        for (const atom of [changed, untouched]) {
+          yield* AtomRegistry.mount(h.registry, atom);
+          yield* AtomRegistry.getResult(h.registry, atom, { suspendOnWaiting: true });
+        }
+        const reads = (issueNumber: number) =>
+          readCalls(h.calls, WS_METHODS.factoryReadIssueReadiness, issueNumber).length;
+        expect([reads(12), reads(13)]).toEqual([1, 1]);
+
+        const pending = h.atoms.setIssueReadinessOverride.run(h.registry, overrideSetTarget("set"));
+        yield* Queue.take(h.entered);
+        yield* Deferred.succeed(h.release, undefined);
+        const result = yield* Effect.promise(() => pending);
+        expect(AsyncResult.isFailure(result)).toBe(failCommands);
+        yield* AtomRegistry.getResult(h.registry, changed, { suspendOnWaiting: true });
+        expect([reads(12), reads(13)]).toEqual([2, 1]);
+
+        const revoking = h.atoms.revokeIssueReadinessOverride.run(
+          h.registry,
+          overrideRevokeTarget("revoke", { issueNumber: 13 }),
+        );
+        yield* Queue.take(h.entered);
+        yield* Effect.promise(() => revoking);
+        yield* AtomRegistry.getResult(h.registry, untouched, { suspendOnWaiting: true });
+        expect([reads(12), reads(13)]).toEqual([2, 2]);
+      }).pipe(Effect.scoped),
+  );
+});
+
+describe("Factory issue frontier query", () => {
+  it.effect("reads each environment and parent through its own request, and again on refresh", () =>
+    Effect.gen(function* () {
+      // Read access alone must be enough: the frontier is evidence, not a guarded command.
+      const h = yield* makeReadinessHarness([AuthOrchestrationReadScope]);
+      const target = { environmentId, input: { projectId, parentIssueNumber: 2 } };
+      const parent = h.atoms.readIssueFrontier(target);
+      expect(h.atoms.readIssueFrontier(target)).toBe(parent);
+      const otherParent = h.atoms.readIssueFrontier({
+        environmentId,
+        input: { projectId, parentIssueNumber: 3 },
+      });
+      const otherEnvironment = h.atoms.readIssueFrontier({
+        environmentId: otherEnvironmentId,
+        input: target.input,
+      });
+      expect(otherParent).not.toBe(parent);
+      expect(otherEnvironment).not.toBe(parent);
+      for (const atom of [parent, otherParent, otherEnvironment]) {
+        yield* AtomRegistry.mount(h.registry, atom);
+        yield* AtomRegistry.getResult(h.registry, atom, { suspendOnWaiting: true });
+      }
+      expect(h.calls).toEqual([
+        { method: WS_METHODS.factoryReadIssueFrontier, environmentId, input: target.input },
+        {
+          method: WS_METHODS.factoryReadIssueFrontier,
+          environmentId,
+          input: { projectId, parentIssueNumber: 3 },
+        },
+        {
+          method: WS_METHODS.factoryReadIssueFrontier,
+          environmentId: otherEnvironmentId,
+          input: target.input,
+        },
+      ]);
+
+      const first = yield* AtomRegistry.getResult(h.registry, parent, { suspendOnWaiting: true });
+      expect(first.parentIssueNumber).toBe(2);
+      expect(h.calls).toHaveLength(3);
+      h.registry.refresh(parent);
+      yield* AtomRegistry.getResult(h.registry, parent, { suspendOnWaiting: true });
+      expect(h.calls).toHaveLength(4);
+      expect(h.calls[3]).toEqual(h.calls[0]);
+    }).pipe(Effect.scoped),
   );
 });
 

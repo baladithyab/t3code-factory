@@ -1,25 +1,33 @@
 import {
+  CommandId,
   EnvironmentAuthorizationError,
   EnvironmentId,
+  FACTORY_READINESS_OVERRIDE_REASON_MAX_CHARS,
   FACTORY_READINESS_TTL_MS,
   FactoryIssueError,
+  FactoryReadinessOverrideId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
   type FactoryIssue,
+  type FactoryIssueFrontierReadResult,
   type FactoryIssueTask,
   type FactoryReadiness,
   type FactoryReadinessEdge,
+  type FactoryReadinessOverride,
   type FactoryReadinessReason,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   boundedIssueBody,
+  buildFactoryReadinessOverrideInput,
   currentFactoryPage,
   describeFactoryFailure,
+  factoryFrontierPresentation,
   factoryReadinessPresentation,
   factoryScopeKey,
+  isFactoryOverrideSubmitEnabled,
   normalizeFactoryBaseRef,
   popFactoryPage,
   pushFactoryPage,
@@ -110,6 +118,15 @@ describe("describeFactoryFailure", () => {
     const failure = describeFactoryFailure(new FactoryIssueError({ reason: "issue-changed" }));
     expect(failure.kind).toBe("changed");
   });
+
+  it("tells a changed blocker from a refused override", () => {
+    const changed = describeFactoryFailure(new FactoryIssueError({ reason: "readiness-changed" }));
+    expect(changed).toMatchObject({ kind: "changed", title: "Blocker changed" });
+    const refused = describeFactoryFailure(
+      new FactoryIssueError({ reason: "override-not-allowed" }),
+    );
+    expect(refused).toMatchObject({ kind: "other", title: "Override not allowed" });
+  });
 });
 
 describe("inbox scope helpers", () => {
@@ -171,6 +188,8 @@ function edge(overrides: Partial<FactoryReadinessEdge> = {}): FactoryReadinessEd
     status: "present",
     firstObservedAt: observedAt,
     lastObservedAt: observedAt,
+    fingerprint: "fingerprint-7007",
+    override: null,
     ...overrides,
   };
 }
@@ -179,7 +198,9 @@ function readiness(overrides: Partial<FactoryReadiness> = {}): FactoryReadiness 
   return {
     status: "ready",
     reasons: [],
+    basis: "source",
     edges: [],
+    overrides: [],
     complete: true,
     listedCount: 0,
     summaryTotal: 0,
@@ -276,6 +297,7 @@ describe("factoryReadinessPresentation", () => {
       "rate-limited": "the GitHub rate limit was reached",
       "remote-failure": "GitHub could not be reached",
       cycle: "the blockers form a cycle",
+      "overridden-not-ready": "a blocker is disputed",
     };
     for (const [reason, words] of Object.entries(expected) as Array<
       [FactoryReadinessReason, string]
@@ -351,6 +373,8 @@ describe("factoryReadinessPresentation", () => {
     ]);
     expect(rows[0]).toEqual({
       key: "github.com:7007",
+      targetHost: "github.com",
+      targetId: 7007,
       locator: "owner/repo#7",
       url: "https://github.com/owner/repo/issues/7",
       title: "Land the schema",
@@ -358,6 +382,10 @@ describe("factoryReadinessPresentation", () => {
       closedAt: "2026-10-20T09:00:00.000Z",
       resolutionLabel: "Accepted",
       statusLabel: "Listed",
+      fingerprint: "fingerprint-7007",
+      overrideAction: "dispute",
+      overrideId: null,
+      overrideLabel: null,
     });
     expect(rows[1]).toMatchObject({
       locator: "owner/other#8",
@@ -391,5 +419,449 @@ describe("factoryReadinessPresentation", () => {
       ["Could not be verified", "Unverified"],
       ["Not counted, removed at source", "No longer listed"],
     ]);
+  });
+});
+
+function waiveOverride(
+  overrides: Partial<FactoryReadinessOverride> = {},
+): FactoryReadinessOverride {
+  return {
+    id: FactoryReadinessOverrideId.make("override-waive"),
+    kind: "waive",
+    targetHost: "github.com",
+    targetId: 7007,
+    boundFingerprint: "fingerprint-7007",
+    reason: "Deleted upstream and retired by hand.",
+    createdAt: observedAt,
+    revokedAt: null,
+    status: "active",
+    ...overrides,
+  };
+}
+
+function disputeOverride(
+  overrides: Partial<FactoryReadinessOverride> = {},
+): FactoryReadinessOverride {
+  return waiveOverride({
+    id: FactoryReadinessOverrideId.make("override-dispute"),
+    kind: "force-not-ready",
+    reason: "Closed by a bot, not finished.",
+    ...overrides,
+  });
+}
+
+describe("factoryReadinessPresentation overrides", () => {
+  it("offers Dispute only on an accepted edge and Waive only on a tombstone", () => {
+    const actions = (resolution: FactoryReadinessEdge["resolution"]) =>
+      factoryReadinessPresentation(
+        readiness({ status: "blocked", edges: [edge({ resolution })] }),
+        observedMs,
+      ).edgeRows[0]?.overrideAction;
+    expect(actions("accepted")).toBe("dispute");
+    expect(actions("deleted")).toBe("waive");
+    expect(actions("inaccessible")).toBe("waive");
+    expect(actions("moved")).toBe("waive");
+    expect(actions("unverified")).toBe("waive");
+    // The tracker must resolve these; Factory never offers a way around them.
+    expect(actions("open")).toBeNull();
+    expect(actions("closed-unaccepted")).toBeNull();
+  });
+
+  it("offers nothing beside an active override, on an uncounted edge or for a closed issue", () => {
+    const overridden = factoryReadinessPresentation(
+      readiness({
+        status: "blocked",
+        edges: [
+          edge({ override: disputeOverride().id }),
+          edge({ targetId: 8008, resolution: "deleted", override: waiveOverride().id }),
+        ],
+        overrides: [disputeOverride(), waiveOverride({ targetId: 8008 })],
+      }),
+      observedMs,
+    ).edgeRows;
+    expect(overridden.map((row) => row.overrideAction)).toEqual([null, null]);
+    // Revoking needs only the override id.
+    expect(overridden.map((row) => row.overrideId)).toEqual([
+      disputeOverride().id,
+      waiveOverride().id,
+    ]);
+
+    const uncounted = factoryReadinessPresentation(
+      readiness({
+        status: "blocked",
+        edges: [edge({ resolution: "unverified", status: "removed-at-source" })],
+      }),
+      observedMs,
+    ).edgeRows;
+    expect(uncounted[0]?.overrideAction).toBeNull();
+
+    const closed = factoryReadinessPresentation(
+      readiness({ status: "not-applicable", edges: [edge()] }),
+      observedMs,
+    ).edgeRows;
+    expect(closed[0]?.overrideAction).toBeNull();
+  });
+
+  it("carries the fingerprint each override will bind to", () => {
+    const [row] = factoryReadinessPresentation(
+      readiness({ status: "blocked", edges: [edge({ fingerprint: "digest-v1-abc" })] }),
+      observedMs,
+    ).edgeRows;
+    expect(row).toMatchObject({
+      key: "github.com:7007",
+      targetHost: "github.com",
+      targetId: 7007,
+      fingerprint: "digest-v1-abc",
+    });
+  });
+
+  it("labels an override in effect with its kind and reason", () => {
+    const rows = factoryReadinessPresentation(
+      readiness({
+        status: "blocked",
+        edges: [
+          edge({ override: disputeOverride().id }),
+          edge({ targetId: 8008, resolution: "deleted", override: waiveOverride().id }),
+          // An active id the result does not list still reads as overridden, not as untouched.
+          edge({ targetId: 9009, override: FactoryReadinessOverrideId.make("missing") }),
+          edge({ targetId: 1001 }),
+        ],
+        overrides: [disputeOverride(), waiveOverride({ targetId: 8008 })],
+      }),
+      observedMs,
+    ).edgeRows;
+    expect(rows.map((row) => row.overrideLabel)).toEqual([
+      "Disputed: Closed by a bot, not finished.",
+      "Waived: Deleted upstream and retired by hand.",
+      "Override in effect",
+      null,
+    ]);
+  });
+
+  it("lists lapsed and revoked overrides apart, labelled for what happened to them", () => {
+    const { edgeRows, inactiveOverrides } = factoryReadinessPresentation(
+      readiness({
+        status: "blocked",
+        edges: [edge({ resolution: "deleted", override: waiveOverride().id })],
+        overrides: [
+          waiveOverride(),
+          disputeOverride({
+            id: FactoryReadinessOverrideId.make("override-lapsed"),
+            status: "lapsed",
+            reason: "Was disputed before the blocker reopened.",
+          }),
+          waiveOverride({
+            id: FactoryReadinessOverrideId.make("override-revoked"),
+            targetId: 4242,
+            status: "revoked",
+            revokedAt: "2026-10-25T11:00:00.000Z",
+          }),
+        ],
+      }),
+      observedMs,
+    );
+    // Only the active one is applied to its edge.
+    expect(edgeRows.map((row) => row.overrideLabel)).toEqual([
+      "Waived: Deleted upstream and retired by hand.",
+    ]);
+    expect(inactiveOverrides).toEqual([
+      {
+        key: "override-lapsed",
+        locator: "owner/repo#7",
+        kindLabel: "Dispute",
+        statusLabel: "No longer applies",
+        reason: "Was disputed before the blocker reopened.",
+        createdAt: observedAt,
+        revokedAt: null,
+      },
+      {
+        key: "override-revoked",
+        // The edge itself is no longer listed, so the identity stands in for the locator.
+        locator: "github.com:4242",
+        kindLabel: "Waiver",
+        statusLabel: "Revoked",
+        reason: "Deleted upstream and retired by hand.",
+        createdAt: observedAt,
+        revokedAt: "2026-10-25T11:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("says when a verdict rests on waivers, counting only waivers in effect", () => {
+    const ready = factoryReadinessPresentation(
+      readiness({
+        status: "ready",
+        basis: "override",
+        edges: [
+          edge({ resolution: "deleted", override: waiveOverride().id }),
+          edge({
+            targetId: 8008,
+            resolution: "moved",
+            override: FactoryReadinessOverrideId.make("override-second"),
+          }),
+          edge({ targetId: 9009 }),
+        ],
+        overrides: [
+          waiveOverride(),
+          waiveOverride({ id: FactoryReadinessOverrideId.make("override-second"), targetId: 8008 }),
+          waiveOverride({
+            id: FactoryReadinessOverrideId.make("override-revoked"),
+            targetId: 9009,
+            status: "revoked",
+          }),
+        ],
+      }),
+      observedMs + 5 * 60_000,
+    );
+    expect(ready).toMatchObject({
+      label: "No unresolved blockers observed 5m ago · basis: override (2 waived)",
+      tone: "success",
+      stale: false,
+    });
+    const staleReady = factoryReadinessPresentation(
+      readiness({
+        status: "ready",
+        basis: "override",
+        edges: [edge({ resolution: "deleted", override: waiveOverride().id })],
+        overrides: [waiveOverride()],
+      }),
+      observedMs + FACTORY_READINESS_TTL_MS + 1,
+    );
+    expect(staleReady).toMatchObject({
+      label: "No unresolved blockers observed 10m ago · basis: override (1 waived) · stale",
+      tone: "info",
+    });
+    expect(
+      factoryReadinessPresentation(readiness({ status: "ready", basis: "source" }), observedMs)
+        .label,
+    ).toBe("No unresolved blockers observed just now · basis: source");
+  });
+
+  it("counts a disputed blocker as unresolved and a waived one as resolved", () => {
+    const mixed = factoryReadinessPresentation(
+      readiness({
+        status: "blocked",
+        reasons: ["overridden-not-ready", "open-blocker"],
+        edges: [
+          edge({ override: disputeOverride().id }),
+          edge({ targetId: 8008, resolution: "deleted", override: waiveOverride().id }),
+          edge({ targetId: 9009, state: "open", stateReason: null, resolution: "open" }),
+          edge({ targetId: 1001 }),
+        ],
+        overrides: [disputeOverride(), waiveOverride({ targetId: 8008 })],
+      }),
+      observedMs,
+    );
+    expect(mixed.label).toBe("Blocked: 2 unresolved blockers (1 disputed)");
+    const onlyDisputed = factoryReadinessPresentation(
+      readiness({
+        status: "blocked",
+        reasons: ["overridden-not-ready"],
+        edges: [edge({ override: disputeOverride().id })],
+        overrides: [disputeOverride()],
+      }),
+      observedMs,
+    );
+    expect(onlyDisputed).toMatchObject({
+      label: "Blocked: 1 unresolved blocker (1 disputed)",
+      tone: "warning",
+    });
+  });
+
+  it("locks new decisions on a stale or partial observation but never revoking", () => {
+    const stale = factoryReadinessPresentation(
+      readiness({
+        status: "blocked",
+        edges: [edge({ override: disputeOverride().id }), edge({ targetId: 8008 })],
+        overrides: [disputeOverride()],
+      }),
+      observedMs + FACTORY_READINESS_TTL_MS + 1,
+    );
+    expect(stale.overridesLockedReason).toBe(
+      "This observation is stale. Refresh before changing overrides.",
+    );
+    // Revoking carries no fingerprint, so an old observation still allows it.
+    expect(stale.edgeRows[0]?.overrideId).toBe(disputeOverride().id);
+
+    const partial = factoryReadinessPresentation(
+      readiness({ status: "unknown", complete: false, reasons: ["partial-listing"] }),
+      observedMs,
+    );
+    expect(partial.overridesLockedReason).toBe(
+      "The blocker list is incomplete. Refresh before changing overrides.",
+    );
+    expect(factoryReadinessPresentation(readiness(), observedMs).overridesLockedReason).toBeNull();
+  });
+});
+
+describe("factoryFrontierPresentation", () => {
+  function frontier(
+    overrides: Partial<FactoryIssueFrontierReadResult> = {},
+  ): FactoryIssueFrontierReadResult {
+    return {
+      repository: {
+        provider: "github",
+        host: "github.com",
+        repository: "owner/repo",
+        canonicalKey: "github.com/owner/repo",
+        url: "https://github.com/owner/repo",
+      },
+      parentIssueNumber: 2,
+      parentTitle: "Map",
+      complete: true,
+      summaryTotal: 0,
+      children: [],
+      observedAt,
+      ...overrides,
+    };
+  }
+  const child = (
+    number: number,
+    overrides: Partial<FactoryIssueFrontierReadResult["children"][number]> = {},
+  ): FactoryIssueFrontierReadResult["children"][number] => ({
+    number,
+    title: `Child ${number}`,
+    state: "open",
+    url: `https://github.com/owner/repo/issues/${number}`,
+    assignees: [],
+    readiness: readiness(),
+    ...overrides,
+  });
+
+  it("lists children in the tracker's order with each one's own verdict", () => {
+    const { rows, note, stale } = factoryFrontierPresentation(
+      frontier({
+        summaryTotal: 5,
+        children: [
+          child(9),
+          child(3, { state: "closed", readiness: null }),
+          child(5, {
+            readiness: readiness({ status: "blocked", edges: [edge({ resolution: "open" })] }),
+          }),
+          child(4, { readiness: null, assignees: ["alice", "bob"] }),
+          child(7, {
+            readiness: readiness({
+              status: "ready",
+              basis: "override",
+              edges: [edge({ resolution: "deleted", override: waiveOverride().id })],
+              overrides: [waiveOverride()],
+            }),
+          }),
+        ],
+      }),
+      observedMs + 5 * 60_000,
+    );
+    // Source order, not numeric order and not readiness order.
+    expect(rows.map((row) => row.number)).toEqual([9, 3, 5, 4, 7]);
+    expect(rows.map((row) => [row.verdictLabel, row.tone])).toEqual([
+      ["No unresolved blockers observed 5m ago · basis: source", "success"],
+      ["Closed", "neutral"],
+      ["Blocked: 1 unresolved blocker", "warning"],
+      ["Not observed", "info"],
+      ["No unresolved blockers observed 5m ago · basis: override (1 waived)", "success"],
+    ]);
+    expect(rows[3]).toMatchObject({
+      assignees: ["alice", "bob"],
+      assigneesLabel: "alice, bob",
+    });
+    expect(rows[0]).toMatchObject({
+      key: "9",
+      title: "Child 9",
+      url: "https://github.com/owner/repo/issues/9",
+      state: "open",
+      assigneesLabel: "Unassigned",
+    });
+    expect(note).toBeNull();
+    expect(stale).toBe(false);
+  });
+
+  it("treats a closed child as closed even if a verdict came back with it", () => {
+    const { rows } = factoryFrontierPresentation(
+      frontier({ children: [child(3, { state: "closed", readiness: readiness() })] }),
+      observedMs,
+    );
+    expect(rows[0]).toMatchObject({ verdictLabel: "Closed", tone: "neutral", state: "closed" });
+  });
+
+  it("keeps remote text inert: no unsafe link and a fallback title", () => {
+    const { rows } = factoryFrontierPresentation(
+      frontier({
+        children: [child(3, { url: "javascript:alert(1)", title: "   " })],
+      }),
+      observedMs,
+    );
+    expect(rows[0]).toMatchObject({ url: null, title: "Title unavailable" });
+  });
+
+  it("reports an incomplete enumeration instead of presenting it as the whole list", () => {
+    const partial = factoryFrontierPresentation(
+      frontier({ complete: false, summaryTotal: 17, children: [child(3), child(4)] }),
+      observedMs,
+    );
+    expect(partial.note).toBe(
+      "Incomplete: GitHub reports 17 sub-issues, 2 listed here. This list may be missing some.",
+    );
+    expect(
+      factoryFrontierPresentation(frontier({ complete: false, summaryTotal: 1 }), observedMs).note,
+    ).toBe("Incomplete: GitHub reports 1 sub-issue, 0 listed here. This list may be missing some.");
+    expect(
+      factoryFrontierPresentation(frontier({ complete: false, summaryTotal: null }), observedMs)
+        .note,
+    ).toBe(
+      "Incomplete: GitHub did not report how many sub-issues exist, so this list may be missing some.",
+    );
+  });
+
+  it("marks the whole observation stale once it is older than the TTL", () => {
+    expect(
+      factoryFrontierPresentation(frontier(), observedMs + FACTORY_READINESS_TTL_MS).stale,
+    ).toBe(false);
+    expect(
+      factoryFrontierPresentation(frontier(), observedMs + FACTORY_READINESS_TTL_MS + 1).stale,
+    ).toBe(true);
+  });
+});
+
+describe("readiness override submission", () => {
+  const base = { canOperate: true, pending: false, changed: false, reason: "Retired by hand." };
+
+  it("needs operate, a non-blank reason within the bound, no request in flight and no lockout", () => {
+    expect(isFactoryOverrideSubmitEnabled(base)).toBe(true);
+    expect(isFactoryOverrideSubmitEnabled({ ...base, canOperate: false })).toBe(false);
+    expect(isFactoryOverrideSubmitEnabled({ ...base, pending: true })).toBe(false);
+    expect(isFactoryOverrideSubmitEnabled({ ...base, changed: true })).toBe(false);
+    expect(isFactoryOverrideSubmitEnabled({ ...base, reason: "" })).toBe(false);
+    expect(isFactoryOverrideSubmitEnabled({ ...base, reason: " \n\t " })).toBe(false);
+    const atLimit = "x".repeat(FACTORY_READINESS_OVERRIDE_REASON_MAX_CHARS);
+    expect(isFactoryOverrideSubmitEnabled({ ...base, reason: atLimit })).toBe(true);
+    expect(isFactoryOverrideSubmitEnabled({ ...base, reason: `${atLimit}x` })).toBe(false);
+  });
+
+  it("sends the fingerprint the reviewer saw and the kind that matches the action", () => {
+    const row = {
+      targetHost: "github.com",
+      targetId: 7007,
+      fingerprint: "digest-v1-abc",
+    };
+    const common = {
+      commandId: CommandId.make("command-1"),
+      projectId: ProjectId.make("project"),
+      issueNumber: 12,
+      row,
+      reason: "  Retired by hand.  ",
+    };
+    expect(buildFactoryReadinessOverrideInput({ ...common, action: "waive" })).toEqual({
+      commandId: "command-1",
+      projectId: "project",
+      issueNumber: 12,
+      targetHost: "github.com",
+      targetId: 7007,
+      expectedFingerprint: "digest-v1-abc",
+      kind: "waive",
+      reason: "Retired by hand.",
+    });
+    expect(buildFactoryReadinessOverrideInput({ ...common, action: "dispute" }).kind).toBe(
+      "force-not-ready",
+    );
   });
 });

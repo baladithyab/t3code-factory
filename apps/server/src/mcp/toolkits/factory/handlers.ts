@@ -72,6 +72,13 @@ export const layer = McpToolAccess.toLayer(FactoryToolkit, {
       return yield* relations.read(input).pipe(Effect.mapError(failure));
     }),
   ),
+  factory_read_issue_frontier: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      yield* readCaller();
+      const relations = yield* Relations.FactoryIssueRelations;
+      return yield* relations.readFrontier(input).pipe(Effect.mapError(failure));
+    }),
+  ),
   factory_start_issue: McpToolAccess.startsThreads(
     (input) => input,
     (input, modes) =>

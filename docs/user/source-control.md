@@ -296,6 +296,45 @@ This is observed evidence, not a gate. It never enables, disables, or blocks **S
 needs `orchestration:read` and records the blockers seen in this server's local database. Agents
 can read the same evidence with the read-only `factory_read_issue_readiness`.
 
+#### Dispute or waive one blocker
+
+Beside each blocker, **Dispute** or **Waive** records your own decision about that one blocker.
+It needs `orchestration:operate` and a current, complete observation; a stale or partial one asks
+you to **Refresh** first. Both ask for a reason of up to 1024 characters, which is shown beside
+the blocker and kept afterwards. The decision is tied to the blocker as you saw it. If the
+blocker changed in the meantime, the dialog stays open with the error and cannot be sent again:
+close it, refresh, and review the blocker again.
+
+- **Dispute** is offered on a blocker GitHub shows as completed. The issue then reads as blocked,
+  for example "Blocked: 1 unresolved blocker (1 disputed)", until you revoke the dispute or the
+  blocker changes.
+- **Waive** is offered only on a blocker that can no longer be checked on GitHub: deleted,
+  inaccessible, moved, or unverified. A waived blocker is not counted. When that is what lets the
+  issue read clear, the line says so: "No unresolved blockers observed 3m ago · basis: override
+  (1 waived)".
+- Open blockers, and ones closed as not planned, as a duplicate, or without a reason, offer
+  neither action. Resolve those on GitHub.
+
+**Revoke** removes a dispute or waiver at any time. A decision also stops applying on its own
+when the blocker changes, such as a disputed blocker reopening or a waived one becoming readable
+again. Revoked decisions and ones that no longer apply stay listed under **Past overrides**, with
+their reason, as "Revoked" and "No longer applies". Decisions live in this server's local database
+and change nothing on GitHub. Agents cannot record or revoke one, and a decision never enables,
+disables, or blocks starting work.
+
+#### See an issue's sub-issues
+
+Under **Blockers**, **Sub-issues** lists the issue's native GitHub sub-issues in the order GitHub
+records them, each with its link, title, assignees, and a verdict worded like the Blockers line:
+"Closed" for a closed sub-issue and "Not observed" when its blockers could not be read. It stays
+collapsed until you open it; opening reads from GitHub, and **Refresh** reads again. If GitHub
+reports more sub-issues than were read, or does not report a count, a warning says the list may
+be missing some. Assignees are shown for context and never change a verdict.
+
+This is a planning view, not a queue: it does not pick a next issue, order work, or start
+anything, and there is no batch action. Agents can read the same list with the read-only
+`factory_read_issue_frontier`.
+
 ### Start a task from a feed item
 
 Open **Factory → Sources** and choose a checkout. Bind a public RSS 2.0 or Atom 1.0 feed by

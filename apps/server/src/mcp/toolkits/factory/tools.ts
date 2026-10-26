@@ -5,6 +5,8 @@ import {
   FactoryIssueReadResult,
   FactoryIssueReadinessReadInput,
   FactoryIssueReadinessReadResult,
+  FactoryIssueFrontierReadInput,
+  FactoryIssueFrontierReadResult,
   FactoryIssueStartInput,
   FactoryIssueStartResult,
   FactoryFeedCandidateListInput,
@@ -65,6 +67,20 @@ const readiness = Tool.make("factory_read_issue_readiness", {
     "Read observed GitHub blocker evidence and derived issue readiness. Returns observed evidence, not permission to start work. Incomplete or inaccessible evidence remains unknown. This read never starts work or changes GitHub.",
   parameters: FactoryIssueReadinessReadInput,
   success: FactoryIssueReadinessReadResult,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+const frontier = Tool.make("factory_read_issue_frontier", {
+  ...shared,
+  dependencies: [
+    Relations.FactoryIssueRelations,
+    Threads.ThreadManagementService,
+    McpInvocationContext.McpInvocationContext,
+  ],
+  description:
+    "Read a parent's native GitHub sub-issues in source order, with assignees and per-child blocker evidence. Incomplete enumeration is reported. Readiness is evidence, not permission to start work; this tool never starts work, applies overrides, or changes GitHub.",
+  parameters: FactoryIssueFrontierReadInput,
+  success: FactoryIssueFrontierReadResult,
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
@@ -137,6 +153,7 @@ export const FactoryToolkit = Toolkit.make(
   list,
   read,
   readiness,
+  frontier,
   start,
   getOrchestrator,
   startOrchestrator,
