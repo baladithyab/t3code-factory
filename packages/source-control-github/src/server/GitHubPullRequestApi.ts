@@ -688,6 +688,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly removeAgentCreditsOnMerge?: boolean;
       readonly mergeMethod?: PullRequestMergeMethod;
       readonly updateMethod?: PullRequestUpdateMethod;
+      readonly expectedHeadSha?: string;
     }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
     readonly commentOnPullRequest: (input: {
@@ -706,6 +707,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly verdict: PullRequestReviewVerdict;
       readonly body: string;
       readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
+      readonly commitId?: string;
     }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
     readonly replyToReviewThread: (input: {
@@ -2618,13 +2620,13 @@ export const make = Effect.gen(function* () {
           return yield* client
             .UpdatePullRequestBranch({
               pullRequestId: state.id,
-              expectedHeadOid: state.headRefOid,
+              expectedHeadOid: input.expectedHeadSha ?? state.headRefOid,
               updateMethod: input.updateMethod === "rebase" ? "REBASE" : "MERGE",
             })
             .pipe(graphql(target), Effect.asVoid);
         }
         let body: string | undefined;
-        let expectedHead: string | undefined;
+        let expectedHead: string | undefined = input.expectedHeadSha;
         if (input.removeAgentCreditsOnMerge === true && input.mergeMethod !== "rebase") {
           const message = yield* client
             .PullRequestMergeMessage({
@@ -2643,7 +2645,7 @@ export const make = Effect.gen(function* () {
             const cleaned = removeAgentCredits(message.viewerMergeBodyText);
             if (cleaned !== message.viewerMergeBodyText) {
               body = cleaned;
-              expectedHead = message.headRefOid;
+              expectedHead ??= message.headRefOid;
             }
           }
         }
@@ -2689,6 +2691,7 @@ export const make = Effect.gen(function* () {
             verdict: input.verdict,
             body: input.body,
             comments: input.comments,
+            ...(input.commitId === undefined ? {} : { commitId: input.commitId }),
           }),
         })
         .pipe(Effect.asVoid);

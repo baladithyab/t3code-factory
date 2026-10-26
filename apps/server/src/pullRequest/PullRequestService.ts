@@ -2016,6 +2016,9 @@ export const make = Effect.gen(function* () {
                     ...(input.updateMethod === undefined
                       ? {}
                       : { updateMethod: input.updateMethod }),
+                    ...(input.expectedHeadSha === undefined
+                      ? {}
+                      : { expectedHeadSha: input.expectedHeadSha }),
                   })
                   .pipe(
                     Effect.ensuring(
@@ -2201,6 +2204,7 @@ export const make = Effect.gen(function* () {
                 verdict: input.verdict,
                 body: input.body,
                 comments: input.comments,
+                ...(input.commitId === undefined ? {} : { commitId: input.commitId }),
               })
               .pipe(Effect.mapError(toPullRequestError("submitReview")));
           }),

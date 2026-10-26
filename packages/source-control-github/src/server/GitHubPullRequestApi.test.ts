@@ -2187,6 +2187,91 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
+  layer("exact head pinning", (it) => {
+    // GitHub enforces expectedHeadOid itself; the stand-in refuses a pin that is not the head.
+    const refuseStaleHead = () => {
+      const answer = mockedExecute.getMockImplementation()!;
+      mockedExecute.mockImplementation((call) =>
+        call.kind === "graphql" &&
+        call.query.startsWith("mutation ") &&
+        [call.variables?.["input"], call.variables].some(
+          (vars) =>
+            typeof vars === "object" &&
+            vars !== null &&
+            "expectedHeadOid" in vars &&
+            vars.expectedHeadOid !== "abc123",
+        )
+          ? Effect.fail(
+              new GitHubRequestPolicy.GitHubApiResponseError({
+                host: call.host,
+                operation: call.operation,
+                status: 422,
+              }),
+            )
+          : answer(call),
+      );
+    };
+
+    it.effect.each(["merge", "update-branch"] as const)(
+      "rejects %s against a stale head and is unchanged without a pin",
+      (action) =>
+        Effect.gen(function* () {
+          route(["query PullRequestActionState", actionState()]);
+          refuseStaleHead();
+          const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+          const run = (expectedHeadSha?: string) =>
+            cli.runPullRequestAction({
+              cwd: "/w",
+              repository: "acme/web",
+              host: "github.com",
+              number: 7,
+              action,
+              ...(expectedHeadSha === undefined ? {} : { expectedHeadSha }),
+            });
+          const mutation = action === "merge" ? "mergePullRequest(" : "updatePullRequestBranch(";
+
+          const stale = yield* Effect.result(run("stale000"));
+          expect(stale._tag).toBe("Failure");
+
+          yield* run("abc123");
+          yield* run();
+          const pins = variablesOf(mutation).map((vars) =>
+            action === "merge"
+              ? (vars["input"] as Record<string, unknown>)["expectedHeadOid"]
+              : vars["expectedHeadOid"],
+          );
+          // The stale attempt is sent and refused; an unpinned merge sends no pin at all, and an
+          // unpinned update-branch pins the head it just read, as before.
+          expect(pins).toEqual(["stale000", "abc123", action === "merge" ? undefined : "abc123"]);
+        }),
+    );
+
+    it.effect("posts a review against the commit it was written for, and none otherwise", () =>
+      Effect.gen(function* () {
+        route();
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        const submit = (commitId?: string) =>
+          cli.submitReview({
+            cwd: "/w",
+            repository: "acme/web",
+            host: "github.com",
+            number: 7,
+            verdict: "approve",
+            body: "",
+            comments: [],
+            ...(commitId === undefined ? {} : { commitId }),
+          });
+
+        yield* submit("abc123");
+        yield* submit();
+
+        const [pinned, unpinned] = restCallsTo("pulls/7/reviews");
+        expect(pinned?.body).toMatchObject({ commit_id: "abc123" });
+        expect(unpinned?.body).not.toHaveProperty("commit_id");
+      }),
+    );
+  });
+
   it.effect("does not approve action-required runs for a same-repository pull request", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(

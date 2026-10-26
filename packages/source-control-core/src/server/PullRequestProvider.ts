@@ -467,6 +467,7 @@ export interface PullRequestProviderApi {
       readonly removeAgentCreditsOnMerge?: boolean;
       readonly mergeMethod?: PullRequestMergeMethod;
       readonly updateMethod?: PullRequestUpdateMethod;
+      readonly expectedHeadSha?: string;
     },
   ) => Effect.Effect<void, PullRequestProviderError>;
 
@@ -507,6 +508,7 @@ export interface PullRequestProviderApi {
       readonly verdict: PullRequestReviewVerdict;
       readonly body: string;
       readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
+      readonly commitId?: string;
     },
   ) => Effect.Effect<void, PullRequestProviderError>;
 
