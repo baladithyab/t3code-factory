@@ -426,6 +426,7 @@ function FactoryInbox(props: {
           ) : (
             <FactoryIssueWorkView
               key={`${data.repository.canonicalKey}:${page}`}
+              environmentId={environmentId}
               mode={mode}
               issues={data.issues}
               canStart={canStart}

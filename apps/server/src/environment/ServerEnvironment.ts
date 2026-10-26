@@ -217,6 +217,7 @@ export const make = Effect.gen(function* () {
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {
       factoryIssues: true,
+      factoryReadiness: true,
       factoryFeeds: true,
       projectCoordinators: true,
       repositoryIdentity: true,

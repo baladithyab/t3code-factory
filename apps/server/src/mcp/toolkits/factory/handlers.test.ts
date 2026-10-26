@@ -20,6 +20,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Factory from "../../../factory/FactoryIssueService.ts";
+import * as Relations from "../../../factory/FactoryIssueRelations.ts";
 import * as Feeds from "../../../factory/FactoryFeedService.ts";
 import { DispatchModeLimit } from "../../../orchestration-v2/DispatchModeLimit.ts";
 import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -163,6 +164,65 @@ it.effect("refuses a focused issue read without orchestration capability before 
     assert.deepInclude(outputs.at(-1)?.result, { code: "capability_denied" });
     assert.isFalse(called);
   }),
+);
+
+it.effect.each([true, false])(
+  "read-only readiness requires orchestration capability: %s",
+  (allowed) =>
+    Effect.gen(function* () {
+      let called = false;
+      const result = {
+        repository: {
+          provider: "github" as const,
+          host: "github.com",
+          repository: "owner/repo",
+          canonicalKey: "github.com/owner/repo",
+          url: "https://github.com/owner/repo",
+        },
+        issueNumber: 12,
+        readiness: {
+          status: "ready" as const,
+          reasons: [],
+          edges: [],
+          complete: true,
+          listedCount: 0,
+          summaryTotal: 0,
+          observedAt: "2026-10-25T00:00:00.000Z",
+        },
+      };
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(Context.McpInvocationContext, {
+          environmentId: EnvironmentId.make("test"),
+          requestNamespace: "readiness-test",
+          issuedAt: 0,
+          thread: undefined,
+          client: { sessionId: "test", label: "test", access: "read-only" },
+          capabilities: new Set<Context.McpCapability>(allowed ? ["orchestration"] : ["worktree"]),
+        }),
+        Layer.mock(Threads.ThreadManagementService)({}),
+        Layer.mock(Relations.FactoryIssueRelations)({
+          read: () =>
+            Effect.sync(() => {
+              called = true;
+              return result;
+            }),
+        }),
+      );
+      const toolkit = yield* FactoryToolkit.pipe(
+        Effect.provide(
+          Access.HandlersLayer.layer(Handlers.layer).pipe(Layer.provide(dependencies)),
+        ),
+      );
+      const outputs = yield* toolkit
+        .handle("factory_read_issue_readiness", {
+          projectId: ProjectId.make("project"),
+          issueNumber: 12,
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      if (allowed) assert.deepEqual(outputs.at(-1)?.result, result);
+      else assert.deepInclude(outputs.at(-1)?.result, { code: "capability_denied" });
+      assert.equal(called, allowed);
+    }),
 );
 
 it.effect.each([

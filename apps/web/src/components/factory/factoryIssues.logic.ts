@@ -1,13 +1,19 @@
 import {
   EnvironmentAuthorizationError,
+  FACTORY_READINESS_TTL_MS,
   FactoryIssueError,
   type EnvironmentId,
   type FactoryIssue,
   type FactoryIssueListInput,
   type FactoryIssueTask,
+  type FactoryReadiness,
+  type FactoryReadinessEdge,
+  type FactoryReadinessReason,
   type ProjectId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+
+import { formatRelativeTimeLabel } from "../../timestampFormat";
 
 export type FactoryIssueStateFilter = NonNullable<FactoryIssueListInput["state"]>;
 
@@ -231,4 +237,156 @@ export function factoryScopeKey(
   state: FactoryIssueStateFilter,
 ): string {
   return JSON.stringify([environmentId, projectId, state]);
+}
+
+export type FactoryReadinessTone = "success" | "warning" | "info" | "neutral";
+
+export interface FactoryReadinessEdgeRow {
+  /** Identity is the tracker's database id; repository and number are only a locator. */
+  readonly key: string;
+  readonly locator: string;
+  readonly url: string | null;
+  readonly title: string;
+  readonly stateLabel: string;
+  readonly closedAt: string | null;
+  readonly resolutionLabel: string;
+  readonly statusLabel: string;
+}
+
+export interface FactoryReadinessPresentation {
+  readonly label: string;
+  readonly tone: FactoryReadinessTone;
+  readonly stale: boolean;
+  readonly edgeRows: ReadonlyArray<FactoryReadinessEdgeRow>;
+}
+
+// Keyed by the contract's reason union, so a new server reason fails to compile here instead of
+// reaching the screen as a raw token.
+const READINESS_REASON_LABELS: Record<FactoryReadinessReason, string> = {
+  "closed-subject": "the issue is closed",
+  "open-blocker": "a blocker is still open",
+  "unaccepted-blocker": "a blocker was closed without completion",
+  "deleted-blocker": "a blocker was deleted",
+  "inaccessible-blocker": "a blocker is not accessible",
+  "moved-blocker": "a blocker moved",
+  "unverified-blocker": "a blocker could not be verified",
+  "partial-listing": "GitHub returned only part of the blocker list",
+  "summary-missing": "GitHub did not report how many blockers exist",
+  "truncated-response": "the blocker list was truncated",
+  "invalid-response": "GitHub returned a response that could not be read",
+  authentication: "GitHub sign-in is required",
+  "rate-limited": "the GitHub rate limit was reached",
+  "remote-failure": "GitHub could not be reached",
+  cycle: "the blockers form a cycle",
+};
+
+function edgeStateLabel(edge: FactoryReadinessEdge): string {
+  if (edge.state === "open") return "Open";
+  if (edge.state === "closed") {
+    // Reasons arrive as tracker tokens such as `not_planned`; show them as words.
+    return edge.stateReason === null
+      ? "Closed"
+      : `Closed · ${edge.stateReason.replaceAll("_", " ")}`;
+  }
+  return "State unknown";
+}
+
+function edgeResolutionLabel(edge: FactoryReadinessEdge): string {
+  // The tracker removed this dependency; that is its call and the server does not count it.
+  if (edge.status === "removed-at-source") return "Not counted, removed at source";
+  switch (edge.resolution) {
+    case "accepted":
+      return "Accepted";
+    case "open":
+      return "Open, unresolved";
+    case "closed-unaccepted":
+      return edge.stateReason === null
+        ? "Closed, not accepted (no reason recorded)"
+        : `Closed, not accepted (${edge.stateReason.replaceAll("_", " ")})`;
+    case "deleted":
+      return "Deleted, counts as unresolved";
+    case "inaccessible":
+      return "Inaccessible, cannot verify";
+    case "moved":
+      return "Moved, cannot verify";
+    case "unverified":
+      return "Could not be verified";
+  }
+}
+
+function edgeStatusLabel(status: FactoryReadinessEdge["status"]): string {
+  switch (status) {
+    case "present":
+      return "Listed";
+    case "removed-at-source":
+      return "No longer listed";
+    case "deleted":
+      return "Deleted at source";
+    case "inaccessible":
+      return "Inaccessible";
+    case "moved":
+      return "Moved";
+    case "unverified":
+      return "Unverified";
+  }
+}
+
+function edgeRow(edge: FactoryReadinessEdge): FactoryReadinessEdgeRow {
+  const title = edge.title?.trim() ?? "";
+  return {
+    key: `${edge.targetHost}:${edge.targetId}`,
+    locator: `${edge.targetRepository}#${edge.targetNumber}`,
+    url: safeExternalUrl(edge.targetUrl),
+    title: title.length > 0 ? title : "Title unavailable",
+    stateLabel: edgeStateLabel(edge),
+    closedAt: edge.closedAt,
+    resolutionLabel: edgeResolutionLabel(edge),
+    statusLabel: edgeStatusLabel(edge.status),
+  };
+}
+
+/**
+ * Wording for observed blocker evidence. It never says "Ready": the line reports what was seen and
+ * when, and nothing here gates starting work. A stale observation (or one whose time cannot be
+ * read) is marked rather than hidden, and no longer reads as a positive signal.
+ */
+export function factoryReadinessPresentation(
+  readiness: FactoryReadiness,
+  now: number,
+): FactoryReadinessPresentation {
+  const stale = !(now - Date.parse(readiness.observedAt) <= FACTORY_READINESS_TTL_MS);
+  let label: string;
+  let tone: FactoryReadinessTone;
+  switch (readiness.status) {
+    case "ready": {
+      const observed = formatRelativeTimeLabel(readiness.observedAt, now);
+      label = `No unresolved blockers observed ${observed} · basis: source`;
+      tone = stale ? "info" : "success";
+      break;
+    }
+    case "blocked": {
+      const unresolved = readiness.edges.filter(
+        (edge) => edge.status !== "removed-at-source" && edge.resolution !== "accepted",
+      ).length;
+      label = `Blocked: ${unresolved} unresolved ${unresolved === 1 ? "blocker" : "blockers"}`;
+      tone = "warning";
+      break;
+    }
+    case "unknown": {
+      const reason = readiness.reasons[0];
+      label = `Readiness unknown: ${reason === undefined ? "no reason reported" : READINESS_REASON_LABELS[reason]}`;
+      tone = "info";
+      break;
+    }
+    case "not-applicable":
+      label = "Not applicable (closed)";
+      tone = "neutral";
+      break;
+  }
+  return {
+    label: stale ? `${label} · stale` : label,
+    tone,
+    stale,
+    edgeRows: readiness.edges.map(edgeRow),
+  };
 }

@@ -5,6 +5,7 @@ import {
   EnvironmentId,
   CommandId,
   FactoryFeedError,
+  FactoryIssueError,
   FactoryFeedSourceId,
   ProviderInstanceId,
   WsRpcGroup,
@@ -32,6 +33,7 @@ import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
+import * as FactoryIssueRelations from "./factory/FactoryIssueRelations.ts";
 import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
@@ -346,6 +348,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(PullRequestService.PullRequestService)({}),
   Layer.mock(FactoryIssueService.FactoryIssueService)({}),
+  Layer.mock(FactoryIssueRelations.FactoryIssueRelations)({}),
   Layer.mock(FactoryFeedService.FactoryFeedService)({}),
   Layer.mock(PullRequestSyncReactor.PullRequestSyncReactor)({}),
   Layer.mock(RelayClient.RelayClient)({}),
@@ -758,4 +761,72 @@ it.effect("routes all eight feed RPCs to the service without translating domain 
     ),
     Effect.scoped,
   ),
+);
+
+it.effect(
+  "routes readiness through the read-only service without translating repository errors",
+  () =>
+    Effect.gen(function* () {
+      const calls: unknown[] = [];
+      const services = Layer.mergeAll(
+        layerUnusedConfigRpcServices,
+        Layer.mock(ProjectCoordinatorService.ProjectCoordinatorService)({}),
+        Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+        Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+        Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+        Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+        Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+        Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+        Layer.mock(FactoryIssueRelations.FactoryIssueRelations)({
+          read: (input) =>
+            Effect.sync(() => {
+              calls.push(input);
+            }).pipe(
+              Effect.andThen(Effect.fail(new FactoryIssueError({ reason: "missing-repository" }))),
+            ),
+        }),
+      );
+      const method = WS_METHODS.factoryReadIssueReadiness;
+      const group = WsRpcGroup.omit(
+        ...[...WsRpcGroup.requests.keys()].filter(
+          (tag): tag is Exclude<keyof typeof RpcAuthorization.RPC_REQUIRED_SCOPES, typeof method> =>
+            tag !== method,
+        ),
+      );
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.merge(
+            layerWsRpc(
+              {
+                sessionId: AuthSessionId.make("readiness-test"),
+                subject: "readiness-test",
+                method: "browser-session-cookie",
+                scopes: [],
+              },
+              {},
+              {},
+              yield* PreviewAutomationBroker.PreviewAutomationBroker,
+              yield* ServerBrowser.ServerBrowser,
+            ).pipe(Layer.provide(services)),
+            RpcAuthorization.layer(["orchestration:read"]),
+          ),
+        ),
+      );
+      const input = { projectId: ProjectId.make("project"), issueNumber: 12 };
+      const result = yield* client[method](input).pipe(Effect.flip);
+      assert.instanceOf(result, FactoryIssueError);
+      assert.equal(result.reason, "missing-repository");
+      assert.deepEqual(calls, [input]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.fresh(layerConfigSources),
+          Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+          Layer.mock(ServerBrowser.ServerBrowser)({}),
+        ),
+      ),
+      Effect.scoped,
+    ),
 );

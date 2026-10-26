@@ -21,6 +21,8 @@ import {
   type FactoryFeedSourceBindInput,
   type FactoryFeedSourceRefreshInput,
   type FactoryFeedSourceUnbindInput,
+  type FactoryIssueReadinessReadInput,
+  type FactoryIssueReadinessReadResult,
   type ProjectCoordinator,
   type ProjectCoordinatorEnsureInput,
   type ProjectCoordinatorGetInput,
@@ -486,6 +488,93 @@ describe("Factory feed queries", () => {
         disposition: "all",
       });
     }).pipe(Effect.scoped),
+  );
+});
+
+describe("Factory issue readiness query", () => {
+  const readinessResult = (
+    issueNumber: number,
+    observedAt: string,
+  ): FactoryIssueReadinessReadResult => ({
+    repository: {
+      provider: "github",
+      host: "github.com",
+      repository: "example/repo",
+      canonicalKey: "github.com/example/repo",
+      url: "https://github.com/example/repo",
+    },
+    issueNumber,
+    readiness: {
+      status: "ready",
+      reasons: [],
+      edges: [],
+      complete: true,
+      listedCount: 0,
+      summaryTotal: 0,
+      observedAt,
+    },
+  });
+
+  it.effect(
+    "observes each environment and issue through its own request, and again on refresh",
+    () =>
+      Effect.gen(function* () {
+        const calls: FeedCall[] = [];
+        // Read access alone must be enough: readiness is evidence, not a guarded command.
+        const h = yield* makeEnvironmentHarness(
+          (id) => ({
+            [WS_METHODS.factoryReadIssueReadiness]: (input: FactoryIssueReadinessReadInput) =>
+              Effect.sync(() => {
+                calls.push({
+                  method: WS_METHODS.factoryReadIssueReadiness,
+                  environmentId: id,
+                  input,
+                });
+                // The call count is the observation time (fewer than ten calls), so a refresh is
+                // distinguishable from a cache hit.
+                return readinessResult(input.issueNumber, `2026-10-25T12:0${calls.length}:00.000Z`);
+              }),
+          }),
+          [AuthOrchestrationReadScope],
+        );
+        const target = { environmentId, input: { projectId, issueNumber: 12 } };
+        const issue = h.atoms.readIssueReadiness(target);
+        expect(h.atoms.readIssueReadiness(target)).toBe(issue);
+        const otherIssue = h.atoms.readIssueReadiness({
+          environmentId,
+          input: { projectId, issueNumber: 13 },
+        });
+        const otherEnvironment = h.atoms.readIssueReadiness({
+          environmentId: otherEnvironmentId,
+          input: target.input,
+        });
+        for (const atom of [issue, otherIssue, otherEnvironment]) {
+          yield* AtomRegistry.mount(h.registry, atom);
+          yield* AtomRegistry.getResult(h.registry, atom, { suspendOnWaiting: true });
+        }
+        expect(calls).toEqual([
+          { method: WS_METHODS.factoryReadIssueReadiness, environmentId, input: target.input },
+          {
+            method: WS_METHODS.factoryReadIssueReadiness,
+            environmentId,
+            input: { projectId, issueNumber: 13 },
+          },
+          {
+            method: WS_METHODS.factoryReadIssueReadiness,
+            environmentId: otherEnvironmentId,
+            input: target.input,
+          },
+        ]);
+
+        const first = yield* AtomRegistry.getResult(h.registry, issue, { suspendOnWaiting: true });
+        expect(first.issueNumber).toBe(12);
+        expect(calls).toHaveLength(3);
+        h.registry.refresh(issue);
+        const second = yield* AtomRegistry.getResult(h.registry, issue, { suspendOnWaiting: true });
+        expect(calls).toHaveLength(4);
+        expect(calls[3]).toEqual(calls[0]);
+        expect(second.readiness.observedAt).not.toBe(first.readiness.observedAt);
+      }).pipe(Effect.scoped),
   );
 });
 

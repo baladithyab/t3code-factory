@@ -24,6 +24,13 @@ export function createFactoryEnvironmentAtoms<R, E>(
       tag: WS_METHODS.factoryListIssues,
       staleTimeMs: 0,
     }),
+    // Observed blocker evidence for one issue. `staleTimeMs: 0` makes every mount observe again and
+    // a refresh re-observe, since the server derives readiness on each read rather than caching it.
+    readIssueReadiness: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:factory:issue-readiness",
+      tag: WS_METHODS.factoryReadIssueReadiness,
+      staleTimeMs: 0,
+    }),
     start: createEnvironmentRpcCommand(runtime, {
       label: "environment-command:factory:start-issue",
       tag: WS_METHODS.factoryStartIssue,

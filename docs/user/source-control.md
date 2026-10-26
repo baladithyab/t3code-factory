@@ -275,6 +275,27 @@ saved prompt and settings; the live issue revision is not revalidated on that pa
 preserves reservations made before content-revision checking was added. A revision identifies
 content, not a human approval or permission to execute.
 
+### See observed blockers on an issue
+
+Choose **Details** on an open issue to see **Blockers**, read from the issue's "blocked by" links
+on GitHub. Factory asks GitHub when you expand Details, not for each row, and **Refresh** in
+that block asks again. The line says what was seen and when, such as "No unresolved blockers
+observed 3m ago · basis: source" or "Blocked: 2 unresolved blockers", and adds "stale" after
+10 minutes. "Readiness unknown" gives the first reason GitHub's answer could not settle it, such
+as a partial list, a missing sign-in, a rate limit, or an inaccessible blocker; it never means
+zero blockers. Closed issues show nothing, and the native mobile inbox does not show this block.
+
+A blocker counts as accepted only when GitHub shows it closed as completed, or as a merged pull
+request. Blockers that are open, deleted, or closed as not planned, as a duplicate, or without a
+reason count as unresolved. The table lists each blocker's state, resolution, and whether GitHub
+still lists the link; a link removed on GitHub stays visible but is not counted. Factory keeps no
+acceptance list of its own and never writes to GitHub.
+
+This is observed evidence, not a gate. It never enables, disables, or blocks **Start task**,
+**Resume launch**, or `factory_start_issue`, and it is not permission to start work. Reading it
+needs `orchestration:read` and records the blockers seen in this server's local database. Agents
+can read the same evidence with the read-only `factory_read_issue_readiness`.
+
 ### Start a task from a feed item
 
 Open **Factory → Sources** and choose a checkout. Bind a public RSS 2.0 or Atom 1.0 feed by

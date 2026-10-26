@@ -1,21 +1,31 @@
-import type { FactoryIssue, FactoryIssueTask, ProjectId } from "@t3tools/contracts";
+import type { EnvironmentId, FactoryIssue, FactoryIssueTask, ProjectId } from "@t3tools/contracts";
 import { ChevronDownIcon, CircleDotIcon } from "lucide-react";
 import { Fragment, useId, useState } from "react";
 
+import { useNowSecond } from "../../hooks/useNowSecond";
+import { factoryEnvironment, useFactoryReadinessSupported } from "../../state/factory";
+import { useEnvironmentQuery } from "../../state/query";
 import { RelativeTime } from "../RelativeTime";
+import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { RefreshIcon } from "../ui/refresh-icon";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import {
   boundedIssueBody,
+  describeFactoryFailure,
+  factoryReadinessPresentation,
   factoryTaskPresentation,
   resolveFactoryIssueAction,
   safeExternalUrl,
+  type FactoryReadinessTone,
 } from "./factoryIssues.logic";
 import { groupFactoryIssuesByStage, type FactoryIssueViewMode } from "./factoryIssues.views";
 
 const MAX_VISIBLE_LABELS = 5;
 
 type FactoryIssueWorkViewProps = {
+  readonly environmentId: EnvironmentId;
   readonly mode: FactoryIssueViewMode;
   readonly issues: ReadonlyArray<FactoryIssue>;
   readonly canStart: boolean;
@@ -33,11 +43,14 @@ type FactoryIssueWorkViewProps = {
 export function FactoryIssueWorkView(props: FactoryIssueWorkViewProps) {
   // The parent keys this component by repository and page, but not presentation mode.
   const [expandedIssues, setExpandedIssues] = useState<ReadonlySet<number>>(() => new Set());
+  const readinessSupported = useFactoryReadinessSupported(props.environmentId);
 
   const renderIssue = (issue: FactoryIssue) => (
     <FactoryIssueEntry
       key={issue.number}
       mode={props.mode}
+      environmentId={props.environmentId}
+      readinessSupported={readinessSupported}
       issue={issue}
       canStart={props.canStart}
       busy={props.busy}
@@ -135,6 +148,7 @@ function FactoryIssueEntry(
   props: Omit<FactoryIssueWorkViewProps, "issues" | "refreshing"> & {
     readonly issue: FactoryIssue;
     readonly expanded: boolean;
+    readonly readinessSupported: boolean;
     readonly onToggleDetails: () => void;
   },
 ) {
@@ -271,6 +285,13 @@ function FactoryIssueEntry(
           ) : null}
         </>
       )}
+      {issue.state === "open" && props.readinessSupported ? (
+        <FactoryIssueBlockers
+          environmentId={props.environmentId}
+          projectId={props.selectedProjectId}
+          issueNumber={issue.number}
+        />
+      ) : null}
     </div>
   ) : null;
 
@@ -314,5 +335,136 @@ function FactoryIssueEntry(
       </div>
       {details ? <div className="mt-3">{details}</div> : null}
     </li>
+  );
+}
+
+const READINESS_ALERT_VARIANT = {
+  success: "success",
+  warning: "warning",
+  info: "info",
+  neutral: "default",
+} as const satisfies Record<FactoryReadinessTone, "success" | "warning" | "info" | "default">;
+
+/**
+ * Observed blocker evidence for one open issue. It mounts only while Details is expanded, so the
+ * read happens once per expand: collapsing unmounts the query and expanding observes again.
+ * Nothing here reaches Start; the verdict is information and never a gate.
+ */
+function FactoryIssueBlockers(props: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly issueNumber: number;
+}) {
+  const headingId = useId();
+  const nowMs = useNowSecond();
+  const query = useEnvironmentQuery(
+    factoryEnvironment.readIssueReadiness({
+      environmentId: props.environmentId,
+      input: { projectId: props.projectId, issueNumber: props.issueNumber },
+    }),
+  );
+  const failure = query.error === null ? null : describeFactoryFailure(query.failure, query.error);
+  const presentation =
+    failure === null && query.data !== null
+      ? factoryReadinessPresentation(query.data.readiness, nowMs)
+      : null;
+  const refreshing = query.isPending;
+
+  return (
+    <div
+      role="group"
+      aria-labelledby={headingId}
+      aria-busy={refreshing}
+      className="mt-4 space-y-2 border-border/60 border-t pt-3"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p id={headingId} className="font-medium text-sm">
+          Blockers
+        </p>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={query.refresh}
+          disabled={refreshing}
+          aria-label={`Refresh blockers for issue #${props.issueNumber}`}
+        >
+          <RefreshIcon size="sm" refreshing={refreshing} />
+          Refresh
+        </Button>
+      </div>
+      {failure !== null ? (
+        <Alert variant="error">
+          <AlertTitle>{failure.title}</AlertTitle>
+          <AlertDescription>{failure.message}</AlertDescription>
+        </Alert>
+      ) : presentation === null ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          Observing blockers…
+        </p>
+      ) : (
+        <>
+          {/* A group, not the default alert role: the relative time changes every minute and must not be re-announced. */}
+          <Alert variant={READINESS_ALERT_VARIANT[presentation.tone]} role="group">
+            <AlertDescription>{presentation.label}</AlertDescription>
+          </Alert>
+          {presentation.edgeRows.length > 0 ? (
+            <Table>
+              <caption className="sr-only">Blockers of issue #{props.issueNumber}</caption>
+              <TableHeader>
+                <TableRow>
+                  <TableHead scope="col">Blocker</TableHead>
+                  <TableHead scope="col">Title</TableHead>
+                  <TableHead scope="col">State</TableHead>
+                  <TableHead scope="col">Resolution</TableHead>
+                  <TableHead scope="col">Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {presentation.edgeRows.map((row) => (
+                  <TableRow key={row.key}>
+                    <TableCell>
+                      {row.url !== null ? (
+                        <a
+                          href={row.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="underline-offset-4 hover:underline"
+                        >
+                          {row.locator}
+                        </a>
+                      ) : (
+                        row.locator
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <div className="min-w-40 max-w-96 whitespace-normal [overflow-wrap:anywhere]">
+                        {row.title}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      {row.stateLabel}
+                      {row.closedAt !== null ? (
+                        <>
+                          {" · "}
+                          <time dateTime={row.closedAt}>
+                            <RelativeTime timestamp={row.closedAt} />
+                          </time>
+                        </>
+                      ) : null}
+                    </TableCell>
+                    <TableCell>{row.resolutionLabel}</TableCell>
+                    <TableCell>{row.statusLabel}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : null}
+          <p className="text-muted-foreground text-xs">
+            Observed from GitHub blocked-by links. Evidence only: it never allows or prevents
+            starting work. Refresh observes again.
+          </p>
+        </>
+      )}
+    </div>
   );
 }
