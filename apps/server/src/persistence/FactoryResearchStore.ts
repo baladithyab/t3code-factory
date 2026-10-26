@@ -14,7 +14,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Struct from "effect/Struct";
 import * as SqlClient from "effect/sql/SqlClient";
 import { FactoryLaunchCore } from "../factory/FactoryTaskLaunch.ts";
 
@@ -34,7 +33,13 @@ const Binding = Schema.Struct({
   accepted: Schema.Literals([0, 1]),
 });
 export type FactoryResearchBinding = typeof Binding.Type;
-const Evidence = FactoryResearchObservation.mapFields(Struct.omit(["disposition"]));
+// Budget use is derived on read from the run lifecycle; the record time is kept as provenance.
+const Evidence = FactoryResearchObservation.mapFields(
+  ({ disposition: _disposition, elapsedMinutes, ...fields }) => ({
+    ...fields,
+    recordedAfterMinutes: elapsedMinutes,
+  }),
+);
 export type StoredEvidence = typeof Evidence.Type;
 export type RetainedArtifact = StoredEvidence["artifacts"][number] & {
   readonly content: Uint8Array | null;
@@ -186,9 +191,12 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const replay = yield* getRunByCommand(intent.requestCommandId);
         if (Option.isSome(replay)) {
+          // Same check as the service's first replay read: a concurrent request reusing this
+          // command id for another role must be refused, never handed that role's binding.
           if (
             replay.value.intent.protocolId !== intent.protocolId ||
-            replay.value.intent.projectId !== intent.projectId
+            replay.value.intent.projectId !== intent.projectId ||
+            replay.value.intent.role !== intent.role
           )
             return yield* new FactoryResearchError({ reason: "missing-run" });
           return replay.value;

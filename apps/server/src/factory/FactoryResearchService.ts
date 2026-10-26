@@ -5,6 +5,7 @@ import {
   FactoryResearchProtocolId,
   FactoryResearchError,
   FACTORY_RESEARCH_ARTIFACT_INLINE_MAX_BYTES,
+  FACTORY_RESEARCH_CITED_LINE_MAX_BYTES,
   FactoryResearchProtocol,
   type FactoryResearchObservation,
   FactoryResearchFinding,
@@ -34,8 +35,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as Hex from "effect/encoding/Hex";
 import * as Base64Url from "effect/encoding/Base64Url";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no incremental hash, and artifacts are hashed while streaming.
+import * as NodeCrypto from "node:crypto";
 import * as Store from "../persistence/FactoryResearchStore.ts";
 import * as Folders from "../project/ManagedProjectFolders.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
@@ -49,37 +53,116 @@ const encodeFinding = Schema.encodeSync(Schema.fromJsonString(FactoryResearchFin
 type ClientSource = { readonly creationSource?: OrchestrationV2CreationSource | undefined };
 type RunInput = FactoryResearchRunLaunchInput & { readonly launchedByThreadId?: ThreadId };
 
+type Lifecycle = Pick<OrchestrationV2ThreadShell, "activeRunId" | "latestRunCompletedAt">;
+
+/**
+ * Budget use follows the run lifecycle, not the record time: an active thread keeps spending
+ * until now, an idle one stops at its latest run's completion. Evidence is recorded from a live
+ * run of the thread, so the record time is a floor. Null when the thread record is gone.
+ */
+function usedMinutes(
+  evidence: Store.StoredEvidence,
+  launchedAt: string | undefined,
+  shell: Lifecycle | null,
+  now: number,
+): number | null {
+  if (shell === null || launchedAt === undefined) return null;
+  const end =
+    shell.activeRunId === null && shell.latestRunCompletedAt != null
+      ? DateTime.toEpochMillis(shell.latestRunCompletedAt)
+      : now;
+  return Math.max(
+    evidence.recordedAfterMinutes,
+    Math.ceil((end - Date.parse(launchedAt)) / 60_000),
+  );
+}
+
 function observe(
   protocol: FactoryResearchProtocol,
   evidence: Store.StoredEvidence,
+  elapsedMinutes: number | null,
 ): FactoryResearchObservation {
+  const { recordedAfterMinutes, ...recorded } = evidence;
   const disposition = evidence.evaluators.some((entry) => !entry.matchesSealed)
     ? "evaluator-changed"
     : evidence.ancestorOfBase !== true
       ? "not-descendant"
       : evidence.metricValue === null || evidence.artifacts.some((entry) => entry.lineText === null)
         ? "citation-invalid"
-        : evidence.elapsedMinutes > protocol.budget.maxRunMinutes
-          ? "over-budget"
-          : "acceptable";
-  return { ...evidence, disposition };
+        : elapsedMinutes === null
+          ? "unknown"
+          : elapsedMinutes > protocol.budget.maxRunMinutes
+            ? "over-budget"
+            : "acceptable";
+  return { ...recorded, elapsedMinutes: elapsedMinutes ?? recordedAfterMinutes, disposition };
+}
+
+function concatBytes(chunks: readonly Uint8Array[], size: number) {
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+/**
+ * Locates one cited line in a byte stream while holding at most the line cap, so a large
+ * artifact is never decoded or split whole. A newline byte never occurs inside a UTF-8 sequence.
+ */
+function makeLineScan(line: number) {
+  let current = 1;
+  let state = (line === 1 ? "reading" : "seeking") as "seeking" | "reading" | "ended" | "overlong";
+  let size = 0;
+  const parts: Uint8Array[] = [];
+  return {
+    push(chunk: Uint8Array) {
+      let offset = 0;
+      while (state === "seeking") {
+        const newline = chunk.indexOf(0x0a, offset);
+        if (newline === -1) return;
+        offset = newline + 1;
+        current += 1;
+        if (current === line) state = "reading";
+      }
+      if (state !== "reading") return;
+      const newline = chunk.indexOf(0x0a, offset);
+      const end = newline === -1 ? chunk.byteLength : newline;
+      size += end - offset;
+      // One spare byte leaves room for the CR of a CRLF terminator, trimmed when decoding.
+      if (size > FACTORY_RESEARCH_CITED_LINE_MAX_BYTES + 1) {
+        state = "overlong";
+        parts.length = 0;
+        return;
+      }
+      parts.push(chunk.slice(offset, end));
+      if (newline !== -1) state = "ended";
+    },
+    text(): string | null {
+      if (state === "seeking" || state === "overlong") return null;
+      const bytes = concatBytes(parts, size);
+      const content = state === "ended" && bytes.at(-1) === 0x0d ? bytes.subarray(0, -1) : bytes;
+      if (content.byteLength > FACTORY_RESEARCH_CITED_LINE_MAX_BYTES) return null;
+      // Only the file's first line can begin with the file's byte-order mark.
+      return new TextDecoder("utf-8", { ignoreBOM: line !== 1 }).decode(content);
+    },
+  };
 }
 
 function deriveFinding(
   protocol: FactoryResearchProtocol,
   bindings: readonly Store.FactoryResearchBinding[],
-  evidence: readonly Store.StoredEvidence[],
+  observations: readonly FactoryResearchObservation[],
   now: number,
 ) {
-  const observations = evidence
-    .map((entry) => observe(protocol, entry))
-    .toSorted(
-      (a, b) => b.recordedAt.localeCompare(a.recordedAt) || b.threadId.localeCompare(a.threadId),
-    );
-  const baseline = observations.find(
+  const sorted = observations.toSorted(
+    (a, b) => b.recordedAt.localeCompare(a.recordedAt) || b.threadId.localeCompare(a.threadId),
+  );
+  const baseline = sorted.find(
     (entry) => entry.disposition === "acceptable" && entry.commit === protocol.baseCommit,
   );
-  const explore = observations.find(
+  const explore = sorted.find(
     (entry) =>
       entry.disposition === "acceptable" &&
       entry.role === "explore" &&
@@ -88,7 +171,7 @@ function deriveFinding(
   const verify =
     explore === undefined
       ? undefined
-      : observations.find(
+      : sorted.find(
           (entry) =>
             entry.disposition === "acceptable" &&
             entry.role === "verify" &&
@@ -123,9 +206,19 @@ function deriveFinding(
     if (!clears) reasons.push("effect-below-minimum");
   }
   const selectedCommit = explore?.commit ?? null;
-  const hashes = [baseline, explore, verify]
-    .flatMap((entry) => entry?.artifacts.map((artifact) => artifact.sha256) ?? [])
-    .sort();
+  // Bind exactly what the reviewer approves: which observation fills each role, and the value
+  // and cited bytes it was read from. Two verifiers citing one file still differ here.
+  const selected = [baseline, explore, verify].map((entry) =>
+    entry === undefined
+      ? null
+      : [
+          entry.threadId,
+          entry.role,
+          entry.commit,
+          entry.metricValue,
+          entry.artifacts.map((artifact) => [artifact.path, artifact.line, artifact.sha256]),
+        ],
+  );
   return {
     protocolId: protocol.id,
     protocolRevision: protocol.revision,
@@ -139,11 +232,12 @@ function deriveFinding(
     exploreThreadId: explore?.threadId ?? null,
     verifyThreadId: verify?.threadId ?? null,
     revisionInput: encodeJson([
-      "t3.factory.research-finding/1",
+      "t3.factory.research-finding/2",
       protocol.revision,
       status,
+      reasons,
       selectedCommit,
-      hashes,
+      selected,
     ]),
   };
 }
@@ -181,23 +275,80 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const digest = Effect.fn("FactoryResearchService.digest")((value: string | Uint8Array) =>
+  const digest = Effect.fn("FactoryResearchService.digest")((value: string) =>
     crypto
-      .digest("SHA-256", typeof value === "string" ? new TextEncoder().encode(value) : value)
+      .digest("SHA-256", new TextEncoder().encode(value))
       .pipe(Effect.map(Hex.encode), Effect.orDie),
   );
-  const completeFinding = Effect.fn("FactoryResearchService.completeFinding")(function* (
+  // `shells` carries lifecycles the caller already read, so a view reads each run's shell once.
+  const observeAll = Effect.fn("FactoryResearchService.observeAll")(function* (
     protocol: FactoryResearchProtocol,
     bindings: readonly Store.FactoryResearchBinding[],
     evidence: readonly Store.StoredEvidence[],
+    shells?: ReadonlyMap<ThreadId, OrchestrationV2ThreadShell | null>,
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    return yield* Effect.forEach(
+      evidence,
+      Effect.fn("FactoryResearchService.observeRun")(function* (entry) {
+        const known = shells?.get(entry.threadId);
+        const shell =
+          known !== undefined
+            ? known
+            : yield* threads
+                .getThreadShell(entry.threadId)
+                .pipe(
+                  Effect.mapError(
+                    (cause) => new FactoryResearchError({ reason: "persistence-failure", cause }),
+                  ),
+                );
+        const launchedAt = bindings.find((binding) => binding.intent.threadId === entry.threadId)
+          ?.intent.createdAt;
+        return observe(protocol, entry, usedMinutes(entry, launchedAt, shell, now));
+      }),
+    );
+  });
+  const completeFinding = Effect.fn("FactoryResearchService.completeFinding")(function* (
+    protocol: FactoryResearchProtocol,
+    bindings: readonly Store.FactoryResearchBinding[],
+    observations: readonly FactoryResearchObservation[],
   ) {
     const { revisionInput, ...derived } = deriveFinding(
       protocol,
       bindings,
-      evidence,
+      observations,
       yield* Clock.currentTimeMillis,
     );
     return { ...derived, revision: yield* digest(revisionInput) };
+  });
+  // Hashes the whole artifact but holds only an inline copy under the retention cap and the
+  // bounded cited line.
+  const readArtifact = Effect.fn("FactoryResearchService.readArtifact")(function* (
+    file: string,
+    line: number,
+  ) {
+    const hash = NodeCrypto.createHash("sha256");
+    const scan = makeLineScan(line);
+    const inline: Uint8Array[] = [];
+    let bytes = 0;
+    yield* fs.stream(file).pipe(
+      Stream.runForEach((chunk) =>
+        Effect.sync(() => {
+          hash.update(chunk);
+          bytes += chunk.byteLength;
+          if (bytes <= FACTORY_RESEARCH_ARTIFACT_INLINE_MAX_BYTES) inline.push(chunk);
+          else inline.length = 0;
+          scan.push(chunk);
+        }),
+      ),
+    );
+    return {
+      sha256: hash.digest("hex"),
+      bytes,
+      content:
+        bytes <= FACTORY_RESEARCH_ARTIFACT_INLINE_MAX_BYTES ? concatBytes(inline, bytes) : null,
+      lineText: scan.text(),
+    };
   });
   const repositoryResolver = yield* TaskLaunch.makeRepositoryResolver;
   const resolve = Effect.fn("FactoryResearchService.resolve")((projectId: ProjectId) =>
@@ -253,10 +404,11 @@ const make = Effect.gen(function* () {
   const finding = Effect.fn("FactoryResearchService.finding")(function* (
     protocol: FactoryResearchProtocol,
   ) {
+    const bindings = yield* store.listRuns(protocol.id);
     return yield* completeFinding(
       protocol,
-      yield* store.listRuns(protocol.id),
-      yield* store.listEvidence(protocol.id),
+      bindings,
+      yield* observeAll(protocol, bindings, yield* store.listEvidence(protocol.id)),
     );
   });
   const listProtocols = Effect.fn("FactoryResearchService.listProtocols")(function* (
@@ -276,28 +428,31 @@ const make = Effect.gen(function* () {
     const protocol = yield* requireProtocol(input);
     const bindings = yield* store.listRuns(protocol.id);
     const evidence = yield* store.listEvidence(protocol.id);
-    const runs = yield* Effect.forEach(
+    const inspected = yield* Effect.forEach(bindings, (binding) =>
+      taskLaunch
+        .inspect(binding)
+        .pipe(Effect.map(({ shell, task }) => ({ intent: binding.intent, shell, task }))),
+    );
+    const observations = yield* observeAll(
+      protocol,
       bindings,
-      Effect.fn("FactoryResearchService.presentRun")(function* (binding) {
-        const { intent } = binding;
-        const recorded = evidence.find((entry) => entry.threadId === intent.threadId);
-        return {
-          threadId: intent.threadId,
-          role: intent.role,
-          protocolId: intent.protocolId,
-          protocolRevision: intent.protocolRevision,
-          launchedByThreadId: intent.launchedByThreadId,
-          createdAt: intent.createdAt,
-          task: (yield* taskLaunch.inspect(binding)).task,
-          observation: recorded === undefined ? null : observe(protocol, recorded),
-        };
-      }),
+      evidence,
+      new Map(inspected.map(({ intent, shell }) => [intent.threadId, shell] as const)),
     );
     return {
       repository,
       protocol,
-      runs,
-      finding: yield* completeFinding(protocol, bindings, evidence),
+      runs: inspected.map(({ intent, task }) => ({
+        threadId: intent.threadId,
+        role: intent.role,
+        protocolId: intent.protocolId,
+        protocolRevision: intent.protocolRevision,
+        launchedByThreadId: intent.launchedByThreadId,
+        createdAt: intent.createdAt,
+        task,
+        observation: observations.find((entry) => entry.threadId === intent.threadId) ?? null,
+      })),
+      finding: yield* completeFinding(protocol, bindings, observations),
       fetchedAt: DateTime.formatIso(yield* DateTime.now),
     };
   });
@@ -467,17 +622,17 @@ const make = Effect.gen(function* () {
       return yield* new FactoryResearchError({ reason: "verify-requires-user" });
     if (input.targetCommit === undefined)
       return yield* new FactoryResearchError({ reason: "verify-target-missing" });
-    const entries = yield* store.listEvidence(protocol.id);
-    const candidates = entries.filter(
-      (entry) =>
-        entry.role === "explore" &&
-        entry.commit === input.targetCommit &&
-        observe(protocol, entry).disposition === "acceptable",
-    );
+    const launches = yield* store.listRuns(protocol.id);
+    const candidates = (yield* observeAll(
+      protocol,
+      launches,
+      (yield* store.listEvidence(protocol.id)).filter(
+        (entry) => entry.role === "explore" && entry.commit === input.targetCommit,
+      ),
+    )).filter((entry) => entry.disposition === "acceptable");
     if (candidates.length === 0)
       return yield* new FactoryResearchError({ reason: "verify-target-missing" });
     if (input.launchedByThreadId !== undefined) {
-      const launches = yield* store.listRuns(protocol.id);
       const producers = new Set(
         candidates.flatMap((entry) => {
           const launcher = launches.find((run) => run.intent.threadId === entry.threadId)?.intent
@@ -581,21 +736,15 @@ const make = Effect.gen(function* () {
           );
         if (!isWithinRoot(path, real, root))
           return yield* new FactoryResearchError({ reason: "citation-outside-worktree" });
-        const content = yield* fs
-          .readFile(real)
-          .pipe(
-            Effect.mapError(
-              (cause) => new FactoryResearchError({ reason: "worktree-unavailable", cause }),
-            ),
-          );
-        const inline = content.byteLength <= FACTORY_RESEARCH_ARTIFACT_INLINE_MAX_BYTES;
+        const artifact = yield* readArtifact(real, citation.line).pipe(
+          Effect.mapError(
+            (cause) => new FactoryResearchError({ reason: "worktree-unavailable", cause }),
+          ),
+        );
         return {
           ...citation,
-          sha256: yield* digest(content),
-          bytes: content.byteLength,
-          retention: inline ? "inline" : "digest-only",
-          content: inline ? content : null,
-          lineText: new TextDecoder().decode(content).split(/\r?\n/)[citation.line - 1] ?? null,
+          ...artifact,
+          retention: artifact.content === null ? "digest-only" : "inline",
         };
       }),
     );
@@ -655,7 +804,7 @@ const make = Effect.gen(function* () {
       metricValue,
       missing: input.missing,
       runCount: projection.runs.length,
-      elapsedMinutes: Math.max(0, Math.ceil((now - Date.parse(intent.createdAt)) / 60_000)),
+      recordedAfterMinutes: Math.max(0, Math.ceil((now - Date.parse(intent.createdAt)) / 60_000)),
     };
     // Thread ids contain ':'; encode them as checkpoint refs do so every id is a valid Git ref.
     yield* store.recordEvidence(
@@ -675,7 +824,13 @@ const make = Effect.gen(function* () {
           ),
         ),
     );
-    return { observation: observe(intent.protocol, evidence) };
+    return {
+      observation: observe(
+        intent.protocol,
+        evidence,
+        usedMinutes(evidence, intent.createdAt, shell, now),
+      ),
+    };
   });
   const assertFinding = Effect.fn("FactoryResearchService.assertFinding")(function* (
     protocol: FactoryResearchProtocol,

@@ -844,3 +844,44 @@ it.effect(
       assert.notInclude(Object.keys(FactoryToolkit.tools), "factory_admit_research_implementation");
     }),
 );
+
+it.effect("research explore launch refuses a client outside a thread before the service", () =>
+  Effect.gen(function* () {
+    let called = false;
+    const dependencies = Layer.mergeAll(
+      Layer.succeed(Context.McpInvocationContext, {
+        environmentId: EnvironmentId.make("test"),
+        requestNamespace: "research-threadless",
+        issuedAt: 0,
+        thread: undefined,
+        client: { sessionId: "test", label: "test", access: "full-access" },
+        capabilities: new Set<Context.McpCapability>(["orchestration", "worktree"]),
+      }),
+      Layer.mock(Threads.ThreadManagementService)({}),
+      Layer.mock(Research.FactoryResearchService)({
+        launchRun: () => {
+          called = true;
+          return Effect.die("A threadless client launched research without a recorded launcher");
+        },
+      }),
+    );
+    const toolkit = yield* FactoryToolkit.pipe(
+      Effect.provide(Access.HandlersLayer.layer(Handlers.layer).pipe(Layer.provide(dependencies))),
+    );
+    const outputs = yield* toolkit
+      .handle("factory_launch_research_run", {
+        commandId: CommandId.make("research-threadless"),
+        projectId: ProjectId.make("project"),
+        protocolId: FactoryResearchProtocolId.make("protocol"),
+        expectedRepositoryKey: "github.com/owner/repo",
+        expectedProtocolRevision: "revision",
+        role: "explore",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+      })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    assert.deepInclude(outputs.at(-1)?.result, { code: "thread_credential_required" });
+    assert.isFalse(called);
+  }),
+);

@@ -123,6 +123,28 @@ it.effect(
 );
 
 it.effect(
+  "a command id reused for another role is refused inside the reservation, never resumed",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* seed;
+      const verify = yield* store.reserve(intent("web-verify", "verify"), Effect.void);
+      const refused = yield* store
+        .reserve(
+          {
+            ...intent("mcp-explore"),
+            requestCommandId: verify.intent.requestCommandId,
+            createdBy: "agent",
+            creationSource: "mcp",
+          },
+          Effect.die("A refused replay must not recheck"),
+        )
+        .pipe(Effect.flip);
+      assert.equal(refused.reason, "missing-run");
+      assert.deepEqual(yield* store.listRuns(protocol.id), [verify]);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
   "implementation reservation rechecks approval inside the transaction and restarts with CAS",
   () =>
     Effect.gen(function* () {
@@ -177,7 +199,7 @@ it.effect(
         metricValue: 1,
         missing: [],
         runCount: 1,
-        elapsedMinutes: 1,
+        recordedAfterMinutes: 1,
       };
       yield* store.recordEvidence(
         evidence,

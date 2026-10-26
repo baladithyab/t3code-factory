@@ -25,6 +25,11 @@ export const FACTORY_RESEARCH_EVALUATOR_MAX_PATHS = 16;
 const FACTORY_RESEARCH_CITATION_MAX_COUNT = 16;
 /** Cited artifact bytes retained inline up to this size; larger files keep only their digest. */
 export const FACTORY_RESEARCH_ARTIFACT_INLINE_MAX_BYTES = 256 * 1024;
+/**
+ * A cited line longer than this is an invalid citation. It is never stored or truncated, so
+ * evidence stays bounded even when the artifact itself keeps only its digest.
+ */
+export const FACTORY_RESEARCH_CITED_LINE_MAX_BYTES = 4096;
 
 /**
  * The run only ever reports where a number is; the server reads the cited line and extracts
@@ -81,7 +86,8 @@ export const FactoryResearchArtifact = Schema.Struct({
   sha256: TrimmedNonEmptyString,
   bytes: NonNegativeInt,
   retention: Schema.Literals(["inline", "digest-only"]),
-  // The exact cited line as read by the server, or null when the line did not exist.
+  // The exact cited line as read by the server, or null when the line did not exist or exceeded
+  // FACTORY_RESEARCH_CITED_LINE_MAX_BYTES.
   lineText: Schema.NullOr(Schema.String),
 });
 export type FactoryResearchArtifact = typeof FactoryResearchArtifact.Type;
@@ -115,6 +121,8 @@ export const FactoryResearchObservation = Schema.Struct({
   metricValue: Schema.NullOr(Schema.Number),
   missing: Schema.Array(Schema.String),
   runCount: NonNegativeInt,
+  // Derived on read from the run lifecycle: until now while the thread runs, else until its
+  // latest run completed. It never drops below the time at which the evidence was recorded.
   elapsedMinutes: NonNegativeInt,
   disposition: FactoryResearchDisposition,
 });
@@ -165,7 +173,8 @@ export const FactoryResearchFinding = Schema.Struct({
   baselineThreadId: Schema.NullOr(ThreadId),
   exploreThreadId: Schema.NullOr(ThreadId),
   verifyThreadId: Schema.NullOr(ThreadId),
-  // Opaque SHA-256 over the protocol revision, the cited evidence digests and the status.
+  // Opaque SHA-256 over the protocol revision, status, reasons, selected commit and each
+  // selected observation's thread, role, commit, value and cited path, line and digest.
   revision: TrimmedNonEmptyString,
 });
 export type FactoryResearchFinding = typeof FactoryResearchFinding.Type;
