@@ -6,6 +6,9 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Launches from "./FactoryIssueLaunches.ts";
 import * as Sqlite from "./Sqlite.ts";
+import { runMigrations } from "./Migrations.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import { githubIssueOriginKey } from "../factory/FactoryOriginKey.ts";
 
 const key = { canonicalKey: "github.com/owner/repo", issueNumber: 7 };
 const intent = (
@@ -60,6 +63,9 @@ it.effect(
       assert.deepEqual(Option.getOrThrow(yield* second.get(key)), a);
       const sql = yield* SqlClient.SqlClient;
       assert.equal((yield* sql`SELECT * FROM factory_issue_launches`).length, 1);
+      const rows = yield* sql`SELECT origin_key FROM factory_issue_launches`;
+      assert.equal(rows[0]?.origin_key, githubIssueOriginKey(key.canonicalKey, key.issueNumber));
+      assert.isUndefined(a.intent.admittedBy);
     }).pipe(Effect.provide(layer)),
 );
 
@@ -111,4 +117,24 @@ it.effect(
         original.intent.threadId,
       );
     }).pipe(Effect.provide(layer)),
+);
+
+it.effect("075 backfills legacy issue keys without requiring admission provenance", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrations({ toMigrationInclusive: 74 });
+    const legacy = intent("legacy");
+    yield* sql`INSERT INTO factory_issue_launches (thread_id, canonical_key, issue_number, request_command_id, intent_json)
+      VALUES (${legacy.threadId}, ${key.canonicalKey}, ${key.issueNumber}, ${legacy.requestCommandId}, ${JSON.stringify(legacy)})`;
+    yield* runMigrations();
+    const rows = yield* sql`SELECT origin_key FROM factory_issue_launches`;
+    assert.equal(rows[0]?.origin_key, githubIssueOriginKey(key.canonicalKey, key.issueNumber));
+    const stored = Option.getOrThrow(yield* (yield* Launches.FactoryIssueLaunches).get(key));
+    assert.deepEqual(stored.intent, legacy);
+    assert.isUndefined(stored.intent.admittedBy);
+  }).pipe(
+    Effect.provide(
+      Launches.layer.pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" }))),
+    ),
+  ),
 );

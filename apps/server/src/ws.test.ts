@@ -39,6 +39,7 @@ import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
 import * as FactoryIssueRelations from "./factory/FactoryIssueRelations.ts";
 import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
 import * as FactoryResearchService from "./factory/FactoryResearchService.ts";
+import * as FactoryClaimsService from "./factory/FactoryClaimsService.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
@@ -355,6 +356,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(FactoryIssueRelations.FactoryIssueRelations)({}),
   Layer.mock(FactoryFeedService.FactoryFeedService)({}),
   Layer.mock(FactoryResearchService.FactoryResearchService)({}),
+  Layer.mock(FactoryClaimsService.FactoryClaimsService)({}),
   Layer.mock(PullRequestSyncReactor.PullRequestSyncReactor)({}),
   Layer.mock(RelayClient.RelayClient)({}),
   Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
@@ -986,6 +988,86 @@ it.effect("routes research RPCs with trusted client attribution and domain refus
       assert.equal(result.reason, "protocol-changed");
     }
     assert.deepEqual(calls, ["list", "read", "seal", "launch", "admit"]);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.fresh(layerConfigSources),
+        Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+        Layer.mock(ServerBrowser.ServerBrowser)({}),
+      ),
+    ),
+    Effect.scoped,
+  ),
+);
+
+it.effect("routes read-only claims and preserves domain refusals", () =>
+  Effect.gen(function* () {
+    const input = { projectId: ProjectId.make("project") };
+    const result = {
+      environmentId: EnvironmentId.make("claims-owner"),
+      repository: {
+        provider: "github" as const,
+        host: "github.com",
+        repository: "owner/repo",
+        canonicalKey: "github.com/owner/repo",
+        url: "https://github.com/owner/repo",
+      },
+      claims: [],
+      fetchedAt: "2026-10-25T00:00:00.000Z",
+    };
+    let refused = false;
+    const services = Layer.mergeAll(
+      layerUnusedConfigRpcServices,
+      Layer.mock(ProjectCoordinatorService.ProjectCoordinatorService)({}),
+      Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+      Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+      Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+      Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+      Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+      Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+      Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+      Layer.succeed(FactoryClaimsService.FactoryClaimsService, {
+        list: (received) => {
+          assert.deepEqual(received, input);
+          return refused
+            ? Effect.fail(new FactoryIssueError({ reason: "missing-repository" }))
+            : Effect.succeed(result);
+        },
+      }),
+    );
+    const method = WS_METHODS.factoryListClaims;
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (tag): tag is Exclude<keyof typeof RpcAuthorization.RPC_REQUIRED_SCOPES, typeof method> =>
+          tag !== method,
+      ),
+    );
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.merge(
+          layerWsRpc(
+            {
+              sessionId: AuthSessionId.make("claims-test"),
+              subject: "claims-test",
+              method: "browser-session-cookie",
+              scopes: [],
+            },
+            {},
+            {},
+            yield* PreviewAutomationBroker.PreviewAutomationBroker,
+            yield* ServerBrowser.ServerBrowser,
+          ).pipe(Layer.provide(services)),
+          RpcAuthorization.layer(["orchestration:read"]),
+        ),
+      ),
+    );
+    assert.deepEqual(yield* client[method](input), result);
+    refused = true;
+    assert.deepInclude(yield* client[method](input).pipe(Effect.flip), {
+      _tag: "FactoryIssueError",
+      reason: "missing-repository",
+    });
   }).pipe(
     Effect.provide(
       Layer.mergeAll(

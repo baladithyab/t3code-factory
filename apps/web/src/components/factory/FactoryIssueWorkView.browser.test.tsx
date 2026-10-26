@@ -3,6 +3,8 @@ import {
   FactoryIssueError,
   FactoryReadinessOverrideId,
   ProjectId,
+  ProviderInstanceId,
+  ThreadId,
   type FactoryIssue,
   type FactoryIssueFrontierReadResult,
   type FactoryIssueReadinessReadResult,
@@ -90,7 +92,9 @@ vi.mock(import("../../hooks/useNowSecond"), () => ({
 }));
 
 import { act, render } from "../../../test/render";
+import { claimConflicts, originKeyForIssue } from "./factoryClaims.logic";
 import { FactoryIssueWorkView } from "./FactoryIssueWorkView";
+import type { FactoryClaimsView } from "./useFactoryClaims";
 
 const environmentId = EnvironmentId.make("environment:test");
 const projectId = ProjectId.make("project:test");
@@ -222,6 +226,8 @@ const workView = (
     selectedProjectId={projectId}
     projectTitleById={new Map()}
     refreshing={false}
+    claims={null}
+    repositoryKey={repository.canonicalKey}
     onStart={vi.fn()}
     onRestart={vi.fn()}
     onResume={vi.fn()}
@@ -538,4 +544,117 @@ it("says an issue without sub-issues has none", async () => {
   await screen.getByRole("button", { name: "Show issue #7 body" }).click();
   await screen.getByRole("button", { name: "Show sub-issues of issue #7" }).click();
   await expect.element(screen.getByText("This issue has no sub-issues.")).toBeVisible();
+});
+
+const otherEnvironmentId = EnvironmentId.make("environment:other");
+
+function claimsViewOf(
+  mine: { readonly threadId: string; readonly admittedBy: EnvironmentId | null },
+  elsewhere: string | null,
+): FactoryClaimsView {
+  const claim = (
+    environment: EnvironmentId,
+    threadId: string,
+    admittedBy: EnvironmentId | null,
+  ) => ({
+    environmentId: environment,
+    repository,
+    fetchedAt: observedAt,
+    claims: [
+      {
+        originKey: originKeyForIssue(repository.canonicalKey, 7),
+        origin: "github-issue" as const,
+        projectId,
+        workspaceRoot: "/work/repo",
+        threadId: ThreadId.make(threadId),
+        status: "running" as const,
+        baseRef: "main",
+        createdAt: observedAt,
+        creationSource: "web" as const,
+        admittedBy,
+        originConflict: false,
+      },
+    ],
+  });
+  const claimsByEnvironment = new Map([
+    [environmentId, claim(environmentId, mine.threadId, mine.admittedBy)],
+    ...(elsewhere === null
+      ? []
+      : [[otherEnvironmentId, claim(otherEnvironmentId, elsewhere, otherEnvironmentId)] as const]),
+  ]);
+  return {
+    claimsByEnvironment,
+    conflicts: claimConflicts(claimsByEnvironment),
+    unavailableNote: null,
+    labelOf: (id) => (id === environmentId ? "Laptop" : "Dev box"),
+    refresh: vi.fn(),
+  };
+}
+
+const taskOf = (threadId: string): NonNullable<FactoryIssue["task"]> => ({
+  projectId,
+  threadId: ThreadId.make(threadId),
+  status: "running",
+  baseRef: "main",
+  createdAt: observedAt,
+  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+  runtimeMode: "approval-required",
+  interactionMode: "default",
+});
+
+const claimedView = (claims: FactoryClaimsView | null) => (
+  <FactoryIssueWorkView
+    environmentId={environmentId}
+    mode="list"
+    issues={[{ ...issue(7, "open"), task: taskOf("thread:one") }]}
+    canStart
+    busy={false}
+    startingIssue={null}
+    selectedProjectId={projectId}
+    projectTitleById={new Map()}
+    refreshing={false}
+    claims={claims}
+    repositoryKey={repository.canonicalKey}
+    onStart={vi.fn()}
+    onRestart={vi.fn()}
+    onResume={vi.fn()}
+    onOpen={vi.fn()}
+  />
+);
+
+it("flags an origin claimed in two environments and says who admitted this claim", async () => {
+  setup();
+  await using screen = await render(
+    claimedView(
+      claimsViewOf({ threadId: "thread:one", admittedBy: otherEnvironmentId }, "thread:two"),
+    ),
+  );
+  await expect.element(screen.getByText("Claimed in 2 environments")).toBeVisible();
+  await expect.element(screen.getByText(/each started their own thread/)).toBeVisible();
+  await expect.element(screen.getByText(/^Admitted by another environment/)).toBeVisible();
+});
+
+it("calls the same thread in two environments a copied database", async () => {
+  setup();
+  await using screen = await render(
+    claimedView(claimsViewOf({ threadId: "thread:one", admittedBy: environmentId }, "thread:one")),
+  );
+  await expect.element(screen.getByText(/looks like a copied database/)).toBeVisible();
+  await expect.element(screen.getByText("Admitted by this environment.")).toBeVisible();
+});
+
+it("shows unknown provenance for a claim recorded before provenance existed", async () => {
+  setup();
+  await using screen = await render(
+    claimedView(claimsViewOf({ threadId: "thread:one", admittedBy: null }, null)),
+  );
+  await expect.element(screen.getByText(/^Provenance unknown/)).toBeVisible();
+  await expect.element(screen.getByText(/Claimed in \d+ environments/)).not.toBeInTheDocument();
+});
+
+it("shows no claim UI when the environment does not advertise claims", async () => {
+  setup();
+  await using screen = await render(claimedView(null));
+  await expect.element(screen.getByText(/^Admitted by/)).not.toBeInTheDocument();
+  await expect.element(screen.getByText(/Claimed in \d+ environments/)).not.toBeInTheDocument();
 });

@@ -1,5 +1,6 @@
 import {
   CommandId,
+  EnvironmentId,
   FactoryIssueError,
   FactoryRepository,
   IsoDateTime,
@@ -47,6 +48,7 @@ export const FactoryLaunchCore = Schema.Struct({
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
   createdAt: IsoDateTime,
+  admittedBy: Schema.optionalKey(EnvironmentId),
   previousThreadId: Schema.NullOr(ThreadId),
 });
 type Core = typeof FactoryLaunchCore.Type;
@@ -120,18 +122,14 @@ export const makeRepositoryResolver = Effect.gen(function* () {
   });
 });
 
-export const make = Effect.fn("FactoryTaskLaunch.make")(function* <I extends Core, E>(options: {
+export const makeInspector = Effect.fn("FactoryTaskLaunch.makeInspector")(function* <E>(options: {
   readonly span: string;
   readonly error: (reason: LaunchReason, cause?: unknown) => E;
-  readonly accept: (threadId: ThreadId) => Effect.Effect<void, E>;
-  readonly title: (intent: I) => string;
-  readonly precondition: (intent: I) => Effect.Effect<void, E>;
 }) {
   const projects = yield* Projects.ProjectService;
   const threads = yield* Threads.ThreadManagementService;
   const receipts = yield* Receipts.CommandReceiptStoreV2;
-  const launcher = yield* ThreadLaunch.ThreadLaunchService;
-  const inspect = Effect.fn(`${options.span}.inspect`)(function* (binding: Binding<I>) {
+  return Effect.fn(`${options.span}.inspect`)(function* (binding: Binding<Core>) {
     const { intent } = binding;
     const shell = yield* threads
       .getThreadShell(intent.threadId)
@@ -174,6 +172,17 @@ export const make = Effect.fn("FactoryTaskLaunch.make")(function* <I extends Cor
       } satisfies FactoryIssueTask,
     };
   });
+});
+
+export const make = Effect.fn("FactoryTaskLaunch.make")(function* <I extends Core, E>(options: {
+  readonly span: string;
+  readonly error: (reason: LaunchReason, cause?: unknown) => E;
+  readonly accept: (threadId: ThreadId) => Effect.Effect<void, E>;
+  readonly title: (intent: I) => string;
+  readonly precondition: (intent: I) => Effect.Effect<void, E>;
+}) {
+  const launcher = yield* ThreadLaunch.ThreadLaunchService;
+  const inspect = yield* makeInspector(options);
   const resume = Effect.fn(`${options.span}.launch`)(function* (binding: Binding<I>) {
     const { intent } = binding;
     let inspected = yield* inspect(binding);

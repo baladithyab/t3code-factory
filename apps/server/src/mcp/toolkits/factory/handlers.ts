@@ -10,6 +10,7 @@ import * as Factory from "../../../factory/FactoryIssueService.ts";
 import * as Relations from "../../../factory/FactoryIssueRelations.ts";
 import * as Feeds from "../../../factory/FactoryFeedService.ts";
 import * as Research from "../../../factory/FactoryResearchService.ts";
+import * as Claims from "../../../factory/FactoryClaimsService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { DispatchModeLimit } from "../../../orchestration-v2/DispatchModeLimit.ts";
 import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
@@ -107,6 +108,12 @@ export const layer = McpToolAccess.toLayer(FactoryToolkit, {
           .admitCandidate({ ...input, ...modes, creationSource: "mcp" })
           .pipe(Effect.provideService(DispatchModeLimit, caller.limits), Effect.mapError(failure));
       }),
+  ),
+  factory_list_claims: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      yield* readCaller();
+      return yield* (yield* Claims.FactoryClaimsService).list(input).pipe(Effect.mapError(failure));
+    }),
   ),
   factory_list_issues: McpToolAccess.reads((input) =>
     Effect.gen(function* () {

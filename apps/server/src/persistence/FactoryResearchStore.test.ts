@@ -15,6 +15,9 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Store from "./FactoryResearchStore.ts";
 import * as Sqlite from "./Sqlite.ts";
+import { runMigrations } from "./Migrations.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import { researchRunOriginKey } from "../factory/FactoryOriginKey.ts";
 
 const at = "2026-10-25T00:00:00.000Z";
 const protocol: FactoryResearchProtocol = {
@@ -115,6 +118,10 @@ it.effect(
         yield* second.reserve(winner.intent, Effect.die("Replay must not recheck")),
         winner,
       );
+      const sql = yield* SqlClient.SqlClient;
+      const rows = yield* sql`SELECT origin_key FROM factory_research_launches`;
+      assert.equal(rows[0]?.origin_key, researchRunOriginKey(protocol.id, winner.intent.role));
+      assert.isUndefined(winner.intent.admittedBy);
       assert.equal(
         (yield* first.reserve(intent("c"), Effect.void).pipe(Effect.flip)).reason,
         "budget-exhausted",
@@ -226,4 +233,26 @@ it.effect(
       assert.equal(rows[0]?.bytes, 3);
       assert.deepEqual(Array.from(rows[0]?.content ?? []), [1, 2, 3]);
     }).pipe(Effect.provide(layer)),
+);
+
+it.effect("075 backfills legacy research keys and keeps old intent JSON readable", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrations({ toMigrationInclusive: 74 });
+    const legacy = intent("legacy");
+    yield* sql`INSERT INTO factory_research_launches (thread_id, protocol_id, role, request_command_id, intent_json, created_at)
+      VALUES (${legacy.threadId}, ${legacy.protocolId}, ${legacy.role}, ${legacy.requestCommandId}, ${JSON.stringify(legacy)}, ${legacy.createdAt})`;
+    yield* runMigrations();
+    const rows = yield* sql`SELECT origin_key FROM factory_research_launches`;
+    assert.equal(rows[0]?.origin_key, researchRunOriginKey(protocol.id, legacy.role));
+    const stored = Option.getOrThrow(
+      yield* (yield* Store.FactoryResearchStore).getRun(legacy.threadId),
+    );
+    assert.deepEqual(stored.intent, legacy);
+    assert.isUndefined(stored.intent.admittedBy);
+  }).pipe(
+    Effect.provide(
+      Store.layer.pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" }))),
+    ),
+  ),
 );

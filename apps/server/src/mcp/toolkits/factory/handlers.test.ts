@@ -4,6 +4,7 @@ import {
   CommandId,
   EnvironmentId,
   FactoryFeedError,
+  FactoryIssueError,
   FactoryResearchError,
   FactoryResearchProtocolId,
   FactoryFeedSourceId,
@@ -25,6 +26,7 @@ import * as Factory from "../../../factory/FactoryIssueService.ts";
 import * as Relations from "../../../factory/FactoryIssueRelations.ts";
 import * as Feeds from "../../../factory/FactoryFeedService.ts";
 import * as Research from "../../../factory/FactoryResearchService.ts";
+import * as Claims from "../../../factory/FactoryClaimsService.ts";
 import { DispatchModeLimit } from "../../../orchestration-v2/DispatchModeLimit.ts";
 import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
@@ -884,4 +886,63 @@ it.effect("research explore launch refuses a client outside a thread before the 
     assert.deepInclude(outputs.at(-1)?.result, { code: "thread_credential_required" });
     assert.isFalse(called);
   }),
+);
+
+it.effect.each([true, false])(
+  "read-only claim listing requires orchestration capability: %s",
+  (allowed) =>
+    Effect.gen(function* () {
+      let called = false;
+      let refused = false;
+      const result = {
+        environmentId: EnvironmentId.make("claim-owner"),
+        repository: {
+          provider: "github" as const,
+          host: "github.com",
+          repository: "owner/repo",
+          canonicalKey: "github.com/owner/repo",
+          url: "https://github.com/owner/repo",
+        },
+        claims: [],
+        fetchedAt: "2026-10-25T00:00:00.000Z",
+      };
+      const input = { projectId: ProjectId.make("project") };
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(Context.McpInvocationContext, {
+          environmentId: EnvironmentId.make("test"),
+          requestNamespace: "claims-test",
+          issuedAt: 0,
+          thread: undefined,
+          client: { sessionId: "test", label: "test", access: "read-only" },
+          capabilities: new Set<Context.McpCapability>(allowed ? ["orchestration"] : ["worktree"]),
+        }),
+        Layer.mock(Threads.ThreadManagementService)({}),
+        Layer.succeed(Claims.FactoryClaimsService, {
+          list: (received) => {
+            called = true;
+            assert.deepEqual(received, input);
+            return refused
+              ? Effect.fail(new FactoryIssueError({ reason: "missing-repository" }))
+              : Effect.succeed(result);
+          },
+        }),
+      );
+      const toolkit = yield* FactoryToolkit.pipe(
+        Effect.provide(
+          Access.HandlersLayer.layer(Handlers.layer).pipe(Layer.provide(dependencies)),
+        ),
+      );
+      const outputs = yield* toolkit
+        .handle("factory_list_claims", input)
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      assert.equal(called, allowed);
+      if (allowed) {
+        assert.deepEqual(outputs.at(-1)?.result, result);
+        refused = true;
+        const failure = yield* toolkit
+          .handle("factory_list_claims", input)
+          .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+        assert.deepInclude(failure.at(-1)?.result, { code: "invalid_request" });
+      } else assert.deepInclude(outputs.at(-1)?.result, { code: "capability_denied" });
+    }),
 );

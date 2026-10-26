@@ -26,6 +26,7 @@ import * as Launches from "../persistence/FactoryIssueLaunches.ts";
 import * as ManagedFolders from "../project/ManagedProjectFolders.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
+import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
 import * as TaskLaunch from "./FactoryTaskLaunch.ts";
 
 const GitHubIssue = Schema.Struct({
@@ -85,6 +86,7 @@ const make = Effect.gen(function* () {
   const git = yield* Git.GitVcsDriver;
   const crypto = yield* Crypto.Crypto;
   const folders = yield* ManagedFolders.ManagedProjectFolders;
+  const environment = yield* ServerEnvironmentIdentity;
 
   const resolve = yield* TaskLaunch.makeRepositoryResolver;
   const taskLaunch = yield* TaskLaunch.make<Launches.FactoryLaunchIntent, FactoryIssueError>({
@@ -292,6 +294,7 @@ const make = Effect.gen(function* () {
       creationSource: input.creationSource ?? "web",
       createdBy: input.creationSource === "mcp" ? "agent" : "user",
       createdAt: DateTime.formatIso(yield* DateTime.now),
+      admittedBy: yield* environment.getEnvironmentId,
       previousThreadId,
       prompt: [
         "Implement the task described by this GitHub issue in this isolated worktree.",

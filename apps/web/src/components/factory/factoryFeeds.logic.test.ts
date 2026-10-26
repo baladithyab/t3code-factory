@@ -445,6 +445,16 @@ describe("describeFactoryFeedFailure", () => {
     expect(failure.reason).toBe("candidate-changed");
   });
 
+  it("names an item that older records claim more than once", () => {
+    expect(
+      describeFactoryFeedFailure(new FactoryFeedError({ reason: "origin-conflict" })),
+    ).toMatchObject({
+      kind: "other",
+      title: "Item claimed more than once",
+      reason: "origin-conflict",
+    });
+  });
+
   it.each(["missing-repository", "unsupported-provider", "repository-changed"] as const)(
     "reports %s as a repository problem",
     (reason) => {

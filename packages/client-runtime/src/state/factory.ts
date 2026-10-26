@@ -87,6 +87,14 @@ export function createFactoryEnvironmentAtoms<R, E>(
       staleTimeMs: 0,
     }),
     readIssueReadiness,
+    // Claims are read from every connected environment that holds a checkout of the repository, so
+    // a page can compare them. Every mount and refresh observes again: a claim another environment
+    // just admitted must show up on the explicit Refresh, never from a cached list.
+    listClaims: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:factory:claims",
+      tag: WS_METHODS.factoryListClaims,
+      staleTimeMs: 0,
+    }),
     // Read-only composition of a parent's sub-issues. Each read re-observes every child, so it is
     // fetched only while its panel is open and again on an explicit refresh, never inbox-wide.
     readIssueFrontier: createEnvironmentRpcQueryAtomFamily(runtime, {

@@ -2,6 +2,7 @@ import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
 import * as FactoryIssueRelations from "./factory/FactoryIssueRelations.ts";
 import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
 import * as FactoryResearchService from "./factory/FactoryResearchService.ts";
+import * as FactoryClaimsService from "./factory/FactoryClaimsService.ts";
 import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -1268,6 +1269,7 @@ export const layerWsRpc = (
       const factoryRelations = yield* FactoryIssueRelations.FactoryIssueRelations;
       const factoryFeeds = yield* FactoryFeedService.FactoryFeedService;
       const factoryResearch = yield* FactoryResearchService.FactoryResearchService;
+      const factoryClaims = yield* FactoryClaimsService.FactoryClaimsService;
       const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2518,6 +2520,7 @@ export const layerWsRpc = (
               ),
           ),
         [WS_METHODS.factoryListIssues]: (input) => factory.list(input),
+        [WS_METHODS.factoryListClaims]: (input) => factoryClaims.list(input),
         [WS_METHODS.factoryReadIssueReadiness]: (input) => factoryRelations.read(input),
         [WS_METHODS.factorySetIssueReadinessOverride]: (input) =>
           factoryRelations.setOverride(input),
@@ -3253,6 +3256,7 @@ export const layer = Layer.unwrap(
     const factoryRelations = yield* FactoryIssueRelations.FactoryIssueRelations;
     const factoryFeeds = yield* FactoryFeedService.FactoryFeedService;
     const factoryResearch = yield* FactoryResearchService.FactoryResearchService;
+    const factoryClaims = yield* FactoryClaimsService.FactoryClaimsService;
     const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const sql = yield* SqlClient.SqlClient;
@@ -3346,6 +3350,9 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(FactoryFeedService.FactoryFeedService, factoryFeeds)),
               Layer.provide(
                 Layer.succeed(FactoryResearchService.FactoryResearchService, factoryResearch),
+              ),
+              Layer.provide(
+                Layer.succeed(FactoryClaimsService.FactoryClaimsService, factoryClaims),
               ),
               Layer.provide(
                 Layer.succeed(

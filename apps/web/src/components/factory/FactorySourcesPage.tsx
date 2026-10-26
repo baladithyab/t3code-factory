@@ -16,6 +16,7 @@ import {
   type FactoryIssueTask,
   type FactoryRepository,
   type ModelSelection,
+  type ProjectId,
 } from "@t3tools/contracts";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronDownIcon, FactoryIcon } from "lucide-react";
@@ -53,6 +54,14 @@ import { Textarea } from "../ui/textarea";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { FactoryCheckoutChooser } from "./FactoryCheckoutChooser";
 import { FactoryEmptyState } from "./FactoryEmptyState";
+import { FactoryClaimIndicators, FactoryClaimsUnavailableNote } from "./FactoryClaimIndicators";
+import {
+  claimOwnerTitle,
+  claimsElsewhere,
+  describeClaimsElsewhere,
+  factoryClaimRowPresentation,
+  originKeyForFeedItem,
+} from "./factoryClaims.logic";
 import { FactoryFeedAdmitDialog } from "./FactoryFeedAdmitDialog";
 import {
   buildFactoryFeedAdmitInput,
@@ -72,6 +81,7 @@ import { factoryTaskPresentation, safeExternalUrl } from "./factoryIssues.logic"
 import { useFactoryLaunchModelSettings } from "./FactoryLaunchControls";
 import { FactoryReviewFailure, FactoryReviewSnapshot } from "./FactoryReview";
 import { singleFactoryMember, type FactorySearch } from "./factoryScope";
+import { useFactoryClaims, type FactoryClaimsView } from "./useFactoryClaims";
 
 export function FactorySourcesPage() {
   const search = useSearch({ from: "/_chat/factory" });
@@ -167,6 +177,13 @@ export function FactorySourcesPage() {
           environmentId={environment.environmentId}
           environmentLabel={environment.label}
           project={project}
+          projectTitleById={
+            new Map(
+              allProjects
+                .filter((candidate) => candidate.environmentId === environment.environmentId)
+                .map((candidate) => [candidate.id, candidate.title]),
+            )
+          }
           issuesSearch={search}
         />
       )}
@@ -191,6 +208,7 @@ function FactorySourcesWorkspace(props: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
   readonly project: EnvironmentProject;
+  readonly projectTitleById: ReadonlyMap<ProjectId, string>;
   readonly issuesSearch: FactorySearch;
 }) {
   const { environmentId, project } = props;
@@ -222,6 +240,7 @@ function FactorySourcesWorkspace(props: {
     reportFailure: false,
   });
   const launchSettings = useFactoryLaunchModelSettings(environmentId, project);
+  const claims = useFactoryClaims({ environmentId, project });
 
   const [showDismissed, setShowDismissed] = useState(false);
   const [bindUrl, setBindUrl] = useState("");
@@ -241,6 +260,12 @@ function FactorySourcesWorkspace(props: {
   const reload = () => {
     sources.refresh();
     candidates.refresh();
+  };
+
+  // Claims have no timer: the explicit Refresh and every admission observe them again.
+  const refreshAll = () => {
+    reload();
+    claims?.refresh();
   };
 
   const failure =
@@ -289,7 +314,7 @@ function FactorySourcesWorkspace(props: {
     });
     if (!mounted.current) return;
     if (result._tag === "Success") {
-      reload();
+      refreshAll();
       setDialog(null);
       void navigate({
         to: "/$environmentId/$threadId",
@@ -300,7 +325,7 @@ function FactorySourcesWorkspace(props: {
     if (isAtomCommandInterrupted(result)) return;
     setAdmitFailure(describeFactoryFeedFailure(squashAtomCommandFailure(result)));
     // The failure may mean the row is stale (edited, dismissed, retracted, launched elsewhere).
-    reload();
+    refreshAll();
   };
 
   const startAdmit = (
@@ -356,7 +381,7 @@ function FactorySourcesWorkspace(props: {
           <Button
             size="sm"
             variant="outline"
-            onClick={reload}
+            onClick={refreshAll}
             disabled={refreshing}
             aria-busy={refreshing}
           >
@@ -390,6 +415,7 @@ function FactorySourcesWorkspace(props: {
           </AlertDescription>
         </Alert>
       ) : null}
+      <FactoryClaimsUnavailableNote note={claims?.unavailableNote ?? null} />
       {admitFailure !== null && dialog === null ? (
         <Alert variant="error">
           <AlertTitle>{admitFailure.title}</AlertTitle>
@@ -417,7 +443,7 @@ function FactorySourcesWorkspace(props: {
             <Button
               size="sm"
               variant="outline"
-              onClick={reload}
+              onClick={refreshAll}
               disabled={refreshing}
               aria-busy={refreshing}
             >
@@ -458,6 +484,8 @@ function FactorySourcesWorkspace(props: {
                     ).length
               }
               repository={repository}
+              claims={claims}
+              projectTitleById={props.projectTitleById}
               canBind={canBind}
               canUnbind={canUnbind}
               canRefresh={canRefresh}
@@ -488,6 +516,22 @@ function FactorySourcesWorkspace(props: {
           repository={dialog.repository}
           settings={launchSettings}
           canAdmit={canAdmit}
+          claimWarning={
+            claims === null
+              ? null
+              : describeClaimsElsewhere(
+                  claimsElsewhere(
+                    claims.claimsByEnvironment,
+                    originKeyForFeedItem(
+                      dialog.repository.canonicalKey,
+                      dialog.source.locator,
+                      dialog.candidate.itemKey,
+                    ),
+                    environmentId,
+                  ),
+                  claims.labelOf,
+                )
+          }
           pending={admitting === candidateKey(dialog.candidate)}
           failure={admitFailure}
           onClose={() => {
@@ -633,6 +677,8 @@ function FeedSourceCard(props: {
   readonly candidates: ReadonlyArray<FactoryFeedCandidate>;
   readonly dismissedHidden: number;
   readonly repository: FactoryRepository | null;
+  readonly claims: FactoryClaimsView | null;
+  readonly projectTitleById: ReadonlyMap<ProjectId, string>;
   readonly canBind: boolean;
   readonly canUnbind: boolean;
   readonly canRefresh: boolean;
@@ -792,6 +838,8 @@ function FeedSourceCard(props: {
                 canDismiss={props.canDismiss}
                 admittingKey={props.admittingKey}
                 issuesSearch={props.issuesSearch}
+                claims={props.claims}
+                projectTitleById={props.projectTitleById}
                 onChanged={props.onChanged}
                 onAdmit={props.onAdmit}
                 onOpenTask={props.onOpenTask}
@@ -843,6 +891,8 @@ function FeedCandidateRow(props: {
   readonly source: FactoryFeedSource;
   readonly candidate: FactoryFeedCandidate;
   readonly repository: FactoryRepository | null;
+  readonly claims: FactoryClaimsView | null;
+  readonly projectTitleById: ReadonlyMap<ProjectId, string>;
   readonly canAdmit: boolean;
   readonly canDismiss: boolean;
   readonly admittingKey: string | null;
@@ -870,6 +920,24 @@ function FeedCandidateRow(props: {
   const dismissal = resolveFactoryFeedDismissal(candidate);
   const badges = factoryFeedCandidateBadges(candidate);
   const presentation = candidate.task ? factoryTaskPresentation(candidate.task.status) : null;
+  // A task in another checkout of this repository is the claim for this item; the server returns
+  // it so the row can name the owner instead of offering a second admission.
+  const ownerTitle = claimOwnerTitle(candidate.task, projectId, props.projectTitleById);
+  const claimPresentation =
+    props.claims === null || props.repository === null
+      ? null
+      : factoryClaimRowPresentation({
+          claimsByEnvironment: props.claims.claimsByEnvironment,
+          conflicts: props.claims.conflicts,
+          environmentId,
+          originKey: originKeyForFeedItem(
+            props.repository.canonicalKey,
+            source.locator,
+            candidate.itemKey,
+          ),
+          task: candidate.task,
+          labelOf: props.claims.labelOf,
+        });
   const href = candidate.link === null ? null : safeExternalUrl(candidate.link);
   const admitBusy = props.admittingKey !== null;
   const admitting = props.admittingKey === candidateKey(candidate);
@@ -945,7 +1013,15 @@ function FeedCandidateRow(props: {
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant={presentation.variant}>{presentation.label}</Badge>
               <span className="text-muted-foreground text-xs">{presentation.detail}</span>
+              {ownerTitle !== null ? (
+                <span className="text-muted-foreground text-xs [overflow-wrap:anywhere]">
+                  Claimed by {ownerTitle}.
+                </span>
+              ) : null}
             </div>
+          ) : null}
+          {claimPresentation !== null ? (
+            <FactoryClaimIndicators presentation={claimPresentation} />
           ) : null}
         </div>
         <div className="space-y-1.5">

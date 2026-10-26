@@ -41,6 +41,7 @@ import * as Base64Url from "effect/encoding/Base64Url";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no incremental hash, and artifacts are hashed while streaming.
 import * as NodeCrypto from "node:crypto";
 import * as Store from "../persistence/FactoryResearchStore.ts";
+import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
 import * as Folders from "../project/ManagedProjectFolders.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
@@ -269,6 +270,7 @@ export class FactoryResearchService extends Context.Service<
 
 const make = Effect.gen(function* () {
   const store = yield* Store.FactoryResearchStore;
+  const environment = yield* ServerEnvironmentIdentity;
   const threads = yield* Threads.ThreadManagementService;
   const folders = yield* Folders.ManagedProjectFolders;
   const git = yield* Git.GitVcsDriver;
@@ -572,6 +574,7 @@ const make = Effect.gen(function* () {
       createdBy: input.creationSource === "mcp" ? "agent" : "user",
       creationSource: input.creationSource ?? "web",
       createdAt: DateTime.formatIso(yield* DateTime.now),
+      admittedBy: yield* environment.getEnvironmentId,
       previousThreadId,
       protocolId: protocol.id,
       protocolRevision: protocol.revision,

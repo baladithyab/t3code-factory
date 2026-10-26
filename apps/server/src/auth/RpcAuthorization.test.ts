@@ -1,5 +1,6 @@
 import {
   CommandId,
+  EnvironmentId,
   ProjectId,
   FactoryFeedError,
   FactoryResearchError,
@@ -897,6 +898,56 @@ describe("research factory authorization", () => {
         _tag: "FactoryResearchError",
         reason: "missing-project",
       });
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("factory claims authorization", () => {
+  const method = WS_METHODS.factoryListClaims;
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof method> => tag !== method,
+    ),
+  );
+  it.effect.each([
+    { scopes: [], allowed: false },
+    { scopes: [AuthOrchestrationReadScope], allowed: true },
+  ])("requires only orchestration read scope: $allowed", ({ scopes, allowed }) =>
+    Effect.gen(function* () {
+      let called = false;
+      const result = {
+        environmentId: EnvironmentId.make("owner"),
+        repository: {
+          provider: "github" as const,
+          host: "github.com",
+          repository: "owner/repo",
+          canonicalKey: "github.com/owner/repo",
+          url: "https://github.com/owner/repo",
+        },
+        claims: [],
+        fetchedAt: "2026-10-25T00:00:00.000Z",
+      };
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(method, () =>
+              Effect.sync(() => {
+                called = true;
+                return result;
+              }),
+            ),
+            RpcAuthorization.layer(scopes),
+          ),
+        ),
+      );
+      const request = client[method]({ projectId: ProjectId.make("project") });
+      if (allowed) expect(yield* request).toEqual(result);
+      else
+        expect(yield* request.pipe(Effect.flip)).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: AuthOrchestrationReadScope,
+        });
+      expect(called).toBe(allowed);
     }).pipe(Effect.scoped),
   );
 });

@@ -15,6 +15,9 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Store from "./FactoryFeedStore.ts";
 import * as IssueLaunches from "./FactoryIssueLaunches.ts";
 import * as Sqlite from "./Sqlite.ts";
+import { feedItemOriginKey } from "../factory/FactoryOriginKey.ts";
+import { runMigrations } from "./Migrations.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const projectId = ProjectId.make("project");
 const sourceId = FactoryFeedSourceId.make("source");
@@ -88,6 +91,11 @@ const intent = (
   createdAt: at,
   previousThreadId,
 });
+const originKey = feedItemOriginKey(
+  "github.com/owner/repo",
+  "https://news.example.org/feed",
+  key.itemKey,
+);
 const layer = Store.layer.pipe(Layer.provideMerge(Sqlite.layerMemory));
 
 it.effect("SQL reservation chooses one immutable intent across independent store instances", () =>
@@ -98,11 +106,14 @@ it.effect("SQL reservation chooses one immutable intent across independent store
       concurrency: "unbounded",
     });
     assert.deepEqual(a, b);
-    assert.deepEqual(Option.getOrThrow(yield* second.get(key)), a);
+    assert.deepEqual(Option.getOrThrow(yield* second.get(originKey)), a);
     assert.equal(
       (yield* (yield* SqlClient.SqlClient)`SELECT * FROM factory_feed_launches`).length,
       1,
     );
+    const rows = yield* (yield* SqlClient.SqlClient)`SELECT origin_key FROM factory_feed_launches`;
+    assert.equal(rows[0]?.origin_key, originKey);
+    assert.isUndefined(a.intent.admittedBy);
   }).pipe(Effect.provide(layer)),
 );
 it.effect("restarts compare-and-swap the previous attempt and preserve provenance", () =>
@@ -145,7 +156,7 @@ it.effect("a command-id conflict retains the current binding", () =>
     });
     assert.equal(result.intent.threadId, original.intent.threadId);
     assert.equal(
-      Option.getOrThrow(yield* store.get(key)).intent.threadId,
+      Option.getOrThrow(yield* store.get(originKey)).intent.threadId,
       original.intent.threadId,
     );
   }).pipe(Effect.provide(layer)),
@@ -363,4 +374,59 @@ it.effect("retraction and restore never turn an unreviewable preview into admiss
       "candidate-unreviewable",
     );
   }).pipe(Effect.provide(layer)),
+);
+
+it.effect("075 preserves legacy duplicates, marks later claims and refuses their admission", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrations({ toMigrationInclusive: 74 });
+    const earliest = {
+      ...intent("z-earliest"),
+      snapshot: { ...intent("z-earliest").snapshot, feed: "https://news.example.org/a|b#c:%3A" },
+    };
+    const later = {
+      ...earliest,
+      threadId: ThreadId.make("a-later"),
+      sourceId: FactoryFeedSourceId.make("second-source"),
+      projectId: ProjectId.make("second-project"),
+      requestCommandId: CommandId.make("later"),
+      createdAt: "2026-10-25T00:00:00.000Z",
+    };
+    for (const launch of [later, earliest]) {
+      yield* sql`INSERT INTO factory_feed_launches (thread_id, source_id, item_key, request_command_id, intent_json)
+        VALUES (${launch.threadId}, ${launch.sourceId}, ${launch.itemKey}, ${launch.requestCommandId}, ${JSON.stringify(launch)})`;
+    }
+    yield* sql`INSERT INTO factory_feed_launches (thread_id, source_id, item_key, request_command_id, intent_json)
+      VALUES ('broken', 'broken', 'broken', 'broken', 'not json')`;
+    yield* runMigrations();
+    const expectedKey = feedItemOriginKey(
+      earliest.repository.canonicalKey,
+      earliest.snapshot.feed,
+      earliest.itemKey,
+    );
+    const rows =
+      yield* sql`SELECT thread_id, origin_key, origin_conflict FROM factory_feed_launches ORDER BY thread_id`;
+    assert.deepEqual(rows, [
+      { thread_id: later.threadId, origin_key: expectedKey, origin_conflict: 1 },
+      { thread_id: "broken", origin_key: null, origin_conflict: 0 },
+      { thread_id: earliest.threadId, origin_key: expectedKey, origin_conflict: 0 },
+    ]);
+    const indexes =
+      yield* sql`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'factory_feed_launches'`;
+    assert.includeMembers(
+      indexes.map((row) => row.name),
+      ["factory_feed_launches_current", "factory_feed_launches_origin"],
+    );
+    const store = yield* Store.FactoryFeedStore;
+    const current = Option.getOrThrow(yield* store.get(expectedKey));
+    assert.equal(current.intent.threadId, earliest.threadId);
+    assert.equal(current.originConflict, 1);
+    assert.isUndefined(current.intent.admittedBy);
+    assert.equal((yield* store.reserve(earliest).pipe(Effect.flip)).reason, "origin-conflict");
+    assert.equal((yield* sql`SELECT * FROM factory_feed_launches WHERE superseded = 0`).length, 3);
+  }).pipe(
+    Effect.provide(
+      Store.layer.pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" }))),
+    ),
+  ),
 );
