@@ -733,6 +733,8 @@ export const PullRequestActionInput = Schema.Struct({
   action: PullRequestAction,
   mergeMethod: Schema.optional(PullRequestMergeMethod),
   updateMethod: Schema.optional(PullRequestUpdateMethod),
+  /** Head commit the caller reviewed; the host refuses the action if the head has moved. */
+  expectedHeadSha: Schema.optional(TrimmedNonEmptyString),
 });
 export type PullRequestActionInput = typeof PullRequestActionInput.Type;
 
@@ -799,6 +801,8 @@ export const PullRequestSubmitReviewInput = Schema.Struct({
   verdict: PullRequestReviewVerdict,
   body: Schema.String.check(Schema.isMaxLength(65_536)),
   comments: Schema.Array(PullRequestReviewCommentDraft),
+  /** Head commit the review was written against; the host rejects it if the head has moved. */
+  commitId: Schema.optional(TrimmedNonEmptyString),
 });
 export type PullRequestSubmitReviewInput = typeof PullRequestSubmitReviewInput.Type;
 
