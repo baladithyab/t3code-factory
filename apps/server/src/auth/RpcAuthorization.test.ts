@@ -2,6 +2,8 @@ import {
   CommandId,
   ProjectId,
   FactoryFeedError,
+  FactoryIssueError,
+  FactoryReadinessOverrideId,
   FactoryFeedSourceId,
   type EnvironmentAuthorizationError,
   AuthEnvironmentMaintainScope,
@@ -482,6 +484,8 @@ describe("factory readiness authorization", () => {
           reasons: [],
           edges: [],
           complete: true,
+          basis: "source" as const,
+          overrides: [],
           listedCount: 0,
           summaryTotal: 0,
           observedAt: "2026-10-25T00:00:00.000Z",
@@ -748,5 +752,66 @@ describe("project coordinator authorization", () => {
         ).toMatchObject({ requiredPermission: AuthSourceControlWriteScope });
         expect(handled).toEqual(["ensure"]);
       }).pipe(Effect.scoped),
+  );
+});
+
+describe("readiness override and frontier authorization", () => {
+  const cases = [
+    { method: WS_METHODS.factorySetIssueReadinessOverride, scope: AuthOrchestrationOperateScope },
+    {
+      method: WS_METHODS.factoryRevokeIssueReadinessOverride,
+      scope: AuthOrchestrationOperateScope,
+    },
+    { method: WS_METHODS.factoryReadIssueFrontier, scope: AuthOrchestrationReadScope },
+  ] as const;
+  const methods = new Set<string>(cases.map(({ method }) => method));
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof cases)[number]["method"]> =>
+        !methods.has(tag),
+    ),
+  );
+  const input = {
+    projectId: ProjectId.make("project"),
+    issueNumber: 12,
+    parentIssueNumber: 2,
+    commandId: CommandId.make("override-auth"),
+    targetHost: "github.com",
+    targetId: 70,
+    expectedFingerprint: "observed",
+    kind: "waive" as const,
+    reason: "Deleted blocker.",
+    overrideId: FactoryReadinessOverrideId.make("override"),
+  };
+  it.effect.each(cases)("guards $method before service execution", ({ method, scope }) =>
+    Effect.gen(function* () {
+      for (const scopes of [[], [AuthOrchestrationReadScope], [AuthOrchestrationOperateScope]]) {
+        let calls = 0;
+        const fail = () =>
+          Effect.sync(() => {
+            calls++;
+          }).pipe(
+            Effect.andThen(Effect.fail(new FactoryIssueError({ reason: "missing-project" }))),
+          );
+        const client = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.merge(
+              group.toLayer({
+                [WS_METHODS.factorySetIssueReadinessOverride]: fail,
+                [WS_METHODS.factoryRevokeIssueReadinessOverride]: fail,
+                [WS_METHODS.factoryReadIssueFrontier]: fail,
+              }),
+              RpcAuthorization.layer(scopes),
+            ),
+          ),
+        );
+        const request: Effect.Effect<unknown, FactoryIssueError | EnvironmentAuthorizationError> =
+          client[method](input);
+        const result = yield* request.pipe(Effect.asVoid, Effect.flip);
+        const allowed = scopes.some((granted) => granted === scope);
+        expect(result._tag).toBe(allowed ? "FactoryIssueError" : "EnvironmentAuthorizationError");
+        expect(calls).toBe(allowed ? 1 : 0);
+      }
+    }).pipe(Effect.scoped),
   );
 });

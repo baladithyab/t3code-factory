@@ -1,13 +1,21 @@
 import {
   EnvironmentAuthorizationError,
+  FACTORY_READINESS_OVERRIDE_REASON_MAX_CHARS,
   FACTORY_READINESS_TTL_MS,
   FactoryIssueError,
+  type CommandId,
   type EnvironmentId,
+  type FactoryFrontierChild,
   type FactoryIssue,
+  type FactoryIssueFrontierReadResult,
   type FactoryIssueListInput,
   type FactoryIssueTask,
   type FactoryReadiness,
   type FactoryReadinessEdge,
+  type FactoryReadinessOverride,
+  type FactoryReadinessOverrideId,
+  type FactoryReadinessOverrideKind,
+  type FactoryReadinessOverrideSetInput,
   type FactoryReadinessReason,
   type ProjectId,
 } from "@t3tools/contracts";
@@ -142,6 +150,20 @@ export function describeFactoryFailure(error: unknown, fallbackMessage?: string)
           message: error.message,
           reason: error.reason,
         };
+      case "readiness-changed":
+        return {
+          kind: "changed",
+          title: "Blocker changed",
+          message: error.message,
+          reason: error.reason,
+        };
+      case "override-not-allowed":
+        return {
+          kind: "other",
+          title: "Override not allowed",
+          message: error.message,
+          reason: error.reason,
+        };
       case "unsupported-provider":
         return {
           kind: "unsupported",
@@ -241,9 +263,13 @@ export function factoryScopeKey(
 
 export type FactoryReadinessTone = "success" | "warning" | "info" | "neutral";
 
+export type FactoryReadinessOverrideAction = "dispute" | "waive";
+
 export interface FactoryReadinessEdgeRow {
   /** Identity is the tracker's database id; repository and number are only a locator. */
   readonly key: string;
+  readonly targetHost: string;
+  readonly targetId: number;
   readonly locator: string;
   readonly url: string | null;
   readonly title: string;
@@ -251,6 +277,23 @@ export interface FactoryReadinessEdgeRow {
   readonly closedAt: string | null;
   readonly resolutionLabel: string;
   readonly statusLabel: string;
+  /** Opaque digest of the resolution shown here; an override sends it back to bind to this view. */
+  readonly fingerprint: string;
+  /** What a reviewer may record on this edge now; null when an override already applies or none fits. */
+  readonly overrideAction: FactoryReadinessOverrideAction | null;
+  readonly overrideId: FactoryReadinessOverrideId | null;
+  /** `Disputed: <reason>` or `Waived: <reason>` while an override is in effect on this edge. */
+  readonly overrideLabel: string | null;
+}
+
+export interface FactoryReadinessInactiveOverrideRow {
+  readonly key: string;
+  readonly locator: string;
+  readonly kindLabel: "Dispute" | "Waiver";
+  readonly statusLabel: "No longer applies" | "Revoked";
+  readonly reason: string;
+  readonly createdAt: string;
+  readonly revokedAt: string | null;
 }
 
 export interface FactoryReadinessPresentation {
@@ -258,6 +301,10 @@ export interface FactoryReadinessPresentation {
   readonly tone: FactoryReadinessTone;
   readonly stale: boolean;
   readonly edgeRows: ReadonlyArray<FactoryReadinessEdgeRow>;
+  /** Lapsed and revoked decisions, kept visible for the record; none of them is applied. */
+  readonly inactiveOverrides: ReadonlyArray<FactoryReadinessInactiveOverrideRow>;
+  /** Why new overrides cannot be recorded from this observation, or null when they can. */
+  readonly overridesLockedReason: string | null;
 }
 
 // Keyed by the contract's reason union, so a new server reason fails to compile here instead of
@@ -278,6 +325,7 @@ const READINESS_REASON_LABELS: Record<FactoryReadinessReason, string> = {
   "rate-limited": "the GitHub rate limit was reached",
   "remote-failure": "GitHub could not be reached",
   cycle: "the blockers form a cycle",
+  "overridden-not-ready": "a blocker is disputed",
 };
 
 function edgeStateLabel(edge: FactoryReadinessEdge): string {
@@ -331,10 +379,51 @@ function edgeStatusLabel(status: FactoryReadinessEdge["status"]): string {
   }
 }
 
-function edgeRow(edge: FactoryReadinessEdge): FactoryReadinessEdgeRow {
+// `waive` retires a tombstone nothing in the tracker can fix; an accepted blocker can only be
+// disputed, and an open or unaccepted one must be resolved in the tracker.
+function edgeOverrideAction(edge: FactoryReadinessEdge): FactoryReadinessOverrideAction | null {
+  // Not counted at all, so there is nothing to dispute or waive.
+  if (edge.status === "removed-at-source") return null;
+  if (edge.override !== null) return null;
+  switch (edge.resolution) {
+    case "accepted":
+      return "dispute";
+    case "deleted":
+    case "inaccessible":
+    case "moved":
+    case "unverified":
+      return "waive";
+    case "open":
+    case "closed-unaccepted":
+      return null;
+  }
+}
+
+function overrideLabel(override: FactoryReadinessOverride | null): string {
+  if (override === null) return "Override in effect";
+  return `${override.kind === "waive" ? "Waived" : "Disputed"}: ${override.reason}`;
+}
+
+function activeOverridesById(
+  readiness: FactoryReadiness,
+): ReadonlyMap<FactoryReadinessOverrideId, FactoryReadinessOverride> {
+  return new Map(
+    readiness.overrides
+      .filter((override) => override.status === "active")
+      .map((override) => [override.id, override] as const),
+  );
+}
+
+function edgeRow(
+  edge: FactoryReadinessEdge,
+  override: FactoryReadinessOverride | null,
+  overridable: boolean,
+): FactoryReadinessEdgeRow {
   const title = edge.title?.trim() ?? "";
   return {
     key: `${edge.targetHost}:${edge.targetId}`,
+    targetHost: edge.targetHost,
+    targetId: edge.targetId,
     locator: `${edge.targetRepository}#${edge.targetNumber}`,
     url: safeExternalUrl(edge.targetUrl),
     title: title.length > 0 ? title : "Title unavailable",
@@ -342,33 +431,91 @@ function edgeRow(edge: FactoryReadinessEdge): FactoryReadinessEdgeRow {
     closedAt: edge.closedAt,
     resolutionLabel: edgeResolutionLabel(edge),
     statusLabel: edgeStatusLabel(edge.status),
+    fingerprint: edge.fingerprint,
+    overrideAction: overridable ? edgeOverrideAction(edge) : null,
+    overrideId: edge.override,
+    overrideLabel: edge.override === null ? null : overrideLabel(override),
   };
 }
 
-/**
- * Wording for observed blocker evidence. It never says "Ready": the line reports what was seen and
- * when, and nothing here gates starting work. A stale observation (or one whose time cannot be
- * read) is marked rather than hidden, and no longer reads as a positive signal.
- */
-export function factoryReadinessPresentation(
+interface ReadinessVerdict {
+  readonly label: string;
+  readonly tone: FactoryReadinessTone;
+  readonly stale: boolean;
+}
+
+/** The active override on an edge, if the readiness result carries it. */
+function activeOverrideOf(
+  edge: FactoryReadinessEdge,
+  active: ReadonlyMap<FactoryReadinessOverrideId, FactoryReadinessOverride>,
+): FactoryReadinessOverride | null {
+  return edge.override === null ? null : (active.get(edge.override) ?? null);
+}
+
+function inactiveOverrideRows(
   readiness: FactoryReadiness,
+): ReadonlyArray<FactoryReadinessInactiveOverrideRow> {
+  const locators = new Map(
+    readiness.edges.map((edge) => [
+      `${edge.targetHost}:${edge.targetId}`,
+      `${edge.targetRepository}#${edge.targetNumber}`,
+    ]),
+  );
+  return readiness.overrides
+    .filter((override) => override.status !== "active")
+    .map((override) => {
+      const identity = `${override.targetHost}:${override.targetId}`;
+      return {
+        key: override.id,
+        locator: locators.get(identity) ?? identity,
+        kindLabel: override.kind === "waive" ? "Waiver" : "Dispute",
+        statusLabel: override.status === "revoked" ? "Revoked" : "No longer applies",
+        reason: override.reason,
+        createdAt: override.createdAt,
+        revokedAt: override.revokedAt,
+      };
+    });
+}
+
+function readinessVerdict(
+  readiness: FactoryReadiness,
+  active: ReadonlyMap<FactoryReadinessOverrideId, FactoryReadinessOverride>,
   now: number,
-): FactoryReadinessPresentation {
+): ReadinessVerdict {
   const stale = !(now - Date.parse(readiness.observedAt) <= FACTORY_READINESS_TTL_MS);
   let label: string;
   let tone: FactoryReadinessTone;
   switch (readiness.status) {
     case "ready": {
       const observed = formatRelativeTimeLabel(readiness.observedAt, now);
-      label = `No unresolved blockers observed ${observed} · basis: source`;
+      const waived = readiness.edges.filter(
+        (edge) => activeOverrideOf(edge, active)?.kind === "waive",
+      ).length;
+      // A verdict that leans on a waiver says so, so it cannot read as the tracker's own signal.
+      label =
+        readiness.basis === "override"
+          ? `No unresolved blockers observed ${observed} · basis: override (${waived} waived)`
+          : `No unresolved blockers observed ${observed} · basis: source`;
       tone = stale ? "info" : "success";
       break;
     }
     case "blocked": {
-      const unresolved = readiness.edges.filter(
-        (edge) => edge.status !== "removed-at-source" && edge.resolution !== "accepted",
-      ).length;
+      let unresolved = 0;
+      let disputed = 0;
+      for (const edge of readiness.edges) {
+        // The tracker removed this dependency; the server does not count it.
+        if (edge.status === "removed-at-source") continue;
+        const override = activeOverrideOf(edge, active);
+        if (override?.kind === "waive") continue;
+        if (override?.kind === "force-not-ready") {
+          unresolved += 1;
+          disputed += 1;
+        } else if (edge.resolution !== "accepted") {
+          unresolved += 1;
+        }
+      }
       label = `Blocked: ${unresolved} unresolved ${unresolved === 1 ? "blocker" : "blockers"}`;
+      if (disputed > 0) label += ` (${disputed} disputed)`;
       tone = "warning";
       break;
     }
@@ -383,10 +530,175 @@ export function factoryReadinessPresentation(
       tone = "neutral";
       break;
   }
+  return { label: stale ? `${label} · stale` : label, tone, stale };
+}
+
+/**
+ * Wording for observed blocker evidence. It never says "Ready": the line reports what was seen and
+ * when, and nothing here gates starting work. A stale observation (or one whose time cannot be
+ * read) is marked rather than hidden, and no longer reads as a positive signal.
+ *
+ * Overrides are the reviewer's own recorded decisions about single edges. Setting one needs
+ * current, complete evidence, so a stale or partial observation locks new decisions until it is
+ * observed again; revoking never needs fresh evidence.
+ */
+export function factoryReadinessPresentation(
+  readiness: FactoryReadiness,
+  now: number,
+): FactoryReadinessPresentation {
+  const active = activeOverridesById(readiness);
+  const verdict = readinessVerdict(readiness, active, now);
+  const overridable = readiness.status !== "not-applicable";
   return {
-    label: stale ? `${label} · stale` : label,
-    tone,
-    stale,
-    edgeRows: readiness.edges.map(edgeRow),
+    label: verdict.label,
+    tone: verdict.tone,
+    stale: verdict.stale,
+    edgeRows: readiness.edges.map((edge) =>
+      edgeRow(edge, activeOverrideOf(edge, active), overridable),
+    ),
+    inactiveOverrides: inactiveOverrideRows(readiness),
+    overridesLockedReason: verdict.stale
+      ? "This observation is stale. Refresh before changing overrides."
+      : readiness.complete
+        ? null
+        : "The blocker list is incomplete. Refresh before changing overrides.",
+  };
+}
+
+export interface FactoryFrontierRow {
+  readonly key: string;
+  readonly number: number;
+  readonly title: string;
+  readonly url: string | null;
+  readonly state: FactoryFrontierChild["state"];
+  readonly assignees: ReadonlyArray<string>;
+  readonly assigneesLabel: string;
+  /** The child's observed verdict wording, or `Closed` or `Not observed` when it has none. */
+  readonly verdictLabel: string;
+  readonly tone: FactoryReadinessTone;
+}
+
+export interface FactoryFrontierPresentation {
+  /** In the tracker's recorded order; nothing here ranks or picks a child. */
+  readonly rows: ReadonlyArray<FactoryFrontierRow>;
+  readonly note: string | null;
+  readonly stale: boolean;
+}
+
+/**
+ * A planning view of one parent's sub-issues. Assignees are shown for context and are never a
+ * readiness input, and an incomplete enumeration is reported rather than presented as the whole.
+ */
+export function factoryFrontierPresentation(
+  result: FactoryIssueFrontierReadResult,
+  now: number,
+): FactoryFrontierPresentation {
+  const rows = result.children.map((child): FactoryFrontierRow => {
+    const title = child.title.trim();
+    let verdictLabel: string;
+    let tone: FactoryReadinessTone;
+    if (child.state === "closed") {
+      verdictLabel = "Closed";
+      tone = "neutral";
+    } else if (child.readiness === null) {
+      verdictLabel = "Not observed";
+      tone = "info";
+    } else {
+      const active = activeOverridesById(child.readiness);
+      ({ label: verdictLabel, tone } = readinessVerdict(child.readiness, active, now));
+    }
+    return {
+      key: String(child.number),
+      number: child.number,
+      title: title.length > 0 ? title : "Title unavailable",
+      url: safeExternalUrl(child.url),
+      state: child.state,
+      assignees: child.assignees,
+      assigneesLabel: child.assignees.length === 0 ? "Unassigned" : child.assignees.join(", "),
+      verdictLabel,
+      tone,
+    };
+  });
+  let note: string | null = null;
+  if (!result.complete) {
+    note =
+      result.summaryTotal === null
+        ? "Incomplete: GitHub did not report how many sub-issues exist, so this list may be missing some."
+        : `Incomplete: GitHub reports ${result.summaryTotal} ${result.summaryTotal === 1 ? "sub-issue" : "sub-issues"}, ${rows.length} listed here. This list may be missing some.`;
+  }
+  return {
+    rows,
+    note,
+    stale: !(now - Date.parse(result.observedAt) <= FACTORY_READINESS_TTL_MS),
+  };
+}
+
+export const FACTORY_OVERRIDE_ACTIONS: Record<
+  FactoryReadinessOverrideAction,
+  {
+    readonly kind: FactoryReadinessOverrideKind;
+    readonly buttonLabel: string;
+    readonly title: string;
+    readonly description: string;
+    readonly confirmLabel: string;
+    readonly pendingLabel: string;
+  }
+> = {
+  dispute: {
+    kind: "force-not-ready",
+    buttonLabel: "Dispute",
+    title: "Dispute blocker",
+    description:
+      "GitHub reports this blocker as completed. Recording a dispute keeps the issue reading as blocked until you revoke it or the blocker changes. It is your recorded decision and never allows or prevents starting work.",
+    confirmLabel: "Record dispute",
+    pendingLabel: "Recording…",
+  },
+  waive: {
+    kind: "waive",
+    buttonLabel: "Waive",
+    title: "Waive blocker",
+    description:
+      "This blocker can no longer be resolved or verified on GitHub. Waiving it stops counting it, so the issue can read as having no unresolved blockers with the basis shown as override. It lapses if the blocker changes, and never allows or prevents starting work.",
+    confirmLabel: "Record waiver",
+    pendingLabel: "Recording…",
+  },
+};
+
+export interface FactoryOverrideSubmitReadiness {
+  readonly canOperate: boolean;
+  readonly pending: boolean;
+  readonly changed: boolean;
+  readonly reason: string;
+}
+
+/** `changed` locks resubmission: the pinned edge is stale and must be reviewed again. */
+export function isFactoryOverrideSubmitEnabled(readiness: FactoryOverrideSubmitReadiness): boolean {
+  return (
+    readiness.canOperate &&
+    !readiness.pending &&
+    !readiness.changed &&
+    readiness.reason.trim().length > 0 &&
+    readiness.reason.length <= FACTORY_READINESS_OVERRIDE_REASON_MAX_CHARS
+  );
+}
+
+export function buildFactoryReadinessOverrideInput(options: {
+  readonly commandId: CommandId;
+  readonly projectId: ProjectId;
+  readonly issueNumber: number;
+  readonly row: Pick<FactoryReadinessEdgeRow, "targetHost" | "targetId" | "fingerprint">;
+  readonly action: FactoryReadinessOverrideAction;
+  readonly reason: string;
+}): FactoryReadinessOverrideSetInput {
+  return {
+    commandId: options.commandId,
+    projectId: options.projectId,
+    issueNumber: options.issueNumber,
+    targetHost: options.row.targetHost,
+    targetId: options.row.targetId,
+    // The resolution the reviewer saw, never one read again at submit time.
+    expectedFingerprint: options.row.fingerprint,
+    kind: FACTORY_OVERRIDE_ACTIONS[options.action].kind,
+    reason: options.reason.trim(),
   };
 }

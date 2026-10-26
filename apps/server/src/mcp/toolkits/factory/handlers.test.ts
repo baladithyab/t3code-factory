@@ -184,6 +184,8 @@ it.effect.each([true, false])(
           status: "ready" as const,
           reasons: [],
           edges: [],
+          basis: "source" as const,
+          overrides: [],
           complete: true,
           listedCount: 0,
           summaryTotal: 0,
@@ -648,5 +650,65 @@ it.effect(
         .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
       assert.deepInclude(outputs.at(-1)?.result, { code: "runtime_mode_escalation_denied" });
       assert.isTrue(called);
+    }),
+);
+
+it.effect.each([true, false])(
+  "read-only frontier requires orchestration capability: %s",
+  (allowed) =>
+    Effect.gen(function* () {
+      let called = false;
+      const result = {
+        repository: {
+          provider: "github" as const,
+          host: "github.com",
+          repository: "owner/repo",
+          canonicalKey: "github.com/owner/repo",
+          url: "https://github.com/owner/repo",
+        },
+        parentIssueNumber: 2,
+        parentTitle: "Factory map",
+        complete: false,
+        summaryTotal: 2,
+        children: [],
+        observedAt: "2026-10-25T00:00:00.000Z",
+      };
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(Context.McpInvocationContext, {
+          environmentId: EnvironmentId.make("test"),
+          requestNamespace: "frontier-test",
+          issuedAt: 0,
+          thread: undefined,
+          client: { sessionId: "test", label: "test", access: "read-only" },
+          capabilities: new Set<Context.McpCapability>(allowed ? ["orchestration"] : ["worktree"]),
+        }),
+        Layer.mock(Threads.ThreadManagementService)({}),
+        Layer.mock(Relations.FactoryIssueRelations)({
+          readFrontier: () =>
+            Effect.sync(() => {
+              called = true;
+              return result;
+            }),
+        }),
+      );
+      const toolkit = yield* FactoryToolkit.pipe(
+        Effect.provide(
+          Access.HandlersLayer.layer(Handlers.layer).pipe(Layer.provide(dependencies)),
+        ),
+      );
+      const outputs = yield* toolkit
+        .handle("factory_read_issue_frontier", {
+          projectId: ProjectId.make("project"),
+          parentIssueNumber: 2,
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      if (allowed) assert.deepEqual(outputs.at(-1)?.result, result);
+      else assert.deepInclude(outputs.at(-1)?.result, { code: "capability_denied" });
+      assert.equal(called, allowed);
+      assert.notInclude(Object.keys(FactoryToolkit.tools), "factory_set_issue_readiness_override");
+      assert.notInclude(
+        Object.keys(FactoryToolkit.tools),
+        "factory_revoke_issue_readiness_override",
+      );
     }),
 );

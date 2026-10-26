@@ -1,5 +1,8 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import {
+  CommandId,
+  FactoryReadinessOverrideId,
   ProjectId,
   type FactoryReadinessReason,
   type RepositoryIdentity,
@@ -79,6 +82,7 @@ function harness(
     Effect.succeed(identity),
 ) {
   const dependencies = Layer.mergeAll(
+    NodeCrypto.layer,
     Store.layer.pipe(Layer.provideMerge(Sqlite.layerMemory)),
     Layer.mock(GitHubRest.GitHubRest)({ rest }),
     Layer.succeed(Identities.RepositoryIdentityResolver, { resolve }),
@@ -545,4 +549,452 @@ it.effect("a proven blocker outranks unknown tombstones on a complete listing", 
       ),
     ),
   ),
+);
+
+it.effect(
+  "deleted tombstone → blocked; waive with observed fingerprint → ready basis override; changed fingerprint → readiness-changed; revoke → blocked; waive on open blocker → override-not-allowed",
+  () => {
+    let state: "accepted" | "deleted" | "open" = "accepted";
+    return Effect.gen(function* () {
+      const relations = yield* Relations.FactoryIssueRelations;
+      assert.equal((yield* read).basis, "source");
+      state = "deleted";
+      const deleted = yield* read;
+      assert.equal(deleted.status, "blocked");
+      const edge = deleted.edges[0]!;
+      assert.equal(edge.resolution, "deleted");
+      assert.equal(
+        edge.fingerprint,
+        "1fc5e9d5300fcf75fe9938d29d9693dcfda1ef8cadd477d188b862e0c44742a9",
+      );
+      const set = {
+        ...input,
+        commandId: CommandId.make("waive-deleted"),
+        targetHost: edge.targetHost,
+        targetId: edge.targetId,
+        expectedFingerprint: edge.fingerprint,
+        kind: "waive" as const,
+        reason: "The deleted blocker is no longer actionable.",
+      };
+      const waived = (yield* relations.setOverride(set)).readiness;
+      assert.equal(waived.status, "ready");
+      assert.equal(waived.basis, "override");
+      assert.equal(waived.edges[0]?.resolution, "deleted");
+      assert.equal(waived.edges[0]?.override, waived.overrides[0]?.id);
+      assert.equal(waived.overrides[0]?.status, "active");
+      assert.equal(
+        (yield* relations
+          .setOverride({
+            ...set,
+            commandId: CommandId.make("stale"),
+            expectedFingerprint: "changed-fingerprint",
+          })
+          .pipe(Effect.flip)).reason,
+        "readiness-changed",
+      );
+      const revoke = {
+        ...input,
+        commandId: CommandId.make("revoke"),
+        overrideId: waived.overrides[0]!.id,
+      };
+      assert.equal((yield* relations.revokeOverride(revoke)).readiness.status, "blocked");
+      assert.equal(
+        (yield* relations.revokeOverride(revoke)).readiness.overrides[0]?.status,
+        "revoked",
+      );
+      state = "open";
+      const opened = yield* read;
+      assert.equal(
+        (yield* relations
+          .setOverride({
+            ...set,
+            commandId: CommandId.make("waive-open"),
+            expectedFingerprint: opened.edges[0]!.fingerprint,
+          })
+          .pipe(Effect.flip)).reason,
+        "override-not-allowed",
+      );
+    }).pipe(
+      Effect.provide(
+        harness((request) =>
+          routes({
+            [subjectPath]: response(subject(state === "deleted" ? 0 : 1)),
+            [listingPath]: response(
+              state === "deleted"
+                ? []
+                : [
+                    blocker(
+                      7,
+                      state === "open" ? "reopened" : "completed",
+                      state === "open" ? "open" : "closed",
+                    ),
+                  ],
+            ),
+            "repos/owner/factory/issues/7": response({}, {}, { status: 410 }),
+          })(request),
+        ),
+      ),
+    );
+  },
+);
+it.effect("a disputed accepted blocker lapses on reopening and on a later completion", () => {
+  let state = "closed";
+  let closedAt = at;
+  return Effect.gen(function* () {
+    const relations = yield* Relations.FactoryIssueRelations;
+    const accepted = (yield* read).edges[0]!;
+    const set = {
+      ...input,
+      commandId: CommandId.make("dispute"),
+      targetHost: accepted.targetHost,
+      targetId: accepted.targetId,
+      expectedFingerprint: accepted.fingerprint,
+      kind: "force-not-ready" as const,
+      reason: "Completion needs review.",
+    };
+    const disputed = (yield* relations.setOverride(set)).readiness;
+    assert.equal(disputed.status, "blocked");
+    assert.equal(disputed.basis, null);
+    assert.include(disputed.reasons, "overridden-not-ready");
+    yield* TestClock.adjust("1 minute");
+    assert.equal((yield* read).edges[0]?.fingerprint, accepted.fingerprint);
+    assert.deepEqual((yield* relations.setOverride(set)).readiness.overrides, disputed.overrides);
+    state = "open";
+    const reopened = yield* read;
+    assert.equal(reopened.overrides[0]?.status, "lapsed");
+    assert.equal(reopened.edges[0]?.override, null);
+    assert.notEqual(reopened.edges[0]?.fingerprint, accepted.fingerprint);
+    assert.notInclude(reopened.reasons, "overridden-not-ready");
+    assert.equal(
+      (yield* relations
+        .setOverride({
+          ...set,
+          commandId: CommandId.make("changed-resolution"),
+        })
+        .pipe(Effect.flip)).reason,
+      "readiness-changed",
+    );
+    // Replaying an old command returns current state, not a newly active override.
+    assert.equal((yield* relations.setOverride(set)).readiness.overrides.length, 1);
+    state = "closed";
+    closedAt = "2026-10-25T00:01:00.000Z";
+    const completed = yield* read;
+    assert.equal(completed.status, "ready");
+    assert.equal(completed.basis, "source");
+    assert.equal(completed.overrides[0]?.status, "lapsed");
+  }).pipe(
+    Effect.provide(
+      harness((request) =>
+        routes({
+          [subjectPath]: response(subject(1)),
+          [listingPath]: response([
+            {
+              ...blocker(7, state === "open" ? "reopened" : "completed", state),
+              closed_at: state === "closed" ? closedAt : null,
+            },
+          ]),
+        })(request),
+      ),
+    ),
+  );
+});
+it.effect(
+  "a second override supersedes the first, replay cannot revive it, and revocation checks the subject",
+  () =>
+    Effect.gen(function* () {
+      const relations = yield* Relations.FactoryIssueRelations;
+      const edge = (yield* read).edges[0]!;
+      const set = {
+        ...input,
+        commandId: CommandId.make("first"),
+        targetHost: edge.targetHost,
+        targetId: edge.targetId,
+        expectedFingerprint: edge.fingerprint,
+        kind: "force-not-ready" as const,
+        reason: "Review the completion.",
+      };
+      const first = (yield* relations.setOverride(set)).readiness.overrides[0]!;
+      const second = (yield* relations.setOverride({ ...set, commandId: CommandId.make("second") }))
+        .readiness;
+      assert.equal(second.overrides.length, 2);
+      assert.equal(second.overrides[0]?.status, "revoked");
+      assert.equal(second.overrides[1]?.status, "active");
+      assert.equal(second.edges[0]?.override, second.overrides[1]?.id);
+      assert.deepEqual((yield* relations.setOverride(set)).readiness.overrides, second.overrides);
+      assert.equal(
+        (yield* relations
+          .revokeOverride({
+            ...input,
+            issueNumber: 13,
+            commandId: CommandId.make("wrong-subject"),
+            overrideId: first.id,
+          })
+          .pipe(Effect.flip)).reason,
+        "invalid-response",
+      );
+      assert.equal(
+        (yield* relations.setOverride({ ...set, issueNumber: 13 }).pipe(Effect.flip)).reason,
+        "invalid-response",
+      );
+      assert.equal(
+        (yield* relations
+          .setOverride({
+            ...set,
+            commandId: CommandId.make("missing-edge"),
+            targetId: 999,
+          })
+          .pipe(Effect.flip)).reason,
+        "invalid-response",
+      );
+    }).pipe(
+      Effect.provide(
+        harness(
+          routes({
+            [subjectPath]: response(subject(1)),
+            [listingPath]: response([blocker(7)]),
+          }),
+        ),
+      ),
+    ),
+);
+it.effect("an override with no current edge is listed as lapsed", () =>
+  Effect.gen(function* () {
+    const store = yield* Store.FactoryIssueRelationStore;
+    yield* store.setOverride({
+      canonicalKey: identity.canonicalKey,
+      issueNumber: 12,
+      id: FactoryReadinessOverrideId.make("missing-edge"),
+      kind: "waive",
+      targetHost: "github.com",
+      targetId: 999,
+      boundFingerprint: "former-fingerprint",
+      reason: "Previously observed evidence.",
+      requestCommandId: CommandId.make("missing"),
+      createdAt: at,
+      revokedAt: null,
+    });
+    const readiness = yield* read;
+    assert.equal(readiness.status, "ready");
+    assert.equal(readiness.basis, "source");
+    assert.equal(readiness.overrides[0]?.status, "lapsed");
+  }).pipe(
+    Effect.provide(
+      harness(
+        routes({
+          [subjectPath]: response(subject(0)),
+          [listingPath]: response([]),
+        }),
+      ),
+    ),
+  ),
+);
+it.effect("incomplete evidence cannot be disputed even when the observed fingerprint matches", () =>
+  Effect.gen(function* () {
+    const relations = yield* Relations.FactoryIssueRelations;
+    const edge = (yield* read).edges[0]!;
+    assert.equal(
+      (yield* relations
+        .setOverride({
+          ...input,
+          commandId: CommandId.make("incomplete"),
+          targetHost: edge.targetHost,
+          targetId: edge.targetId,
+          expectedFingerprint: edge.fingerprint,
+          kind: "force-not-ready",
+          reason: "Incomplete evidence.",
+        })
+        .pipe(Effect.flip)).reason,
+      "override-not-allowed",
+    );
+  }).pipe(
+    Effect.provide(
+      harness(
+        routes({
+          [subjectPath]: response(subject(2)),
+          [listingPath]: response([blocker(7)]),
+        }),
+      ),
+    ),
+  ),
+);
+
+const parentPath = "repos/owner/factory/issues/2";
+const childrenPath = `${parentPath}/sub_issues?per_page=100&page=1`;
+const child = (number: number, state = "open") => ({
+  ...blocker(number, state === "open" ? null : "completed", state),
+  assignees: [{ login: `owner-${number}` }],
+});
+it.effect.each([3, 4])(
+  "frontier preserves source order, child verdicts and assignees with total $total",
+  (total) =>
+    Effect.gen(function* () {
+      const relations = yield* Relations.FactoryIssueRelations;
+      const frontier = yield* relations.readFrontier({ projectId, parentIssueNumber: 2 });
+      assert.equal(frontier.parentTitle, "Factory map");
+      assert.equal(frontier.complete, total === 3);
+      assert.equal(frontier.summaryTotal, total);
+      assert.deepEqual(
+        frontier.children.map((item) => item.number),
+        [12, 9, 4],
+      );
+      assert.deepEqual(
+        frontier.children.map((item) => item.readiness?.status ?? null),
+        ["ready", "blocked", null],
+      );
+      assert.deepEqual(
+        frontier.children.map((item) => item.assignees),
+        [["owner-12"], ["owner-9"], ["owner-4"]],
+      );
+    }).pipe(
+      Effect.provide(
+        harness(
+          routes({
+            [parentPath]: response({ title: "Factory map", sub_issues_summary: { total } }),
+            [childrenPath]: response([child(12), child(9), child(4, "closed")]),
+            [subjectPath]: response(subject(0)),
+            [listingPath]: response([]),
+            "repos/owner/factory/issues/9": response({ ...subject(1), id: 90 }),
+            "repos/owner/factory/issues/9/dependencies/blocked_by?per_page=100&page=1": response([
+              blocker(7, null, "open"),
+            ]),
+          }),
+        ),
+      ),
+    ),
+);
+it.effect("frontier follows next links and isolates a failed child observation", () =>
+  Effect.gen(function* () {
+    const relations = yield* Relations.FactoryIssueRelations;
+    const frontier = yield* relations.readFrontier({ projectId, parentIssueNumber: 2 });
+    assert.isTrue(frontier.complete);
+    assert.deepEqual(
+      frontier.children.map((item) => item.number),
+      [12, 4],
+    );
+    assert.equal(frontier.children[0]?.readiness?.status, "unknown");
+    assert.equal(frontier.children[1]?.readiness, null);
+  }).pipe(
+    Effect.provide(
+      harness(
+        routes({
+          [parentPath]: response({ title: "Factory map", sub_issues_summary: { total: 2 } }),
+          [childrenPath]: response([child(12)], {
+            link: `<https://api.github.com/repos/owner/factory/issues/2/sub_issues?per_page=100&page=2>; rel="next"`,
+          }),
+          [`${parentPath}/sub_issues?per_page=100&page=2`]: response([child(4, "closed")]),
+          [subjectPath]: response({}, {}, { status: 503 }),
+        }),
+      ),
+    ),
+  ),
+);
+it.effect("frontier retains the readable page when a later page fails", () =>
+  Effect.gen(function* () {
+    const frontier = yield* (yield* Relations.FactoryIssueRelations).readFrontier({
+      projectId,
+      parentIssueNumber: 2,
+    });
+    assert.isFalse(frontier.complete);
+    assert.deepEqual(
+      frontier.children.map((item) => item.number),
+      [4],
+    );
+  }).pipe(
+    Effect.provide(
+      harness(
+        routes({
+          [parentPath]: response({ title: "Factory map", sub_issues_summary: { total: 2 } }),
+          [childrenPath]: response([child(4, "closed")], {
+            link: `<https://api.github.com/repos/owner/factory/issues/2/sub_issues?per_page=100&page=2>; rel="next"`,
+          }),
+          [`${parentPath}/sub_issues?per_page=100&page=2`]: response({}, {}, { status: 503 }),
+        }),
+      ),
+    ),
+  ),
+);
+it.effect("frontier fails when the parent cannot be read", () =>
+  Effect.gen(function* () {
+    const error = yield* (yield* Relations.FactoryIssueRelations)
+      .readFrontier({ projectId, parentIssueNumber: 2 })
+      .pipe(Effect.flip);
+    assert.equal(error.reason, "remote-failure");
+  }).pipe(
+    Effect.provide(
+      harness(
+        routes({
+          [parentPath]: response({}, {}, { status: 404 }),
+        }),
+      ),
+    ),
+  ),
+);
+
+it.effect(
+  "frontier reads a cross-repository child's own evidence instead of the parent's issue number",
+  () =>
+    Effect.gen(function* () {
+      const frontier = yield* (yield* Relations.FactoryIssueRelations).readFrontier({
+        projectId,
+        parentIssueNumber: 2,
+      });
+      assert.isTrue(frontier.complete);
+      assert.equal(frontier.children[0]?.readiness?.status, "blocked");
+      assert.equal(frontier.children[0]?.readiness?.edges[0]?.targetId, 70);
+      const store = yield* Store.FactoryIssueRelationStore;
+      assert.equal(
+        (yield* store.listEdges({ canonicalKey: "github.com/other/repo", issueNumber: 12 })).length,
+        1,
+      );
+      assert.equal(
+        (yield* store.listEdges({ canonicalKey: identity.canonicalKey, issueNumber: 12 })).length,
+        0,
+      );
+    }).pipe(
+      Effect.provide(
+        harness(
+          routes({
+            [parentPath]: response({ title: "Factory map", sub_issues_summary: { total: 1 } }),
+            [childrenPath]: response([
+              {
+                ...child(12),
+                repository: { full_name: "other/repo" },
+                html_url: "https://github.com/other/repo/issues/12",
+              },
+            ]),
+            "repos/other/repo/issues/12": response(subject(1)),
+            "repos/other/repo/issues/12/dependencies/blocked_by?per_page=100&page=1": response([
+              blocker(7, null, "open"),
+            ]),
+          }),
+        ),
+      ),
+    ),
+);
+it.effect(
+  "frontier stops after five linked pages and reports incomplete even when the count matches",
+  () => {
+    const pages: Record<string, ReturnType<Remote>> = {
+      [parentPath]: response({ title: "Factory map", sub_issues_summary: { total: 5 } }),
+    };
+    for (let page = 1; page <= 5; page++) {
+      pages[`${parentPath}/sub_issues?per_page=100&page=${page}`] = response(
+        [child(page, "closed")],
+        {
+          link: `<https://api.github.com/repos/owner/factory/issues/2/sub_issues?per_page=100&page=${page + 1}>; rel="next"`,
+        },
+      );
+    }
+    return Effect.gen(function* () {
+      const frontier = yield* (yield* Relations.FactoryIssueRelations).readFrontier({
+        projectId,
+        parentIssueNumber: 2,
+      });
+      assert.isFalse(frontier.complete);
+      assert.deepEqual(
+        frontier.children.map((item) => item.number),
+        [1, 2, 3, 4, 5],
+      );
+    }).pipe(Effect.provide(harness(routes(pages))));
+  },
 );

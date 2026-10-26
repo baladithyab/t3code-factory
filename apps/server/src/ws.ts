@@ -2517,6 +2517,11 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.factoryListIssues]: (input) => factory.list(input),
         [WS_METHODS.factoryReadIssueReadiness]: (input) => factoryRelations.read(input),
+        [WS_METHODS.factorySetIssueReadinessOverride]: (input) =>
+          factoryRelations.setOverride(input),
+        [WS_METHODS.factoryRevokeIssueReadinessOverride]: (input) =>
+          factoryRelations.revokeOverride(input),
+        [WS_METHODS.factoryReadIssueFrontier]: (input) => factoryRelations.readFrontier(input),
         [WS_METHODS.factoryStartIssue]: (input) => factory.start(input),
         [WS_METHODS.factoryListFeedSources]: (input) => factoryFeeds.listSources(input),
         [WS_METHODS.factoryBindFeedSource]: (input) => factoryFeeds.bindSource(input),

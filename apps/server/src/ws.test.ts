@@ -6,6 +6,7 @@ import {
   CommandId,
   FactoryFeedError,
   FactoryIssueError,
+  FactoryReadinessOverrideId,
   FactoryFeedSourceId,
   ProviderInstanceId,
   WsRpcGroup,
@@ -764,7 +765,7 @@ it.effect("routes all eight feed RPCs to the service without translating domain 
 );
 
 it.effect(
-  "routes readiness through the read-only service without translating repository errors",
+  "routes readiness, override commands and frontier without translating domain refusals",
   () =>
     Effect.gen(function* () {
       const calls: unknown[] = [];
@@ -786,13 +787,41 @@ it.effect(
             }).pipe(
               Effect.andThen(Effect.fail(new FactoryIssueError({ reason: "missing-repository" }))),
             ),
+          setOverride: (input) =>
+            Effect.sync(() => {
+              calls.push(input);
+            }).pipe(
+              Effect.andThen(Effect.fail(new FactoryIssueError({ reason: "readiness-changed" }))),
+            ),
+          revokeOverride: (input) =>
+            Effect.sync(() => {
+              calls.push(input);
+            }).pipe(
+              Effect.andThen(Effect.fail(new FactoryIssueError({ reason: "invalid-response" }))),
+            ),
+          readFrontier: (input) =>
+            Effect.sync(() => {
+              calls.push(input);
+            }).pipe(
+              Effect.andThen(Effect.fail(new FactoryIssueError({ reason: "remote-failure" }))),
+            ),
         }),
       );
-      const method = WS_METHODS.factoryReadIssueReadiness;
+      const methods = [
+        WS_METHODS.factoryReadIssueReadiness,
+        WS_METHODS.factorySetIssueReadinessOverride,
+        WS_METHODS.factoryRevokeIssueReadinessOverride,
+        WS_METHODS.factoryReadIssueFrontier,
+      ] as const;
+      const tested: ReadonlyArray<string> = methods;
       const group = WsRpcGroup.omit(
         ...[...WsRpcGroup.requests.keys()].filter(
-          (tag): tag is Exclude<keyof typeof RpcAuthorization.RPC_REQUIRED_SCOPES, typeof method> =>
-            tag !== method,
+          (
+            tag,
+          ): tag is Exclude<
+            keyof typeof RpcAuthorization.RPC_REQUIRED_SCOPES,
+            (typeof methods)[number]
+          > => !tested.includes(tag),
         ),
       );
       const client = yield* RpcTest.makeClient(group).pipe(
@@ -810,15 +839,43 @@ it.effect(
               yield* PreviewAutomationBroker.PreviewAutomationBroker,
               yield* ServerBrowser.ServerBrowser,
             ).pipe(Layer.provide(services)),
-            RpcAuthorization.layer(["orchestration:read"]),
+            RpcAuthorization.layer(["orchestration:read", "orchestration:operate"]),
           ),
         ),
       );
       const input = { projectId: ProjectId.make("project"), issueNumber: 12 };
-      const result = yield* client[method](input).pipe(Effect.flip);
-      assert.instanceOf(result, FactoryIssueError);
-      assert.equal(result.reason, "missing-repository");
-      assert.deepEqual(calls, [input]);
+      const set = {
+        ...input,
+        commandId: CommandId.make("set"),
+        targetHost: "github.com",
+        targetId: 70,
+        expectedFingerprint: "observed",
+        kind: "waive" as const,
+        reason: "Deleted blocker.",
+      };
+      const revoke = {
+        ...input,
+        commandId: CommandId.make("revoke"),
+        overrideId: FactoryReadinessOverrideId.make("override"),
+      };
+      const frontier = { projectId: input.projectId, parentIssueNumber: 2 };
+      assert.deepInclude(
+        yield* client[WS_METHODS.factoryReadIssueReadiness](input).pipe(Effect.flip),
+        { _tag: "FactoryIssueError", reason: "missing-repository" },
+      );
+      assert.deepInclude(
+        yield* client[WS_METHODS.factorySetIssueReadinessOverride](set).pipe(Effect.flip),
+        { _tag: "FactoryIssueError", reason: "readiness-changed" },
+      );
+      assert.deepInclude(
+        yield* client[WS_METHODS.factoryRevokeIssueReadinessOverride](revoke).pipe(Effect.flip),
+        { _tag: "FactoryIssueError", reason: "invalid-response" },
+      );
+      assert.deepInclude(
+        yield* client[WS_METHODS.factoryReadIssueFrontier](frontier).pipe(Effect.flip),
+        { _tag: "FactoryIssueError", reason: "remote-failure" },
+      );
+      assert.deepEqual(calls, [input, set, revoke, frontier]);
     }).pipe(
       Effect.provide(
         Layer.mergeAll(

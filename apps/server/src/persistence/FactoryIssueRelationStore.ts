@@ -1,6 +1,8 @@
 import {
+  CommandId,
   FactoryIssueError,
   FactoryReadinessEdge,
+  FactoryReadinessOverride,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -26,6 +28,19 @@ const Edge = Schema.Struct({
   tombstonedAt: Schema.NullOr(IsoDateTime),
 });
 export type StoredEdge = typeof Edge.Type;
+const Override = Schema.Struct({
+  ...Subject.fields,
+  id: FactoryReadinessOverride.fields.id,
+  kind: FactoryReadinessOverride.fields.kind,
+  targetHost: FactoryReadinessOverride.fields.targetHost,
+  targetId: FactoryReadinessOverride.fields.targetId,
+  boundFingerprint: FactoryReadinessOverride.fields.boundFingerprint,
+  reason: FactoryReadinessOverride.fields.reason,
+  createdAt: IsoDateTime,
+  revokedAt: Schema.NullOr(IsoDateTime),
+  requestCommandId: CommandId,
+});
+export type StoredOverride = typeof Override.Type;
 const Observation = Schema.Struct({
   ...Subject.fields,
   observedAt: Schema.NullOr(IsoDateTime),
@@ -63,15 +78,87 @@ export class FactoryIssueRelationStore extends Context.Service<
       readonly observedAt: string;
       readonly failure: string;
     }) => Effect.Effect<void, FactoryIssueError>;
+    readonly listOverrides: (
+      subject: Subject,
+    ) => Effect.Effect<readonly StoredOverride[], FactoryIssueError>;
+    readonly findOverrideCommand: (
+      commandId: CommandId,
+    ) => Effect.Effect<Option.Option<StoredOverride>, FactoryIssueError>;
+    readonly setOverride: (row: StoredOverride) => Effect.Effect<StoredOverride, FactoryIssueError>;
+    readonly revokeOverride: (
+      input: Subject & { readonly overrideId: StoredOverride["id"]; readonly revokedAt: string },
+    ) => Effect.Effect<void, FactoryIssueError>;
   }
 >()("t3/persistence/FactoryIssueRelationStore") {}
 
+const isFactoryIssueError = Schema.is(FactoryIssueError);
 const persistenceError = (cause: unknown) =>
-  new FactoryIssueError({ reason: "persistence-failure", cause });
+  isFactoryIssueError(cause)
+    ? cause
+    : new FactoryIssueError({ reason: "persistence-failure", cause });
 const decodeObservations = Schema.decodeUnknownEffect(Schema.Array(Observation));
 const decodeEdges = Schema.decodeUnknownEffect(Schema.Array(Edge));
+const decodeOverrides = Schema.decodeUnknownEffect(Schema.Array(Override));
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const overrideColumns = sql.literal(`override_id AS id, canonical_key AS canonicalKey,
+    issue_number AS issueNumber, target_host AS targetHost, target_id AS targetId, kind,
+    bound_fingerprint AS boundFingerprint, reason, request_command_id AS requestCommandId,
+    created_at AS createdAt, revoked_at AS revokedAt`);
+  const listOverrides = Effect.fn("FactoryIssueRelationStore.listOverrides")(function* (
+    subject: Subject,
+  ) {
+    return yield* decodeOverrides(
+      yield* sql`SELECT ${overrideColumns} FROM factory_issue_readiness_overrides
+        WHERE canonical_key = ${subject.canonicalKey} AND issue_number = ${subject.issueNumber}
+        ORDER BY created_at, rowid`,
+    );
+  }, Effect.mapError(persistenceError));
+  const findOverrideCommand = Effect.fn("FactoryIssueRelationStore.findOverrideCommand")(function* (
+    commandId: CommandId,
+  ) {
+    const rows = yield* decodeOverrides(
+      yield* sql`SELECT ${overrideColumns} FROM factory_issue_readiness_overrides
+        WHERE request_command_id = ${commandId}`,
+    );
+    return Option.fromNullishOr(rows[0]);
+  }, Effect.mapError(persistenceError));
+  const setOverride = Effect.fn("FactoryIssueRelationStore.setOverride")(function* (
+    row: StoredOverride,
+  ) {
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const existing = yield* findOverrideCommand(row.requestCommandId);
+        if (Option.isSome(existing)) {
+          if (
+            existing.value.canonicalKey !== row.canonicalKey ||
+            existing.value.issueNumber !== row.issueNumber
+          )
+            return yield* new FactoryIssueError({ reason: "invalid-response" });
+          return existing.value;
+        }
+        yield* sql`UPDATE factory_issue_readiness_overrides SET revoked_at = ${row.createdAt}
+          WHERE canonical_key = ${row.canonicalKey} AND issue_number = ${row.issueNumber}
+          AND target_host = ${row.targetHost} AND target_id = ${row.targetId} AND revoked_at IS NULL`;
+        yield* sql`INSERT INTO factory_issue_readiness_overrides
+          (override_id, canonical_key, issue_number, target_host, target_id, kind,
+          bound_fingerprint, reason, request_command_id, created_at, revoked_at)
+          VALUES (${row.id}, ${row.canonicalKey}, ${row.issueNumber}, ${row.targetHost},
+          ${row.targetId}, ${row.kind}, ${row.boundFingerprint}, ${row.reason},
+          ${row.requestCommandId}, ${row.createdAt}, NULL)`;
+        return row;
+      }),
+    );
+  }, Effect.mapError(persistenceError));
+  const revokeOverride = Effect.fn("FactoryIssueRelationStore.revokeOverride")(function* (
+    input: Parameters<FactoryIssueRelationStore["Service"]["revokeOverride"]>[0],
+  ) {
+    const rows = yield* sql`UPDATE factory_issue_readiness_overrides
+      SET revoked_at = COALESCE(revoked_at, ${input.revokedAt})
+      WHERE override_id = ${input.overrideId} AND canonical_key = ${input.canonicalKey}
+      AND issue_number = ${input.issueNumber} RETURNING override_id`;
+    if (rows.length === 0) return yield* new FactoryIssueError({ reason: "invalid-response" });
+  }, Effect.mapError(persistenceError));
   const getObservation = Effect.fn("FactoryIssueRelationStore.getObservation")(function* (
     subject: Subject,
   ) {
@@ -136,6 +223,15 @@ const make = Effect.gen(function* () {
       VALUES (${input.subject.canonicalKey}, ${input.subject.issueNumber}, NULL, 0, 0, NULL, ${input.failure}, ${input.observedAt})
       ON CONFLICT (canonical_key, issue_number) DO UPDATE SET failure = excluded.failure, last_attempt_at = excluded.last_attempt_at`;
   }, Effect.mapError(persistenceError));
-  return FactoryIssueRelationStore.of({ getObservation, listEdges, recordComplete, recordFailure });
+  return FactoryIssueRelationStore.of({
+    getObservation,
+    listEdges,
+    recordComplete,
+    recordFailure,
+    listOverrides,
+    findOverrideCommand,
+    setOverride,
+    revokeOverride,
+  });
 });
 export const layer = Layer.effect(FactoryIssueRelationStore, make);

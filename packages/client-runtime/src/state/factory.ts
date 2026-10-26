@@ -1,6 +1,6 @@
-import { WS_METHODS } from "@t3tools/contracts";
+import { WS_METHODS, type EnvironmentId, type ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { Atom } from "effect/reactivity";
+import { Atom, type AtomRegistry } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
@@ -18,18 +18,73 @@ export function createFactoryEnvironmentAtoms<R, E>(
     tag: WS_METHODS.projectCoordinatorsList,
     staleTimeMs: 0,
   });
+  // Observed blocker evidence for one issue. `staleTimeMs: 0` makes every mount observe again and
+  // a refresh re-observe, since the server derives readiness on each read rather than caching it.
+  const readIssueReadiness = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:factory:issue-readiness",
+    tag: WS_METHODS.factoryReadIssueReadiness,
+    staleTimeMs: 0,
+  });
+  // An override changes the verdict the server derives, and a failed response can still follow a
+  // persisted change, so every outcome observes the issue again rather than trusting local state.
+  const refreshIssueReadiness = (
+    target: {
+      readonly environmentId: EnvironmentId;
+      readonly input: { readonly projectId: ProjectId; readonly issueNumber: number };
+    },
+    registry: AtomRegistry.AtomRegistry,
+  ) =>
+    Effect.sync(() => {
+      registry.refresh(
+        readIssueReadiness({
+          environmentId: target.environmentId,
+          input: { projectId: target.input.projectId, issueNumber: target.input.issueNumber },
+        }),
+      );
+    });
   return {
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:factory:issues",
       tag: WS_METHODS.factoryListIssues,
       staleTimeMs: 0,
     }),
-    // Observed blocker evidence for one issue. `staleTimeMs: 0` makes every mount observe again and
-    // a refresh re-observe, since the server derives readiness on each read rather than caching it.
-    readIssueReadiness: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:factory:issue-readiness",
-      tag: WS_METHODS.factoryReadIssueReadiness,
+    readIssueReadiness,
+    // Read-only composition of a parent's sub-issues. Each read re-observes every child, so it is
+    // fetched only while its panel is open and again on an explicit refresh, never inbox-wide.
+    readIssueFrontier: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:factory:issue-frontier",
+      tag: WS_METHODS.factoryReadIssueFrontier,
       staleTimeMs: 0,
+    }),
+    // Coalesces one reviewed decision on one edge. The fingerprint is the resolution the reviewer
+    // saw, so a later review of a changed edge is never merged into an earlier request.
+    setIssueReadinessOverride: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:set-issue-readiness-override",
+      tag: WS_METHODS.factorySetIssueReadinessOverride,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([
+            environmentId,
+            input.projectId,
+            input.issueNumber,
+            input.targetHost,
+            input.targetId,
+            input.kind,
+            input.expectedFingerprint,
+          ]),
+      },
+      onSettled: refreshIssueReadiness,
+    }),
+    revokeIssueReadinessOverride: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:revoke-issue-readiness-override",
+      tag: WS_METHODS.factoryRevokeIssueReadinessOverride,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.projectId, input.issueNumber, input.overrideId]),
+      },
+      onSettled: refreshIssueReadiness,
     }),
     start: createEnvironmentRpcCommand(runtime, {
       label: "environment-command:factory:start-issue",

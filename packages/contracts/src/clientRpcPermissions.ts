@@ -15,6 +15,8 @@ import { WS_METHODS } from "./rpc.ts";
 export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.factoryStartIssue]: AuthOrchestrationOperateScope,
   [WS_METHODS.factoryAdmitFeedCandidate]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factorySetIssueReadinessOverride]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryRevokeIssueReadinessOverride]: AuthOrchestrationOperateScope,
   // Binding causes server-side egress to a user-entered URL, like the OTLP endpoint check.
   [WS_METHODS.factoryBindFeedSource]: AuthSettingsWriteScope,
   [WS_METHODS.factoryUnbindFeedSource]: AuthSettingsWriteScope,

@@ -23,8 +23,12 @@ import {
   FactoryFeedSourceUnbindInput,
 } from "./factoryFeeds.ts";
 import {
+  FactoryIssueFrontierReadInput,
+  FactoryIssueFrontierReadResult,
   FactoryIssueReadinessReadInput,
   FactoryIssueReadinessReadResult,
+  FactoryReadinessOverrideRevokeInput,
+  FactoryReadinessOverrideSetInput,
 } from "./factoryReadiness.ts";
 import {
   ProjectCoordinatorEnsureInput,
@@ -427,6 +431,9 @@ export const WS_METHODS = {
   factorySetFeedCandidateDismissed: "factory.setFeedCandidateDismissed",
   factoryAdmitFeedCandidate: "factory.admitFeedCandidate",
   factoryReadIssueReadiness: "factory.readIssueReadiness",
+  factorySetIssueReadinessOverride: "factory.setIssueReadinessOverride",
+  factoryRevokeIssueReadinessOverride: "factory.revokeIssueReadinessOverride",
+  factoryReadIssueFrontier: "factory.readIssueFrontier",
   projectCoordinatorsGet: "projectCoordinators.get",
   projectCoordinatorsList: "projectCoordinators.list",
   projectCoordinatorsEnsure: "projectCoordinators.ensure",
@@ -1948,6 +1955,27 @@ const WsFactoryReadIssueReadinessRpc = Rpc.make(WS_METHODS.factoryReadIssueReadi
   success: FactoryIssueReadinessReadResult,
   error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
 });
+const WsFactorySetIssueReadinessOverrideRpc = Rpc.make(
+  WS_METHODS.factorySetIssueReadinessOverride,
+  {
+    payload: FactoryReadinessOverrideSetInput,
+    success: FactoryIssueReadinessReadResult,
+    error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+  },
+);
+const WsFactoryRevokeIssueReadinessOverrideRpc = Rpc.make(
+  WS_METHODS.factoryRevokeIssueReadinessOverride,
+  {
+    payload: FactoryReadinessOverrideRevokeInput,
+    success: FactoryIssueReadinessReadResult,
+    error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+  },
+);
+const WsFactoryReadIssueFrontierRpc = Rpc.make(WS_METHODS.factoryReadIssueFrontier, {
+  payload: FactoryIssueFrontierReadInput,
+  success: FactoryIssueFrontierReadResult,
+  error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+});
 const factoryFeedError = Schema.Union([FactoryFeedError, EnvironmentAuthorizationError]);
 const WsFactoryListFeedSourcesRpc = Rpc.make(WS_METHODS.factoryListFeedSources, {
   payload: FactoryFeedSourceListInput,
@@ -2028,6 +2056,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsFactorySetFeedCandidateDismissedRpc,
   WsFactoryAdmitFeedCandidateRpc,
   WsFactoryReadIssueReadinessRpc,
+  WsFactorySetIssueReadinessOverrideRpc,
+  WsFactoryRevokeIssueReadinessOverrideRpc,
+  WsFactoryReadIssueFrontierRpc,
   WsProjectCoordinatorsGetRpc,
   WsProjectCoordinatorsListRpc,
   WsProjectCoordinatorsEnsureRpc,

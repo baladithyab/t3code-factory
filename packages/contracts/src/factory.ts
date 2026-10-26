@@ -117,6 +117,8 @@ export class FactoryIssueError extends Schema.TaggedError<FactoryIssueError>()(
       "closed-issue",
       "deleted-task",
       "issue-changed",
+      "readiness-changed",
+      "override-not-allowed",
       "invalid-base-ref",
       "launch-failure",
       "launch-authority",
@@ -157,6 +159,10 @@ export class FactoryIssueError extends Schema.TaggedError<FactoryIssueError>()(
         return "The linked thread or its owning project was deleted. Confirm a new attempt to restart this issue.";
       case "issue-changed":
         return "The issue title or body no longer matches the reviewed content. Refresh and review the current issue before starting new work; existing tasks are unaffected.";
+      case "readiness-changed":
+        return "The blocker resolution changed since you reviewed it. Refresh and review the current evidence before setting an override.";
+      case "override-not-allowed":
+        return "This override is not allowed for the current blocker evidence. Re-observe it; only accepted blockers can be disputed and unresolved tombstones can be waived.";
       case "invalid-base-ref":
         return "The base ref does not resolve to a local commit. Choose an existing branch, tag, or commit.";
       case "launch-authority":
