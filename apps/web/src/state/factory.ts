@@ -31,3 +31,19 @@ const factoryFeedsSupportedAtom = Atom.make(
 export function useFactoryFeedsSupported(): boolean {
   return useAtomValue(factoryFeedsSupportedAtom);
 }
+
+/**
+ * Readiness is requested from one environment at a time, so support is read per environment: an
+ * older server omits `factoryReadiness`, and asking it would fail with an unknown method.
+ */
+const factoryReadinessSupportedAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make(
+    (get) =>
+      get(environmentPresentations.presentationAtom(environmentId))?.serverConfig?.environment
+        .capabilities.factoryReadiness === true,
+  ).pipe(Atom.withLabel(`web-factory-readiness-supported:${environmentId}`)),
+);
+
+export function useFactoryReadinessSupported(environmentId: EnvironmentId): boolean {
+  return useAtomValue(factoryReadinessSupportedAtom(environmentId));
+}

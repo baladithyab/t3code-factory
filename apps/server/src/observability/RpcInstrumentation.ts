@@ -34,6 +34,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.projectCoordinatorsList]: "orchestration",
   [WS_METHODS.projectCoordinatorsEnsure]: "orchestration",
   [WS_METHODS.factoryListIssues]: "factory",
+  [WS_METHODS.factoryReadIssueReadiness]: "factory",
   [WS_METHODS.factoryStartIssue]: "factory",
   [WS_METHODS.factoryListFeedSources]: "factory",
   [WS_METHODS.factoryBindFeedSource]: "factory",

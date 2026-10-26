@@ -3,6 +3,8 @@ import {
   FactoryIssueListResult,
   FactoryIssueReadInput,
   FactoryIssueReadResult,
+  FactoryIssueReadinessReadInput,
+  FactoryIssueReadinessReadResult,
   FactoryIssueStartInput,
   FactoryIssueStartResult,
   FactoryFeedCandidateListInput,
@@ -19,6 +21,7 @@ import {
 } from "@t3tools/contracts";
 import { Tool, Toolkit } from "effect/ai";
 import * as Factory from "../../../factory/FactoryIssueService.ts";
+import * as Relations from "../../../factory/FactoryIssueRelations.ts";
 import * as Feeds from "../../../factory/FactoryFeedService.ts";
 import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
@@ -48,6 +51,20 @@ const read = Tool.make("factory_read_issue", {
     "Read one complete GitHub issue snapshot and its content revision from a registered project's server-resolved origin. Reading never starts work. Review the full title and body before explicitly authorizing a new task. Do not authorize from a truncated result; this tool has no partial-content paging. Returns existing task ownership separately from the live issue.",
   parameters: FactoryIssueReadInput,
   success: FactoryIssueReadResult,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+const readiness = Tool.make("factory_read_issue_readiness", {
+  ...shared,
+  dependencies: [
+    Relations.FactoryIssueRelations,
+    Threads.ThreadManagementService,
+    McpInvocationContext.McpInvocationContext,
+  ],
+  description:
+    "Read observed GitHub blocker evidence and derived issue readiness. Returns observed evidence, not permission to start work. Incomplete or inaccessible evidence remains unknown. This read never starts work or changes GitHub.",
+  parameters: FactoryIssueReadinessReadInput,
+  success: FactoryIssueReadinessReadResult,
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
@@ -119,6 +136,7 @@ const admitFeedCandidate = Tool.make("factory_admit_feed_candidate", {
 export const FactoryToolkit = Toolkit.make(
   list,
   read,
+  readiness,
   start,
   getOrchestrator,
   startOrchestrator,

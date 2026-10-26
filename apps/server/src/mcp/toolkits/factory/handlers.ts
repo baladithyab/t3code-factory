@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Factory from "../../../factory/FactoryIssueService.ts";
+import * as Relations from "../../../factory/FactoryIssueRelations.ts";
 import * as Feeds from "../../../factory/FactoryFeedService.ts";
 import { DispatchModeLimit } from "../../../orchestration-v2/DispatchModeLimit.ts";
 import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
@@ -62,6 +63,13 @@ export const layer = McpToolAccess.toLayer(FactoryToolkit, {
       yield* readCaller();
       const factory = yield* Factory.FactoryIssueService;
       return yield* factory.read(input).pipe(Effect.mapError(failure));
+    }),
+  ),
+  factory_read_issue_readiness: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      yield* readCaller();
+      const relations = yield* Relations.FactoryIssueRelations;
+      return yield* relations.read(input).pipe(Effect.mapError(failure));
     }),
   ),
   factory_start_issue: McpToolAccess.startsThreads(

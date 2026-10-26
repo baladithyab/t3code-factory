@@ -1,5 +1,7 @@
 import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
 import * as FactoryIssueLaunches from "./persistence/FactoryIssueLaunches.ts";
+import * as FactoryIssueRelations from "./factory/FactoryIssueRelations.ts";
+import * as FactoryIssueRelationStore from "./persistence/FactoryIssueRelationStore.ts";
 import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
 import * as FactoryFeedStore from "./persistence/FactoryFeedStore.ts";
 import * as FeedFetch from "./factory/FeedFetch.ts";
@@ -757,12 +759,14 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(
     Layer.mergeAll(
       FactoryIssueService.layer,
+      FactoryIssueRelations.layer,
       FactoryFeedService.layer,
       ProjectCoordinatorService.layer,
     ).pipe(
       Layer.provide(
         Layer.mergeAll(
           FactoryIssueLaunches.layer,
+          FactoryIssueRelationStore.layer,
           FactoryFeedStore.layer,
           FeedFetch.layer,
           ProjectCoordinators.layer,

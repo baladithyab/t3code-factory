@@ -1,4 +1,5 @@
 import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
+import * as FactoryIssueRelations from "./factory/FactoryIssueRelations.ts";
 import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
 import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
@@ -1276,6 +1277,7 @@ export const layerWsRpc = (
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const factory = yield* FactoryIssueService.FactoryIssueService;
+      const factoryRelations = yield* FactoryIssueRelations.FactoryIssueRelations;
       const factoryFeeds = yield* FactoryFeedService.FactoryFeedService;
       const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
@@ -2579,6 +2581,7 @@ export const layerWsRpc = (
               ),
           ),
         [WS_METHODS.factoryListIssues]: (input) => factory.list(input),
+        [WS_METHODS.factoryReadIssueReadiness]: (input) => factoryRelations.read(input),
         [WS_METHODS.factoryStartIssue]: (input) => factory.start(input),
         [WS_METHODS.factoryListFeedSources]: (input) => factoryFeeds.listSources(input),
         [WS_METHODS.factoryBindFeedSource]: (input) => factoryFeeds.bindSource(input),
@@ -3288,6 +3291,7 @@ export const layer = Layer.unwrap(
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const factory = yield* FactoryIssueService.FactoryIssueService;
+    const factoryRelations = yield* FactoryIssueRelations.FactoryIssueRelations;
     const factoryFeeds = yield* FactoryFeedService.FactoryFeedService;
     const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
@@ -3366,6 +3370,9 @@ export const layer = Layer.unwrap(
               // Share server-lifetime PR caches so WS mutations invalidate every client's HTTP diffs.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(Layer.succeed(FactoryIssueService.FactoryIssueService, factory)),
+              Layer.provide(
+                Layer.succeed(FactoryIssueRelations.FactoryIssueRelations, factoryRelations),
+              ),
               Layer.provide(Layer.succeed(FactoryFeedService.FactoryFeedService, factoryFeeds)),
               Layer.provide(
                 Layer.succeed(

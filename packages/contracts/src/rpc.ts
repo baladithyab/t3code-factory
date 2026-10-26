@@ -23,6 +23,10 @@ import {
   FactoryFeedSourceUnbindInput,
 } from "./factoryFeeds.ts";
 import {
+  FactoryIssueReadinessReadInput,
+  FactoryIssueReadinessReadResult,
+} from "./factoryReadiness.ts";
+import {
   ProjectCoordinatorEnsureInput,
   ProjectCoordinatorEnsureResult,
   ProjectCoordinatorError,
@@ -440,6 +444,7 @@ export const WS_METHODS = {
   factoryReadFeedCandidate: "factory.readFeedCandidate",
   factorySetFeedCandidateDismissed: "factory.setFeedCandidateDismissed",
   factoryAdmitFeedCandidate: "factory.admitFeedCandidate",
+  factoryReadIssueReadiness: "factory.readIssueReadiness",
   projectCoordinatorsGet: "projectCoordinators.get",
   projectCoordinatorsList: "projectCoordinators.list",
   projectCoordinatorsEnsure: "projectCoordinators.ensure",
@@ -1985,6 +1990,11 @@ const WsFactoryStartIssueRpc = Rpc.make(WS_METHODS.factoryStartIssue, {
   success: FactoryIssueStartResult,
   error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
 });
+const WsFactoryReadIssueReadinessRpc = Rpc.make(WS_METHODS.factoryReadIssueReadiness, {
+  payload: FactoryIssueReadinessReadInput,
+  success: FactoryIssueReadinessReadResult,
+  error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+});
 const factoryFeedError = Schema.Union([FactoryFeedError, EnvironmentAuthorizationError]);
 const WsFactoryListFeedSourcesRpc = Rpc.make(WS_METHODS.factoryListFeedSources, {
   payload: FactoryFeedSourceListInput,
@@ -2065,6 +2075,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsFactoryReadFeedCandidateRpc,
   WsFactorySetFeedCandidateDismissedRpc,
   WsFactoryAdmitFeedCandidateRpc,
+  WsFactoryReadIssueReadinessRpc,
   WsProjectCoordinatorsGetRpc,
   WsProjectCoordinatorsListRpc,
   WsProjectCoordinatorsEnsureRpc,

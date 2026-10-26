@@ -463,6 +463,63 @@ describe("factory authorization", () => {
   );
 });
 
+describe("factory readiness authorization", () => {
+  const method = WS_METHODS.factoryReadIssueReadiness;
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof method> => tag !== method,
+    ),
+  );
+  it.effect.each([
+    { scopes: [], allowed: false },
+    { scopes: [AuthOrchestrationReadScope], allowed: true },
+  ])("requires only orchestration read scope: $allowed", ({ scopes, allowed }) =>
+    Effect.gen(function* () {
+      let called = false;
+      const result = {
+        repository: {
+          provider: "github" as const,
+          host: "github.com",
+          repository: "owner/repo",
+          canonicalKey: "github.com/owner/repo",
+          url: "https://github.com/owner/repo",
+        },
+        issueNumber: 12,
+        readiness: {
+          status: "ready" as const,
+          reasons: [],
+          edges: [],
+          complete: true,
+          listedCount: 0,
+          summaryTotal: 0,
+          observedAt: "2026-10-25T00:00:00.000Z",
+        },
+      };
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(method, () =>
+              Effect.sync(() => {
+                called = true;
+                return result;
+              }),
+            ),
+            RpcAuthorization.layer(scopes),
+          ),
+        ),
+      );
+      const request = client[method]({ projectId: ProjectId.make("project"), issueNumber: 12 });
+      if (allowed) expect(yield* request).toEqual(result);
+      else
+        expect(yield* request.pipe(Effect.flip)).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: AuthOrchestrationReadScope,
+        });
+      expect(called).toBe(allowed);
+    }).pipe(Effect.scoped),
+  );
+});
+
 describe("feed factory authorization", () => {
   const cases = [
     { method: WS_METHODS.factoryListFeedSources, scopes: [AuthOrchestrationReadScope] },
