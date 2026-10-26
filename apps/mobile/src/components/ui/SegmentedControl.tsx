@@ -62,6 +62,9 @@ export function SegmentedControl<Value extends string | number>(
             >
               <AppText
                 textRole="footnote"
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.8}
                 className={selected ? "font-t3-bold" : "font-t3-medium"}
                 style={{
                   color:
