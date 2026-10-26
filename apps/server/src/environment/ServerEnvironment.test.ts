@@ -222,6 +222,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.factoryReadiness).toBe(true);
       expect(second.capabilities.factoryFeeds).toBe(true);
       expect(second.capabilities.factoryResearch).toBe(true);
+      expect(second.capabilities.factoryClaims).toBe(true);
       expect(second.capabilities.connectionProbe).toBe(true);
       expect(second.capabilities.attachmentUploads).toBe(true);
       expect(second.capabilities.fileAttachments).toEqual({ maxUploadBytes: 50 * 1024 * 1024 });

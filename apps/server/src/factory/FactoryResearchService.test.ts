@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   CommandId,
+  EnvironmentId,
   ProjectId,
   FACTORY_RESEARCH_CITED_LINE_MAX_BYTES,
   ProviderDriverKind,
@@ -54,6 +55,10 @@ import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
 import * as Registry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as Replay from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
+import { researchRunOriginKey } from "./FactoryOriginKey.ts";
+
+const environmentId = EnvironmentId.make("research-environment");
 
 const projectId = ProjectId.make("research-project");
 const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" };
@@ -134,6 +139,7 @@ const harness = Effect.gen(function* () {
     Layer.provide(Layer.mergeAll(orchestrator, settings, receipts)),
   );
   const external = Layer.mergeAll(
+    Layer.succeed(ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(environmentId) }),
     Layer.succeed(Identities.RepositoryIdentityResolver, {
       resolve: () => Effect.succeed(identity),
     }),
@@ -426,6 +432,19 @@ it.effect(
         assert.equal((yield* factory.launchRun(verifyInput)).threadId, verify.threadId);
         const sql = yield* SqlClient.SqlClient;
         assert.equal((yield* sql`SELECT * FROM factory_research_launches`).length, 4);
+        const store = yield* Store.FactoryResearchStore;
+        for (const threadId of [
+          baseline.threadId,
+          explore.threadId,
+          verify.threadId,
+          admitted.threadId,
+        ]) {
+          const binding = Option.getOrThrow(yield* store.getRun(threadId));
+          assert.equal(binding.intent.admittedBy, environmentId);
+          const rows =
+            yield* sql`SELECT origin_key FROM factory_research_launches WHERE thread_id = ${threadId}`;
+          assert.equal(rows[0]?.origin_key, researchRunOriginKey(protocol.id, binding.intent.role));
+        }
         const projection = yield* (yield* Threads.ThreadManagementService).getThreadProjection(
           admitted.threadId,
         );

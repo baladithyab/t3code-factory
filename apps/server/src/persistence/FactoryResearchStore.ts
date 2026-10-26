@@ -16,6 +16,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { FactoryLaunchCore } from "../factory/FactoryTaskLaunch.ts";
+import { researchRunOriginKey } from "../factory/FactoryOriginKey.ts";
 
 export const FactoryResearchLaunchIntent = Schema.Struct({
   ...FactoryLaunchCore.fields,
@@ -219,8 +220,9 @@ const make = Effect.gen(function* () {
         yield* recheck;
         if (intent.previousThreadId !== null)
           yield* sql`UPDATE factory_research_launches SET superseded = 1 WHERE thread_id = ${intent.previousThreadId} AND superseded = 0`;
-        yield* sql`INSERT INTO factory_research_launches (thread_id, protocol_id, role, request_command_id, intent_json, launched_by_thread_id, created_at)
-        VALUES (${intent.threadId}, ${intent.protocolId}, ${intent.role}, ${intent.requestCommandId}, ${json}, ${intent.launchedByThreadId}, ${intent.createdAt})`;
+        yield* sql`INSERT INTO factory_research_launches (thread_id, protocol_id, role, request_command_id, intent_json, launched_by_thread_id, created_at, origin_key)
+        VALUES (${intent.threadId}, ${intent.protocolId}, ${intent.role}, ${intent.requestCommandId}, ${json}, ${intent.launchedByThreadId}, ${intent.createdAt},
+          ${researchRunOriginKey(intent.protocolId, intent.role)})`;
         return { intent, accepted: 0 as const };
       }),
     );

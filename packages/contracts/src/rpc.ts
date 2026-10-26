@@ -43,6 +43,7 @@ import {
   FactoryResearchRunLaunchInput,
   FactoryResearchRunLaunchResult,
 } from "./factoryResearch.ts";
+import { FactoryClaimListInput, FactoryClaimListResult } from "./factoryClaims.ts";
 import {
   ProjectCoordinatorEnsureInput,
   ProjectCoordinatorEnsureResult,
@@ -470,6 +471,7 @@ export const WS_METHODS = {
   factorySealResearchProtocol: "factory.sealResearchProtocol",
   factoryLaunchResearchRun: "factory.launchResearchRun",
   factoryAdmitResearchImplementation: "factory.admitResearchImplementation",
+  factoryListClaims: "factory.listClaims",
   projectCoordinatorsGet: "projectCoordinators.get",
   projectCoordinatorsList: "projectCoordinators.list",
   projectCoordinatorsEnsure: "projectCoordinators.ensure",
@@ -2070,6 +2072,11 @@ const WsFactoryAdmitResearchImplementationRpc = Rpc.make(
     error: factoryResearchError,
   },
 );
+const WsFactoryListClaimsRpc = Rpc.make(WS_METHODS.factoryListClaims, {
+  payload: FactoryClaimListInput,
+  success: FactoryClaimListResult,
+  error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+});
 const factoryFeedError = Schema.Union([FactoryFeedError, EnvironmentAuthorizationError]);
 const WsFactoryListFeedSourcesRpc = Rpc.make(WS_METHODS.factoryListFeedSources, {
   payload: FactoryFeedSourceListInput,
@@ -2159,6 +2166,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsFactorySealResearchProtocolRpc,
   WsFactoryLaunchResearchRunRpc,
   WsFactoryAdmitResearchImplementationRpc,
+  WsFactoryListClaimsRpc,
   WsProjectCoordinatorsGetRpc,
   WsProjectCoordinatorsListRpc,
   WsProjectCoordinatorsEnsureRpc,

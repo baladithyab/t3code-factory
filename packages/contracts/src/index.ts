@@ -10,6 +10,7 @@ export * from "./factory.ts";
 export * from "./factoryFeeds.ts";
 export * from "./factoryReadiness.ts";
 export * from "./factoryResearch.ts";
+export * from "./factoryClaims.ts";
 export * from "./environmentHttp.ts";
 export * from "./relayClient.ts";
 export * from "./desktopBootstrap.ts";

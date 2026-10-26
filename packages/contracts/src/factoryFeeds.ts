@@ -216,6 +216,7 @@ export class FactoryFeedError extends Schema.TaggedError<FactoryFeedError>()("Fa
     "launch-failure",
     "launch-authority",
     "provider-unavailable",
+    "origin-conflict",
     "persistence-failure",
   ]),
   cause: Schema.optional(Schema.Defect()),
@@ -270,6 +271,8 @@ export class FactoryFeedError extends Schema.TaggedError<FactoryFeedError>()("Fa
         return "The task launch was interrupted. Retry to resume the same reserved task.";
       case "provider-unavailable":
         return "The selected provider is unavailable or disabled for this project. Enable it or select an enabled provider before admitting the item.";
+      case "origin-conflict":
+        return "This item is claimed more than once by older records in this environment. Review the conflicting tasks before admitting it again; nothing is merged automatically.";
       case "persistence-failure":
         return "The environment could not read or save the feed records.";
     }

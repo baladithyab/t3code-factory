@@ -25,6 +25,8 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { RefreshIcon } from "../ui/refresh-icon";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
+import { FactoryClaimIndicators } from "./FactoryClaimIndicators";
+import { factoryClaimRowPresentation, originKeyForIssue } from "./factoryClaims.logic";
 import {
   FACTORY_OVERRIDE_ACTIONS,
   boundedIssueBody,
@@ -42,6 +44,7 @@ import {
 import { groupFactoryIssuesByStage, type FactoryIssueViewMode } from "./factoryIssues.views";
 import { FactoryIssueFrontier } from "./FactoryIssueFrontier";
 import { FactoryReadinessOverrideDialog } from "./FactoryReadinessOverrideDialog";
+import type { FactoryClaimsView } from "./useFactoryClaims";
 
 const MAX_VISIBLE_LABELS = 5;
 
@@ -55,6 +58,9 @@ type FactoryIssueWorkViewProps = {
   readonly selectedProjectId: ProjectId;
   readonly projectTitleById: ReadonlyMap<ProjectId, string>;
   readonly refreshing: boolean;
+  /** Null when the environment does not advertise claims, which shows no claim UI at all. */
+  readonly claims: FactoryClaimsView | null;
+  readonly repositoryKey: string;
   readonly onStart: (issue: FactoryIssue) => void;
   readonly onRestart: (issue: FactoryIssue) => void;
   readonly onResume: (issue: FactoryIssue) => void;
@@ -71,6 +77,8 @@ export function FactoryIssueWorkView(props: FactoryIssueWorkViewProps) {
       key={issue.number}
       mode={props.mode}
       environmentId={props.environmentId}
+      claims={props.claims}
+      repositoryKey={props.repositoryKey}
       readinessSupported={readinessSupported}
       issue={issue}
       canStart={props.canStart}
@@ -242,6 +250,25 @@ function FactoryIssueEntry(
   ) : (
     <Badge variant="outline">No task</Badge>
   );
+  const claimPresentation =
+    props.claims === null
+      ? null
+      : factoryClaimRowPresentation({
+          claimsByEnvironment: props.claims.claimsByEnvironment,
+          conflicts: props.claims.conflicts,
+          environmentId: props.environmentId,
+          originKey: originKeyForIssue(props.repositoryKey, issue.number),
+          task: issue.task,
+          labelOf: props.claims.labelOf,
+        });
+  const taskStatus = (
+    <>
+      {taskState}
+      {claimPresentation !== null ? (
+        <FactoryClaimIndicators presentation={claimPresentation} />
+      ) : null}
+    </>
+  );
   const actions = (
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -331,7 +358,9 @@ function FactoryIssueEntry(
             {identity}
           </th>
           <td className="p-3">{sourceState}</td>
-          <td className="min-w-56 max-w-72 p-3">{taskState}</td>
+          <td className="min-w-56 max-w-72 p-3">
+            <div className="space-y-1.5">{taskStatus}</div>
+          </td>
           <td className="min-w-40 max-w-56 p-3">{labels}</td>
           <td className="whitespace-nowrap p-3">{updated}</td>
           <td className="min-w-56 p-3">{actions}</td>
@@ -357,7 +386,7 @@ function FactoryIssueEntry(
             <span className="text-muted-foreground text-xs">updated {updated}</span>
           </div>
           {labels}
-          {taskState}
+          {taskStatus}
         </div>
         {actions}
       </div>

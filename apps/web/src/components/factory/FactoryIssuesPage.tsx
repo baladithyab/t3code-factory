@@ -63,6 +63,8 @@ import {
   type FactoryIssueStateFilter,
 } from "./factoryIssues.logic";
 import { FactoryCheckoutChooser } from "./FactoryCheckoutChooser";
+import { FactoryClaimWarning, FactoryClaimsUnavailableNote } from "./FactoryClaimIndicators";
+import { claimsElsewhere, describeClaimsElsewhere, originKeyForIssue } from "./factoryClaims.logic";
 import { FactoryEmptyState } from "./FactoryEmptyState";
 import {
   FactoryLaunchFields,
@@ -72,6 +74,7 @@ import {
 } from "./FactoryLaunchControls";
 import { FactoryReviewFailure, FactoryReviewSnapshot } from "./FactoryReview";
 import { FactoryIssueWorkView } from "./FactoryIssueWorkView";
+import { useFactoryClaims } from "./useFactoryClaims";
 import { parseFactoryIssueViewMode, type FactoryIssueViewMode } from "./factoryIssues.views";
 
 import { useSettingsScope } from "../settings/SettingsScopeContext";
@@ -241,6 +244,12 @@ function FactoryInbox(props: {
   });
 
   const launchSettings = useFactoryLaunchModelSettings(environmentId, project);
+  const claims = useFactoryClaims({ environmentId, project });
+  // Claims have no timer: every explicit refresh and every start observes them again with the list.
+  const refreshAll = () => {
+    query.refresh();
+    claims?.refresh();
+  };
 
   const [dialog, setDialog] = useState<PendingStart | null>(null);
   const [startingIssue, setStartingIssue] = useState<number | null>(null);
@@ -288,7 +297,7 @@ function FactoryInbox(props: {
     });
     if (!mounted.current) return;
     if (result._tag === "Success") {
-      query.refresh();
+      refreshAll();
       setDialog(null);
       void navigate({
         to: "/$environmentId/$threadId",
@@ -299,7 +308,7 @@ function FactoryInbox(props: {
     if (isAtomCommandInterrupted(result)) return;
     setStartFailure(describeFactoryFailure(squashAtomCommandFailure(result)));
     // The failure may mean the row is stale (closed, deleted, already launched elsewhere).
-    query.refresh();
+    refreshAll();
   };
 
   const openTask = (task: NonNullable<FactoryIssue["task"]>) => {
@@ -352,7 +361,7 @@ function FactoryInbox(props: {
           <Button
             size="sm"
             variant="outline"
-            onClick={query.refresh}
+            onClick={refreshAll}
             disabled={refreshing}
             aria-busy={refreshing}
           >
@@ -371,6 +380,8 @@ function FactoryInbox(props: {
         </Alert>
       ) : null}
 
+      <FactoryClaimsUnavailableNote note={claims?.unavailableNote ?? null} />
+
       {startFailure !== null && dialog === null ? (
         <Alert variant="error">
           <AlertTitle>{startFailure.title}</AlertTitle>
@@ -387,7 +398,7 @@ function FactoryInbox(props: {
             <Button
               size="sm"
               variant="outline"
-              onClick={query.refresh}
+              onClick={refreshAll}
               disabled={refreshing}
               aria-busy={refreshing}
             >
@@ -435,6 +446,8 @@ function FactoryInbox(props: {
               selectedProjectId={project.id}
               projectTitleById={props.projectTitleById}
               refreshing={refreshing}
+              claims={claims}
+              repositoryKey={data.repository.canonicalKey}
               onStart={(issue) => {
                 setStartFailure(null);
                 setDialog({ issue, repository: data.repository, restart: false });
@@ -485,6 +498,18 @@ function FactoryInbox(props: {
           canStart={canStart}
           pending={startingIssue === dialog.issue.number}
           failure={startFailure}
+          claimWarning={
+            claims === null
+              ? null
+              : describeClaimsElsewhere(
+                  claimsElsewhere(
+                    claims.claimsByEnvironment,
+                    originKeyForIssue(dialog.repository.canonicalKey, dialog.issue.number),
+                    environmentId,
+                  ),
+                  claims.labelOf,
+                )
+          }
           onClose={() => {
             setDialog(null);
             setStartFailure(null);
@@ -549,6 +574,7 @@ function FactoryStartDialog(props: {
   readonly canStart: boolean;
   readonly pending: boolean;
   readonly failure: FactoryFailure | null;
+  readonly claimWarning: string | null;
   readonly onClose: () => void;
   readonly onSubmit: (options: {
     readonly modelSelection: ModelSelection;
@@ -586,6 +612,7 @@ function FactoryStartDialog(props: {
               {`${props.repository.host}/${props.repository.repository}`} · task project{" "}
               {props.projectTitle}
             </p>
+            <FactoryClaimWarning message={props.claimWarning} />
             <FactoryReviewSnapshot
               heading="Full issue snapshot"
               intro="Review the full title and description before confirming."

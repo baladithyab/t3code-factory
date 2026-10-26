@@ -27,6 +27,7 @@ import {
   isFactoryFeedAdmitEnabled,
   type FactoryFeedFailure,
 } from "./factoryFeeds.logic";
+import { FactoryClaimWarning } from "./FactoryClaimIndicators";
 import { normalizeFactoryBaseRef } from "./factoryIssues.logic";
 import {
   FactoryLaunchFields,
@@ -50,6 +51,7 @@ export function FactoryFeedAdmitDialog(props: {
   readonly canAdmit: boolean;
   readonly pending: boolean;
   readonly failure: FactoryFeedFailure | null;
+  readonly claimWarning: string | null;
   readonly onClose: () => void;
   readonly onSubmit: (options: {
     readonly modelSelection: ModelSelection;
@@ -100,6 +102,7 @@ export function FactoryFeedAdmitDialog(props: {
                 Feed {factoryIssueReviewText(source.locator)} · revision {candidate.ordinal}
               </p>
             </div>
+            <FactoryClaimWarning message={props.claimWarning} />
             <FactoryReviewSnapshot
               heading="Full item snapshot"
               intro="Review the full title, content and link before confirming."

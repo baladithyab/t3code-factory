@@ -5,6 +5,7 @@ import {
   FactoryFeedSource,
   FactoryFeedSourceId,
   FactoryRepository,
+  type FactoryOriginKey,
   ProjectId,
   ThreadId,
   type FactoryFeedCandidateDismissInput,
@@ -18,6 +19,7 @@ import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 import * as SqlClient from "effect/sql/SqlClient";
 import { FactoryLaunchCore } from "../factory/FactoryTaskLaunch.ts";
+import { feedItemOriginKey } from "../factory/FactoryOriginKey.ts";
 
 const Source = Schema.Struct({
   ...FactoryFeedSource.fields,
@@ -52,6 +54,7 @@ export type FactoryFeedLaunchIntent = typeof FactoryFeedLaunchIntent.Type;
 const Binding = Schema.Struct({
   intent: Schema.fromJsonString(FactoryFeedLaunchIntent),
   accepted: Schema.Literals([0, 1]),
+  originConflict: Schema.Literals([0, 1]),
 });
 export type FactoryFeedBinding = typeof Binding.Type;
 const decodeSources = Schema.decodeUnknownEffect(Schema.Array(Source));
@@ -110,7 +113,9 @@ export class FactoryFeedStore extends Context.Service<
     readonly setDismissed: (
       input: FactoryFeedCandidateDismissInput,
     ) => Effect.Effect<StoredItem, FactoryFeedError>;
-    readonly get: (key: Key) => Effect.Effect<Option.Option<FactoryFeedBinding>, FactoryFeedError>;
+    readonly get: (
+      originKey: FactoryOriginKey,
+    ) => Effect.Effect<Option.Option<FactoryFeedBinding>, FactoryFeedError>;
     readonly reserve: (
       intent: FactoryFeedLaunchIntent,
     ) => Effect.Effect<FactoryFeedBinding, FactoryFeedError>;
@@ -315,11 +320,11 @@ const make = Effect.gen(function* () {
       }),
     );
   }, Effect.mapError(persistenceError));
-  const get = Effect.fn("FactoryFeedStore.get")(function* (key: Key) {
+  const get = Effect.fn("FactoryFeedStore.get")(function* (originKey: FactoryOriginKey) {
     const rows = yield* decodeBindings(
       yield* sql`
-      SELECT intent_json AS intent, accepted FROM factory_feed_launches
-      WHERE source_id = ${key.sourceId} AND item_key = ${key.itemKey} AND superseded = 0`,
+      SELECT intent_json AS intent, accepted, MAX(origin_conflict) OVER () AS originConflict FROM factory_feed_launches
+      WHERE origin_key = ${originKey} AND superseded = 0 ORDER BY origin_conflict, thread_id LIMIT 1`,
     );
     return Option.fromNullishOr(rows[0]);
   }, Effect.mapError(persistenceError));
@@ -327,9 +332,17 @@ const make = Effect.gen(function* () {
     intent: FactoryFeedLaunchIntent,
   ) {
     const json = yield* encodeIntent(intent);
+    const originKey = feedItemOriginKey(
+      intent.repository.canonicalKey,
+      intent.snapshot.feed,
+      intent.itemKey,
+    );
     return yield* sql.withTransaction(
       Effect.gen(function* () {
-        const current = yield* get(intent);
+        const conflicts = yield* sql`SELECT thread_id FROM factory_feed_launches
+          WHERE origin_key = ${originKey} AND superseded = 0 AND origin_conflict = 1 LIMIT 1`;
+        if (conflicts.length > 0) return yield* new FactoryFeedError({ reason: "origin-conflict" });
+        const current = yield* get(originKey);
         if (Option.isSome(current)) {
           if (current.value.intent.threadId !== intent.previousThreadId) return current.value;
           const used =
@@ -347,9 +360,9 @@ const make = Effect.gen(function* () {
         if (Option.isSome(current))
           yield* sql`UPDATE factory_feed_launches SET superseded = 1
         WHERE thread_id = ${intent.previousThreadId} AND superseded = 0`;
-        yield* sql`INSERT INTO factory_feed_launches (thread_id, source_id, item_key, request_command_id, intent_json)
-        VALUES (${intent.threadId}, ${intent.sourceId}, ${intent.itemKey}, ${intent.requestCommandId}, ${json}) ON CONFLICT DO NOTHING`;
-        const winner = yield* get(intent);
+        yield* sql`INSERT INTO factory_feed_launches (thread_id, source_id, item_key, request_command_id, intent_json, origin_key)
+        VALUES (${intent.threadId}, ${intent.sourceId}, ${intent.itemKey}, ${intent.requestCommandId}, ${json}, ${originKey}) ON CONFLICT DO NOTHING`;
+        const winner = yield* get(originKey);
         if (Option.isNone(winner))
           return yield* new FactoryFeedError({ reason: "persistence-failure" });
         return winner.value;

@@ -19,6 +19,7 @@ import {
   type FactoryFeedCandidateAdmitInput,
   type FactoryFeedCandidateAdmitResult,
   type ProjectId,
+  type FactoryRepository,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -35,6 +36,8 @@ import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as FeedFetch from "./FeedFetch.ts";
 import * as TaskLaunch from "./FactoryTaskLaunch.ts";
+import { feedItemOriginKey } from "./FactoryOriginKey.ts";
+import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
 
 const encodeSnapshot = Schema.encodeSync(
   Schema.fromJsonString(Store.FactoryFeedLaunchIntent.fields.snapshot),
@@ -78,6 +81,7 @@ const make = Effect.gen(function* () {
   const folders = yield* ManagedFolders.ManagedProjectFolders;
   const git = yield* Git.GitVcsDriver;
   const crypto = yield* Crypto.Crypto;
+  const environment = yield* ServerEnvironmentIdentity;
   const repositoryResolver = yield* TaskLaunch.makeRepositoryResolver;
   const resolve = Effect.fn("FactoryFeedService.resolve")((projectId: ProjectId) =>
     repositoryResolver(projectId).pipe(
@@ -137,8 +141,15 @@ const make = Effect.gen(function* () {
     if (Option.isNone(item)) return yield* new FactoryFeedError({ reason: "missing-candidate" });
     return item.value;
   });
-  const present = Effect.fn("FactoryFeedService.present")(function* (item: Store.StoredItem) {
-    const binding = yield* store.get(item);
+  const present = Effect.fn("FactoryFeedService.present")(function* (
+    item: Store.StoredItem,
+    repository: FactoryRepository | null,
+    locator: string,
+  ) {
+    const binding =
+      repository === null
+        ? Option.none()
+        : yield* store.get(feedItemOriginKey(repository.canonicalKey, locator, item.itemKey));
     return {
       ...item,
       task: Option.isSome(binding) ? (yield* taskLaunch.inspect(binding.value)).task : null,
@@ -225,9 +236,16 @@ const make = Effect.gen(function* () {
     yield* requireProject(input.projectId);
     if (input.sourceId !== undefined)
       yield* requireSource({ projectId: input.projectId, sourceId: input.sourceId });
+    const repository = yield* reviewRepository(input.projectId);
+    const sources = yield* store.listSources(input.projectId);
     return {
-      repository: yield* reviewRepository(input.projectId),
-      candidates: yield* Effect.forEach(yield* store.listItems(input), present),
+      repository,
+      candidates: yield* Effect.forEach(yield* store.listItems(input), (item) => {
+        const source = sources.find((source) => source.id === item.sourceId);
+        return source === undefined
+          ? Effect.fail(new FactoryFeedError({ reason: "missing-source" }))
+          : present(item, repository, source.locator);
+      }),
       fetchedAt: DateTime.formatIso(yield* DateTime.now),
     };
   });
@@ -235,10 +253,12 @@ const make = Effect.gen(function* () {
     input: FactoryFeedCandidateReadInput,
   ) {
     yield* requireProject(input.projectId);
+    const repository = yield* reviewRepository(input.projectId);
+    const source = yield* requireSource(input);
     return {
-      repository: yield* reviewRepository(input.projectId),
-      source: yield* requireSource(input),
-      candidate: yield* present(yield* requireItem(input)),
+      repository,
+      source,
+      candidate: yield* present(yield* requireItem(input), repository, source.locator),
       fetchedAt: DateTime.formatIso(yield* DateTime.now),
     };
   });
@@ -246,19 +266,26 @@ const make = Effect.gen(function* () {
     input: FactoryFeedCandidateDismissInput,
   ) {
     yield* requireProject(input.projectId);
-    yield* requireSource(input);
-    return { candidate: yield* present(yield* store.setDismissed(input)) };
+    const source = yield* requireSource(input);
+    return {
+      candidate: yield* present(
+        yield* store.setDismissed(input),
+        yield* reviewRepository(input.projectId),
+        source.locator,
+      ),
+    };
   });
   const resume = Effect.fn("FactoryFeedService.resume")(function* (
     binding: Store.FactoryFeedBinding,
     resumed: boolean,
+    input: Pick<FactoryFeedCandidateAdmitInput, "sourceId" | "itemKey">,
   ) {
     const task = yield* taskLaunch.resume(binding);
     const { intent } = binding;
     return {
       repository: intent.repository,
-      sourceId: intent.sourceId,
-      itemKey: intent.itemKey,
+      sourceId: input.sourceId,
+      itemKey: input.itemKey,
       projectId: intent.projectId,
       threadId: intent.threadId,
       task,
@@ -271,13 +298,15 @@ const make = Effect.gen(function* () {
     const { project, repository } = yield* resolve(input.projectId);
     if (input.expectedRepositoryKey !== repository.canonicalKey)
       return yield* new FactoryFeedError({ reason: "repository-changed" });
-    const existing = yield* store.get(input);
+    const source = yield* requireSource(input);
+    const originKey = feedItemOriginKey(repository.canonicalKey, source.locator, input.itemKey);
+    const existing = yield* store.get(originKey);
     let previousThreadId: ThreadId | null = null;
     if (Option.isSome(existing)) {
-      if (existing.value.intent.projectId !== input.projectId)
-        return yield* new FactoryFeedError({ reason: "missing-source" });
+      if (existing.value.originConflict === 1)
+        return yield* new FactoryFeedError({ reason: "origin-conflict" });
       const { task } = yield* taskLaunch.inspect(existing.value);
-      if (task.status !== "missing") return yield* resume(existing.value, true);
+      if (task.status !== "missing") return yield* resume(existing.value, true, input);
       if (
         input.restartDeleted !== true ||
         existing.value.intent.requestCommandId === input.commandId
@@ -287,7 +316,6 @@ const make = Effect.gen(function* () {
     }
     if (yield* folders.isScratchProject(input.projectId))
       return yield* new FactoryFeedError({ reason: "missing-repository" });
-    const source = yield* requireSource(input);
     if (source.status !== "active")
       return yield* new FactoryFeedError({ reason: "source-suspended" });
     const item = yield* requireItem(input);
@@ -342,6 +370,7 @@ const make = Effect.gen(function* () {
       creationSource: input.creationSource ?? "web",
       createdBy: input.creationSource === "mcp" ? "agent" : "user",
       createdAt: DateTime.formatIso(yield* DateTime.now),
+      admittedBy: yield* environment.getEnvironmentId,
       previousThreadId,
       prompt: [
         "Implement the task described by this feed item in this isolated worktree.",
@@ -363,7 +392,7 @@ const make = Effect.gen(function* () {
         Effect.mapError((cause) => new FactoryFeedError({ reason: "provider-unavailable", cause })),
       );
     const winner = yield* store.reserve(intent);
-    return yield* resume(winner, winner.intent.threadId !== intent.threadId);
+    return yield* resume(winner, winner.intent.threadId !== intent.threadId, input);
   });
   return FactoryFeedService.of({
     listSources,

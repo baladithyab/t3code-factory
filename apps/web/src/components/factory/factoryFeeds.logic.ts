@@ -350,6 +350,9 @@ export function describeFactoryFeedFailure(
       case "candidate-unreviewable":
       case "forge-issue-source":
         return { kind: "other", title: "Item cannot be admitted", message, reason };
+      case "origin-conflict":
+        // Older records already claim this item more than once; the server keeps them all.
+        return { kind: "other", title: "Item claimed more than once", message, reason };
       default:
         return { kind: "other", title: "Could not complete the request", message, reason };
     }

@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   CommandId,
+  EnvironmentId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -46,6 +47,10 @@ import * as Registry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as Replay from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { DispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
+import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
+import { feedItemOriginKey } from "./FactoryOriginKey.ts";
+
+const environmentId = EnvironmentId.make("feed-environment");
 
 const projectId = ProjectId.make("factory-feed-project");
 const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" };
@@ -106,6 +111,7 @@ function harness(
     Layer.provide(Layer.mergeAll(orchestrator, settings, receipts)),
   );
   const external = Layer.mergeAll(
+    Layer.succeed(ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(environmentId) }),
     Layer.succeed(Identities.RepositoryIdentityResolver, {
       resolve: () => Effect.succeed(identity),
     }),
@@ -189,6 +195,56 @@ const seed = Effect.gen(function* () {
 });
 
 it.effect(
+  "second checkout's admit resumes the first checkout's thread and keeps one current claim",
+  () =>
+    Effect.gen(function* () {
+      const factory = yield* seed;
+      const secondProjectId = ProjectId.make("factory-feed-second-checkout");
+      yield* (yield* Projects.ProjectService).create({
+        commandId: CommandId.make("create-second"),
+        projectId: secondProjectId,
+        title: "Second checkout",
+        workspaceRoot: "/second-repo",
+        defaultModelSelection: modelSelection,
+        scripts: [],
+      });
+      const first = yield* factory.bindSource(bind);
+      const second = yield* factory.bindSource({
+        ...bind,
+        projectId: secondProjectId,
+        commandId: CommandId.make("bind-second"),
+      });
+      const firstItem = (yield* factory.readCandidate({
+        projectId,
+        sourceId: first.source.id,
+        itemKey: "atom:X",
+      })).candidate;
+      const secondItem = (yield* factory.readCandidate({
+        projectId: secondProjectId,
+        sourceId: second.source.id,
+        itemKey: "atom:X",
+      })).candidate;
+      const t1 = yield* factory.admitCandidate(admission(first.source.id, firstItem.revision));
+      const resumed = yield* factory.admitCandidate({
+        ...admission(second.source.id, secondItem.revision, "admit-second"),
+        projectId: secondProjectId,
+      });
+      assert.isTrue(resumed.resumed);
+      assert.equal(resumed.threadId, t1.threadId);
+      assert.equal(resumed.projectId, projectId);
+      assert.equal(resumed.sourceId, second.source.id);
+      assert.equal(resumed.itemKey, secondItem.itemKey);
+      const listed = yield* factory.listCandidates({ projectId: secondProjectId });
+      assert.equal(listed.candidates[0]?.task?.threadId, t1.threadId);
+      const sql = yield* SqlClient.SqlClient;
+      assert.equal(
+        (yield* sql`SELECT * FROM factory_feed_launches WHERE superseded = 0`).length,
+        1,
+      );
+    }).pipe(Effect.provide(harness(() => new Response(feed("reviewed d1 text"))))),
+);
+
+it.effect(
   "bind a fixture feed and refresh (item X, digest d1); republish X with an edited body and unchanged updated, refresh (ordinal 2, d2); admit(d1) fails before resolveCommit; admit(d2) launches one worktree thread; replay returns the same thread",
   () => {
     let body = "reviewed d1 text";
@@ -238,9 +294,12 @@ it.effect(
       assert.include(JSON.stringify(projection.messages), "Reviewer instructions:");
       assert.equal(result.task.baseRef, baseRef);
       const stored = Option.getOrThrow(
-        yield* (yield* Store.FactoryFeedStore).get({ sourceId: source.id, itemKey: "atom:X" }),
+        yield* (yield* Store.FactoryFeedStore).get(
+          feedItemOriginKey(identity.canonicalKey, bind.url, "atom:X"),
+        ),
       );
       assert.equal(stored.intent.revision, d2.revision);
+      assert.equal(stored.intent.admittedBy, environmentId);
       assert.equal((yield* sql`SELECT * FROM factory_issue_launches`).length, 0);
       assert.equal((yield* sql`SELECT * FROM factory_feed_launches`).length, 1);
       const replay = yield* factory.admitCandidate(admission(source.id, d2.revision));

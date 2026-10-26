@@ -4,6 +4,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   GitCommandError,
   CommandId,
+  EnvironmentId,
   MessageId,
   ProjectId,
   ProviderDriverKind,
@@ -53,11 +54,15 @@ import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
 import * as Registry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as Recovery from "../orchestration-v2/ProviderRuntimeRecoveryService.ts";
+import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
+import { githubIssueOriginKey } from "./FactoryOriginKey.ts";
 import * as Projections from "../orchestration-v2/ProjectionStore.ts";
 import * as Outbox from "../orchestration-v2/EffectOutbox.ts";
 import * as Replay from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { DispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
+
+const environmentId = EnvironmentId.make("issue-environment");
 
 const projectId = ProjectId.make("factory-project");
 const secondProjectId = ProjectId.make("factory-second-checkout");
@@ -155,6 +160,7 @@ function harness(
     Layer.provide(Layer.mergeAll(orchestrator, settings, receipts)),
   );
   const external = Layer.mergeAll(
+    Layer.succeed(ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(environmentId) }),
     Layer.succeed(Identities.RepositoryIdentityResolver, {
       resolve: options.resolve ?? (() => Effect.succeed(identity)),
     }),
@@ -321,6 +327,20 @@ it.effect(
       const projection = yield* threads.getThreadProjection(first.threadId);
       assert.equal(projection.runs.length, 1);
       assert.equal(projection.messages.length, 1);
+      const binding = Option.getOrThrow(
+        yield* (yield* Launches.FactoryIssueLaunches).get({
+          canonicalKey: first.repository.canonicalKey,
+          issueNumber: issue.number,
+        }),
+      );
+      assert.equal(binding.intent.admittedBy, environmentId);
+      const sql = yield* SqlClient.SqlClient;
+      const rows =
+        yield* sql`SELECT origin_key FROM factory_issue_launches WHERE thread_id = ${first.threadId}`;
+      assert.equal(
+        rows[0]?.origin_key,
+        githubIssueOriginKey(first.repository.canonicalKey, issue.number),
+      );
       const again = yield* factory.start({
         ...startInput("third"),
         expectedIssueRevision: unreviewed,

@@ -1,4 +1,6 @@
 import {
+  FactoryClaimListInput,
+  FactoryClaimListResult,
   FactoryIssueListInput,
   FactoryIssueListResult,
   FactoryIssueReadInput,
@@ -34,6 +36,7 @@ import * as Factory from "../../../factory/FactoryIssueService.ts";
 import * as Relations from "../../../factory/FactoryIssueRelations.ts";
 import * as Feeds from "../../../factory/FactoryFeedService.ts";
 import * as Research from "../../../factory/FactoryResearchService.ts";
+import * as Claims from "../../../factory/FactoryClaimsService.ts";
 import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -47,6 +50,20 @@ const shared = {
     McpInvocationContext.McpInvocationContext,
   ],
 };
+const listClaims = Tool.make("factory_list_claims", {
+  ...shared,
+  dependencies: [
+    Claims.FactoryClaimsService,
+    Threads.ThreadManagementService,
+    McpInvocationContext.McpInvocationContext,
+  ],
+  description:
+    "Read current issue, feed and research claims for a project's repository across this environment's checkouts. Returns owning environment identity, original admission provenance and legacy conflicts. This never starts, resumes or transfers work; other environments must be queried separately.",
+  parameters: FactoryClaimListInput,
+  success: FactoryClaimListResult,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
 const list = Tool.make("factory_list_issues", {
   ...shared,
   description:
@@ -204,6 +221,7 @@ const recordResearchEvidence = Tool.make("factory_record_research_evidence", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true);
 export const FactoryToolkit = Toolkit.make(
+  listClaims,
   list,
   read,
   readiness,

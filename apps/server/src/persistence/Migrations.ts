@@ -82,6 +82,7 @@ import Migration0195 from "./Migrations/195_FactoryFeeds.ts";
 import Migration0196 from "./Migrations/196_FactoryIssueRelations.ts";
 import Migration0197 from "./Migrations/197_FactoryReadinessOverrides.ts";
 import Migration0198 from "./Migrations/198_FactoryResearch.ts";
+import Migration0199 from "./Migrations/199_FactoryClaims.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -164,6 +165,7 @@ const migrationEntries = [
   [196, "FactoryIssueRelations", Migration0196],
   [197, "FactoryReadinessOverrides", Migration0197],
   [198, "FactoryResearch", Migration0198],
+  [199, "FactoryClaims", Migration0199],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

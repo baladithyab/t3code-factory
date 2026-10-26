@@ -438,6 +438,49 @@ Listing and reading protocols needs `orchestration:read`; sealing needs
 record their own thread's evidence with `factory_record_research_evidence`. They cannot seal a
 protocol, launch a verification, or admit an implementation.
 
+### Claims across environments
+
+Every task Factory admits is a claim on one origin: a GitHub issue, a feed item, or a research
+run. The environment whose database holds the claim owns the work: the thread, worktree,
+checkpoints, result acceptance, cancellation, and recovery. A claim never moves to another
+environment, and Factory never merges claims. Reaching an environment over T3 Connect or SSH only
+changes how your client connects to it. Factory does not dispatch work to another environment:
+**Start task** and **Admit** always run in the environment you selected.
+
+When the selected environment supports claims, **Issues** and **Sources** also read the claim
+list of every connected environment you can read that has a checkout of the same repository.
+They read when you open the page and when you press **Refresh**, never on a timer, so a claim
+another environment just admitted appears after the next Refresh.
+
+- **Claimed in N environments** marks an issue or feed item that two or more of those
+  environments claim. Different threads mean duplicate execution: each environment started its
+  own attempt, so the work runs more than once. The same thread everywhere means a copied
+  database, as when one environment's state is copied into another. A copy only holds a record
+  of the thread; its worktree and session live in the environment that ran it.
+- The task status says who admitted the claim. **Admitted by this environment** is the normal
+  case. **Admitted by another environment** means the claim was written under a different
+  environment ID, so this database was copied or restored and this environment answers for the
+  claim now. **Provenance unknown** means the claim was recorded before provenance was tracked.
+  A different ID is shown, not blocked: restoring to a new machine looks the same as copying,
+  so the judgement is yours.
+- **Start task** and **Admit** show a warning when the origin is already claimed in another
+  environment. The warning never disables the button; confirming starts a separate attempt in
+  the environment you chose.
+- An environment that is offline, runs an older server, or that you cannot read is named in a
+  note above the list and counts as unknown. It is never read as having no claims.
+- Two checkouts of one repository in the same environment share claims. Admitting a feed item
+  that another checkout already admitted resumes that checkout's thread, and the row shows
+  **Claimed by** the owning project with **Open thread**. Feed claims recorded before origin
+  keys existed can hold the same item more than once; those rows show **Claimed more than
+  once**, stay as recorded, and further admissions for that item are refused.
+
+To resolve a conflict, decide which environment should own the work, open its thread there, and
+stop or archive the other attempt from its own environment. Nothing merges: the other claim stays
+visible as a record, and work moves only when you start a new attempt where you want it.
+
+Listing claims needs `orchestration:read`. Agents can read the same list with the read-only
+`factory_list_claims`; it never changes a claim.
+
 ### Start a project orchestrator
 
 Open **Factory → Orchestrator** and select one checkout. **Create and start** asks you to

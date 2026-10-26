@@ -8,6 +8,7 @@ import {
   EnvironmentId,
   FactoryFeedSourceId,
   FactoryIssueError,
+  FactoryOriginKey,
   FactoryResearchError,
   FactoryResearchProtocolId,
   FactoryReadinessOverrideId,
@@ -18,6 +19,8 @@ import {
   WS_METHODS,
   type AuthEnvironmentScope,
   type AuthSessionState,
+  type FactoryClaimListInput,
+  type FactoryClaimListResult,
   type FactoryFeedCandidate,
   type FactoryFeedCandidateAdmitInput,
   type FactoryFeedCandidateDismissInput,
@@ -608,6 +611,79 @@ describe("Factory issue readiness query", () => {
         expect(calls).toHaveLength(4);
         expect(calls[3]).toEqual(calls[0]);
         expect(second.readiness.observedAt).not.toBe(first.readiness.observedAt);
+      }).pipe(Effect.scoped),
+  );
+});
+
+const claimsResult = (environment: EnvironmentId, observedAt: string): FactoryClaimListResult => ({
+  environmentId: environment,
+  repository: readinessRepository,
+  claims: [
+    {
+      originKey: FactoryOriginKey.make("github:github.com/example/repo#12"),
+      origin: "github-issue",
+      projectId,
+      workspaceRoot: "/work/repo",
+      threadId: ThreadId.make("claim-thread"),
+      status: "running",
+      baseRef: "main",
+      createdAt: fetchedAt,
+      creationSource: "web",
+      admittedBy: environment,
+      originConflict: false,
+    },
+  ],
+  fetchedAt: observedAt,
+});
+
+describe("Factory claims query", () => {
+  it.effect(
+    "reads each environment's claims through its own request with read access alone, and again on refresh",
+    () =>
+      Effect.gen(function* () {
+        const calls: FeedCall[] = [];
+        const h = yield* makeEnvironmentHarness(
+          (id) => ({
+            [WS_METHODS.factoryListClaims]: (input: FactoryClaimListInput) =>
+              Effect.sync(() => {
+                calls.push({ method: WS_METHODS.factoryListClaims, environmentId: id, input });
+                // The call count is the observation time (fewer than ten calls), so a refresh is
+                // distinguishable from a cache hit.
+                return claimsResult(id, `2026-10-25T12:0${calls.length}:00.000Z`);
+              }),
+          }),
+          [AuthOrchestrationReadScope],
+        );
+        const target = { environmentId, input: { projectId } };
+        const main = h.atoms.listClaims(target);
+        expect(h.atoms.listClaims(target)).toBe(main);
+        const other = h.atoms.listClaims({
+          environmentId: otherEnvironmentId,
+          input: { projectId },
+        });
+        expect(other).not.toBe(main);
+        for (const atom of [main, other]) {
+          yield* AtomRegistry.mount(h.registry, atom);
+          yield* AtomRegistry.getResult(h.registry, atom, { suspendOnWaiting: true });
+        }
+        expect(calls).toEqual([
+          { method: WS_METHODS.factoryListClaims, environmentId, input: { projectId } },
+          {
+            method: WS_METHODS.factoryListClaims,
+            environmentId: otherEnvironmentId,
+            input: { projectId },
+          },
+        ]);
+
+        const first = yield* AtomRegistry.getResult(h.registry, main, { suspendOnWaiting: true });
+        expect(first.environmentId).toBe(environmentId);
+        expect(first.claims[0]?.admittedBy).toBe(environmentId);
+        expect(calls).toHaveLength(2);
+        h.registry.refresh(main);
+        const second = yield* AtomRegistry.getResult(h.registry, main, { suspendOnWaiting: true });
+        expect(calls).toHaveLength(3);
+        expect(calls[2]).toEqual(calls[0]);
+        expect(second.fetchedAt).not.toBe(first.fetchedAt);
       }).pipe(Effect.scoped),
   );
 });

@@ -1,9 +1,11 @@
-import { useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { arrayElementsEqual } from "@t3tools/client-runtime/state/entities";
 import { createFactoryEnvironmentAtoms } from "@t3tools/client-runtime/state/factory";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
+import { useContext } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentPresentations, environmentSummaries } from "./presentation";
@@ -68,4 +70,64 @@ const factoryReadinessSupportedAtom = Atom.family((environmentId: EnvironmentId)
 
 export function useFactoryReadinessSupported(environmentId: EnvironmentId): boolean {
   return useAtomValue(factoryReadinessSupportedAtom(environmentId));
+}
+
+/**
+ * A claim list is requested from one environment at a time, so support is read per environment:
+ * an older server omits `factoryClaims` and would reject the method.
+ */
+const factoryClaimsSupportedAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make(
+    (get) =>
+      get(environmentPresentations.presentationAtom(environmentId))?.serverConfig?.environment
+        .capabilities.factoryClaims === true,
+  ).pipe(Atom.withLabel(`web-factory-claims-supported:${environmentId}`)),
+);
+
+export function useFactoryClaimsSupported(environmentId: EnvironmentId): boolean {
+  return useAtomValue(factoryClaimsSupportedAtom(environmentId));
+}
+
+export interface FactoryClaimListTarget {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+}
+
+const FactoryClaimTargetsKey = Schema.fromJsonString(
+  Schema.Array(Schema.Tuple([EnvironmentId, ProjectId])),
+);
+const decodeFactoryClaimTargetsKey = Schema.decodeUnknownOption(FactoryClaimTargetsKey);
+
+/**
+ * The list is keyed by its targets, so renders that rebuild an equal list read the same atom
+ * instead of a new one whose fresh snapshot would schedule another render.
+ */
+const factoryClaimListsAtom = Atom.family((key: string) =>
+  Atom.make((get) =>
+    Option.getOrElse(decodeFactoryClaimTargetsKey(key), () => []).map(
+      ([environmentId, projectId]) => ({
+        environmentId,
+        result: get(factoryEnvironment.listClaims({ environmentId, input: { projectId } })),
+      }),
+    ),
+  ).pipe(Atom.withLabel(`web-factory-claim-lists:${key}`)),
+);
+
+/**
+ * One claim list per target, with a refresh that observes every target again. Nothing refreshes on
+ * a timer: a claim another environment just admitted appears only on an explicit refresh.
+ */
+export function useFactoryClaimLists(targets: ReadonlyArray<FactoryClaimListTarget>) {
+  const registry = useContext(RegistryContext);
+  const lists = useAtomValue(
+    factoryClaimListsAtom(
+      JSON.stringify(targets.map(({ environmentId, projectId }) => [environmentId, projectId])),
+    ),
+  );
+  const refresh = () => {
+    for (const { environmentId, projectId } of targets) {
+      registry.refresh(factoryEnvironment.listClaims({ environmentId, input: { projectId } }));
+    }
+  };
+  return { lists, refresh };
 }
