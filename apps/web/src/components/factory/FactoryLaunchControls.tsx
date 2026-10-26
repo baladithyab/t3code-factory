@@ -85,6 +85,11 @@ export function FactoryLaunchFields(props: {
   readonly draft: FactoryLaunchDraft;
   /** Names the untrusted text in the supervised-mode notice, e.g. "Issue text". */
   readonly untrustedText: string;
+  /**
+   * Research runs and admissions start from a commit the protocol or finding already fixed, so a
+   * base ref chosen here would be ignored; they hide the field instead of offering a dead control.
+   */
+  readonly showBaseRef?: boolean;
 }) {
   const { draft } = props;
   return (
@@ -110,21 +115,23 @@ export function FactoryLaunchFields(props: {
           )}
         </div>
       </div>
-      <div className="space-y-1.5">
-        <Label htmlFor="factory-base-ref">
-          Base ref <span className="font-normal text-muted-foreground">optional</span>
-        </Label>
-        <Input
-          id="factory-base-ref"
-          value={draft.baseRef}
-          placeholder="Current HEAD of the project checkout"
-          onChange={(event) => draft.setBaseRef(event.target.value)}
-        />
-        <p className="text-muted-foreground text-xs">
-          A local branch, tag or commit. It is resolved to a fixed commit when the task starts; your
-          checkout is not fetched or changed.
-        </p>
-      </div>
+      {props.showBaseRef !== false ? (
+        <div className="space-y-1.5">
+          <Label htmlFor="factory-base-ref">
+            Base ref <span className="font-normal text-muted-foreground">optional</span>
+          </Label>
+          <Input
+            id="factory-base-ref"
+            value={draft.baseRef}
+            placeholder="Current HEAD of the project checkout"
+            onChange={(event) => draft.setBaseRef(event.target.value)}
+          />
+          <p className="text-muted-foreground text-xs">
+            A local branch, tag or commit. It is resolved to a fixed commit when the task starts;
+            your checkout is not fetched or changed.
+          </p>
+        </div>
+      ) : null}
       <Alert variant="info">
         <AlertDescription>
           The task starts with approval required. {props.untrustedText} is treated as untrusted task

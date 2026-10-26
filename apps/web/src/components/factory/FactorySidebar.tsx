@@ -3,6 +3,7 @@ import { Link, useLocation } from "@tanstack/react-router";
 import {
   BotIcon,
   CalendarClockIcon,
+  FlaskConicalIcon,
   FolderGit2Icon,
   GlobeIcon,
   LayoutDashboardIcon,
@@ -15,7 +16,7 @@ import { openCommandPalette } from "../../commandPaletteBus";
 import { isElectron } from "../../env";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useEnvironments } from "../../state/environments";
-import { useFactoryFeedsSupported } from "../../state/factory";
+import { useFactoryFeedsSupported, useFactoryResearchSupported } from "../../state/factory";
 import { SidebarChromeFooter, SidebarChromeHeader } from "../sidebar/SidebarChrome";
 import { resolveSettingsScope, type SettingsScopeSearch } from "../settings/settingsScope";
 import { useSettingsProjectGroups } from "../settings/useSettingsProjectGroups";
@@ -37,6 +38,7 @@ const FACTORY_SECTIONS = [
   { to: "/factory", label: "Overview", icon: LayoutDashboardIcon },
   { to: "/factory/issues", label: "Issues", icon: ListTodoIcon },
   { to: "/factory/sources", label: "Sources", icon: RssIcon },
+  { to: "/factory/research", label: "Research", icon: FlaskConicalIcon },
   { to: "/factory/workflows", label: "Workflows", icon: CalendarClockIcon },
   { to: "/factory/orchestrator", label: "Orchestrator", icon: BotIcon },
 ] as const;
@@ -51,16 +53,21 @@ export function FactorySidebar() {
   const member = singleFactoryMember(scope);
   const newThread = useNewThreadHandler();
   const feedsSupported = useFactoryFeedsSupported();
+  const researchSupported = useFactoryResearchSupported();
   const { isMobile, setOpenMobile } = useSidebar();
   const section =
     FACTORY_SECTIONS.find(
       (candidate) =>
         candidate.to === pathname || (candidate.to === "/factory" && pathname === "/factory/"),
     ) ?? FACTORY_SECTIONS[0];
-  // An older server omits the capability; its Sources page would be a dead end.
-  const visibleSections = feedsSupported
-    ? FACTORY_SECTIONS
-    : FACTORY_SECTIONS.filter(({ to }) => to !== "/factory/sources");
+  // An older server omits a capability; its section would be a dead end.
+  const visibleSections = FACTORY_SECTIONS.filter(({ to }) =>
+    to === "/factory/sources"
+      ? feedsSupported
+      : to === "/factory/research"
+        ? researchSupported
+        : true,
+  );
   const closeMobileSidebar = () => {
     if (isMobile) setOpenMobile(false);
   };

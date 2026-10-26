@@ -38,6 +38,7 @@ import { Route as ChatFactoryRouteImport } from './routes/_chat.factory'
 import { Route as ChatFactoryIndexRouteImport } from './routes/_chat.factory.index'
 import { Route as ChatFactoryWorkflowsRouteImport } from './routes/_chat.factory.workflows'
 import { Route as ChatFactorySourcesRouteImport } from './routes/_chat.factory.sources'
+import { Route as ChatFactoryResearchRouteImport } from './routes/_chat.factory.research'
 import { Route as ChatFactoryOrchestratorRouteImport } from './routes/_chat.factory.orchestrator'
 import { Route as ChatFactoryIssuesRouteImport } from './routes/_chat.factory.issues'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
@@ -188,6 +189,11 @@ const ChatFactorySourcesRoute = ChatFactorySourcesRouteImport.update({
   path: '/sources',
   getParentRoute: () => ChatFactoryRoute,
 } as any)
+const ChatFactoryResearchRoute = ChatFactoryResearchRouteImport.update({
+  id: '/research',
+  path: '/research',
+  getParentRoute: () => ChatFactoryRoute,
+} as any)
 const ChatFactoryOrchestratorRoute = ChatFactoryOrchestratorRouteImport.update({
   id: '/orchestrator',
   path: '/orchestrator',
@@ -240,6 +246,7 @@ export interface FileRoutesByFullPath {
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/factory/issues': typeof ChatFactoryIssuesRoute
   '/factory/orchestrator': typeof ChatFactoryOrchestratorRoute
+  '/factory/research': typeof ChatFactoryResearchRoute
   '/factory/sources': typeof ChatFactorySourcesRoute
   '/factory/workflows': typeof ChatFactoryWorkflowsRoute
   '/factory/': typeof ChatFactoryIndexRoute
@@ -273,6 +280,7 @@ export interface FileRoutesByTo {
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/factory/issues': typeof ChatFactoryIssuesRoute
   '/factory/orchestrator': typeof ChatFactoryOrchestratorRoute
+  '/factory/research': typeof ChatFactoryResearchRoute
   '/factory/sources': typeof ChatFactorySourcesRoute
   '/factory/workflows': typeof ChatFactoryWorkflowsRoute
   '/factory': typeof ChatFactoryIndexRoute
@@ -309,6 +317,7 @@ export interface FileRoutesById {
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/_chat/factory/issues': typeof ChatFactoryIssuesRoute
   '/_chat/factory/orchestrator': typeof ChatFactoryOrchestratorRoute
+  '/_chat/factory/research': typeof ChatFactoryResearchRoute
   '/_chat/factory/sources': typeof ChatFactorySourcesRoute
   '/_chat/factory/workflows': typeof ChatFactoryWorkflowsRoute
   '/_chat/factory/': typeof ChatFactoryIndexRoute
@@ -345,6 +354,7 @@ export interface FileRouteTypes {
     | '/draft/$draftId'
     | '/factory/issues'
     | '/factory/orchestrator'
+    | '/factory/research'
     | '/factory/sources'
     | '/factory/workflows'
     | '/factory/'
@@ -378,6 +388,7 @@ export interface FileRouteTypes {
     | '/draft/$draftId'
     | '/factory/issues'
     | '/factory/orchestrator'
+    | '/factory/research'
     | '/factory/sources'
     | '/factory/workflows'
     | '/factory'
@@ -413,6 +424,7 @@ export interface FileRouteTypes {
     | '/_chat/draft/$draftId'
     | '/_chat/factory/issues'
     | '/_chat/factory/orchestrator'
+    | '/_chat/factory/research'
     | '/_chat/factory/sources'
     | '/_chat/factory/workflows'
     | '/_chat/factory/'
@@ -634,6 +646,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatFactorySourcesRouteImport
       parentRoute: typeof ChatFactoryRoute
     }
+    '/_chat/factory/research': {
+      id: '/_chat/factory/research'
+      path: '/research'
+      fullPath: '/factory/research'
+      preLoaderRoute: typeof ChatFactoryResearchRouteImport
+      parentRoute: typeof ChatFactoryRoute
+    }
     '/_chat/factory/orchestrator': {
       id: '/_chat/factory/orchestrator'
       path: '/orchestrator'
@@ -668,6 +687,7 @@ declare module '@tanstack/react-router' {
 interface ChatFactoryRouteChildren {
   ChatFactoryIssuesRoute: typeof ChatFactoryIssuesRoute
   ChatFactoryOrchestratorRoute: typeof ChatFactoryOrchestratorRoute
+  ChatFactoryResearchRoute: typeof ChatFactoryResearchRoute
   ChatFactorySourcesRoute: typeof ChatFactorySourcesRoute
   ChatFactoryWorkflowsRoute: typeof ChatFactoryWorkflowsRoute
   ChatFactoryIndexRoute: typeof ChatFactoryIndexRoute
@@ -676,6 +696,7 @@ interface ChatFactoryRouteChildren {
 const ChatFactoryRouteChildren: ChatFactoryRouteChildren = {
   ChatFactoryIssuesRoute: ChatFactoryIssuesRoute,
   ChatFactoryOrchestratorRoute: ChatFactoryOrchestratorRoute,
+  ChatFactoryResearchRoute: ChatFactoryResearchRoute,
   ChatFactorySourcesRoute: ChatFactorySourcesRoute,
   ChatFactoryWorkflowsRoute: ChatFactoryWorkflowsRoute,
   ChatFactoryIndexRoute: ChatFactoryIndexRoute,

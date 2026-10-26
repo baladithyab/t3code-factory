@@ -5,6 +5,8 @@ import {
   EnvironmentId,
   CommandId,
   FactoryFeedError,
+  FactoryResearchError,
+  FactoryResearchProtocolId,
   FactoryIssueError,
   FactoryReadinessOverrideId,
   FactoryFeedSourceId,
@@ -36,6 +38,7 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
 import * as FactoryIssueRelations from "./factory/FactoryIssueRelations.ts";
 import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
+import * as FactoryResearchService from "./factory/FactoryResearchService.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
@@ -351,6 +354,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(FactoryIssueService.FactoryIssueService)({}),
   Layer.mock(FactoryIssueRelations.FactoryIssueRelations)({}),
   Layer.mock(FactoryFeedService.FactoryFeedService)({}),
+  Layer.mock(FactoryResearchService.FactoryResearchService)({}),
   Layer.mock(PullRequestSyncReactor.PullRequestSyncReactor)({}),
   Layer.mock(RelayClient.RelayClient)({}),
   Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
@@ -886,4 +890,110 @@ it.effect(
       ),
       Effect.scoped,
     ),
+);
+
+it.effect("routes research RPCs with trusted client attribution and domain refusals", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const refuse = (method: string, source?: string) =>
+      Effect.sync(() => {
+        calls.push(method);
+        if (source !== undefined) assert.equal(source, "web");
+      }).pipe(
+        Effect.andThen(Effect.fail(new FactoryResearchError({ reason: "protocol-changed" }))),
+      );
+    const services = Layer.mergeAll(
+      layerUnusedConfigRpcServices,
+      Layer.mock(ProjectCoordinatorService.ProjectCoordinatorService)({}),
+      Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+      Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+      Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+      Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+      Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+      Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+      Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+      Layer.mock(FactoryResearchService.FactoryResearchService)({
+        listProtocols: () => refuse("list"),
+        readProtocol: () => refuse("read"),
+        sealProtocol: (input) => refuse("seal", input.creationSource),
+        launchRun: (input) => refuse("launch", input.creationSource),
+        admitImplementation: (input) => refuse("admit", input.creationSource),
+      }),
+    );
+    const methods = [
+      WS_METHODS.factoryListResearchProtocols,
+      WS_METHODS.factoryReadResearchProtocol,
+      WS_METHODS.factorySealResearchProtocol,
+      WS_METHODS.factoryLaunchResearchRun,
+      WS_METHODS.factoryAdmitResearchImplementation,
+    ] as const;
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RpcAuthorization.RPC_REQUIRED_SCOPES,
+          (typeof methods)[number]
+        > => !(methods as readonly string[]).includes(tag),
+      ),
+    );
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.merge(
+          layerWsRpc(
+            {
+              sessionId: AuthSessionId.make("research-test"),
+              subject: "research-test",
+              method: "browser-session-cookie",
+              scopes: [],
+            },
+            {},
+            {},
+            yield* PreviewAutomationBroker.PreviewAutomationBroker,
+            yield* ServerBrowser.ServerBrowser,
+          ).pipe(Layer.provide(services)),
+          RpcAuthorization.layer([
+            "orchestration:read",
+            "orchestration:operate",
+            "source-control:write",
+          ]),
+        ),
+      ),
+    );
+    for (const method of methods) {
+      const request: Effect.Effect<unknown, FactoryResearchError | EnvironmentAuthorizationError> =
+        client[method]({
+          commandId: CommandId.make("research-test"),
+          projectId: ProjectId.make("project"),
+          protocolId: FactoryResearchProtocolId.make("protocol"),
+          expectedRepositoryKey: "github.com/owner/repo",
+          expectedProtocolRevision: "protocol-revision",
+          expectedFindingRevision: "finding-revision",
+          hypothesis: "Lower loss",
+          runCommand: "python train.py",
+          evaluatorPaths: ["prepare.py"],
+          metric: { name: "loss", linePrefix: "loss:", direction: "lower", minimumEffect: 0.01 },
+          budget: { maxRuns: 3, maxRunMinutes: 5, expiresAt: "2099-01-01T00:00:00.000Z" },
+          role: "explore",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          creationSource: "mcp",
+        });
+      const result = yield* request.pipe(Effect.asVoid, Effect.flip);
+      assert.instanceOf(result, FactoryResearchError);
+      assert.equal(result.reason, "protocol-changed");
+    }
+    assert.deepEqual(calls, ["list", "read", "seal", "launch", "admit"]);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.fresh(layerConfigSources),
+        Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+        Layer.mock(ServerBrowser.ServerBrowser)({}),
+      ),
+    ),
+    Effect.scoped,
+  ),
 );

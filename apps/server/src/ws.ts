@@ -1,6 +1,7 @@
 import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
 import * as FactoryIssueRelations from "./factory/FactoryIssueRelations.ts";
 import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
+import * as FactoryResearchService from "./factory/FactoryResearchService.ts";
 import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -1266,6 +1267,7 @@ export const layerWsRpc = (
       const factory = yield* FactoryIssueService.FactoryIssueService;
       const factoryRelations = yield* FactoryIssueRelations.FactoryIssueRelations;
       const factoryFeeds = yield* FactoryFeedService.FactoryFeedService;
+      const factoryResearch = yield* FactoryResearchService.FactoryResearchService;
       const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2532,6 +2534,23 @@ export const layerWsRpc = (
         [WS_METHODS.factorySetFeedCandidateDismissed]: (input) =>
           factoryFeeds.setCandidateDismissed(input),
         [WS_METHODS.factoryAdmitFeedCandidate]: (input) => factoryFeeds.admitCandidate(input),
+        [WS_METHODS.factoryListResearchProtocols]: (input) => factoryResearch.listProtocols(input),
+        [WS_METHODS.factoryReadResearchProtocol]: (input) => factoryResearch.readProtocol(input),
+        [WS_METHODS.factorySealResearchProtocol]: (input) =>
+          factoryResearch.sealProtocol({
+            ...input,
+            creationSource: clientOrigin.surface === "mobile" ? "mobile" : "web",
+          }),
+        [WS_METHODS.factoryLaunchResearchRun]: (input) =>
+          factoryResearch.launchRun({
+            ...input,
+            creationSource: clientOrigin.surface === "mobile" ? "mobile" : "web",
+          }),
+        [WS_METHODS.factoryAdmitResearchImplementation]: (input) =>
+          factoryResearch.admitImplementation({
+            ...input,
+            creationSource: clientOrigin.surface === "mobile" ? "mobile" : "web",
+          }),
         [WS_METHODS.projectCoordinatorsGet]: (input) => projectCoordinators.get(input),
         [WS_METHODS.projectCoordinatorsList]: (_input) => projectCoordinators.list(),
         [WS_METHODS.projectCoordinatorsEnsure]: (input) =>
@@ -3233,6 +3252,7 @@ export const layer = Layer.unwrap(
     const factory = yield* FactoryIssueService.FactoryIssueService;
     const factoryRelations = yield* FactoryIssueRelations.FactoryIssueRelations;
     const factoryFeeds = yield* FactoryFeedService.FactoryFeedService;
+    const factoryResearch = yield* FactoryResearchService.FactoryResearchService;
     const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const sql = yield* SqlClient.SqlClient;
@@ -3324,6 +3344,9 @@ export const layer = Layer.unwrap(
                 Layer.succeed(FactoryIssueRelations.FactoryIssueRelations, factoryRelations),
               ),
               Layer.provide(Layer.succeed(FactoryFeedService.FactoryFeedService, factoryFeeds)),
+              Layer.provide(
+                Layer.succeed(FactoryResearchService.FactoryResearchService, factoryResearch),
+              ),
               Layer.provide(
                 Layer.succeed(
                   ProjectCoordinatorService.ProjectCoordinatorService,

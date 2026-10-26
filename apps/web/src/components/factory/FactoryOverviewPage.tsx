@@ -310,6 +310,15 @@ function FactoryOverviewEnvironment({
                     Open feed sources
                   </Link>
                 ) : null}
+                {environment.serverConfig?.environment.capabilities.factoryResearch === true ? (
+                  <Link
+                    to="/factory/research"
+                    search={exactSearch}
+                    className="inline-block text-sm underline underline-offset-4"
+                  >
+                    Open research protocols
+                  </Link>
+                ) : null}
               </div>
             </article>
           );

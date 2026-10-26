@@ -4,6 +4,8 @@ import * as FactoryIssueRelations from "./factory/FactoryIssueRelations.ts";
 import * as FactoryIssueRelationStore from "./persistence/FactoryIssueRelationStore.ts";
 import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
 import * as FactoryFeedStore from "./persistence/FactoryFeedStore.ts";
+import * as FactoryResearchService from "./factory/FactoryResearchService.ts";
+import * as FactoryResearchStore from "./persistence/FactoryResearchStore.ts";
 import * as FeedFetch from "./factory/FeedFetch.ts";
 import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
 import * as ProjectCoordinators from "./persistence/ProjectCoordinators.ts";
@@ -731,6 +733,7 @@ const layerMakeRoutes = Layer.mergeAll(
       FactoryIssueService.layer,
       FactoryIssueRelations.layer,
       FactoryFeedService.layer,
+      FactoryResearchService.layer,
       ProjectCoordinatorService.layer,
     ).pipe(
       Layer.provide(
@@ -738,6 +741,7 @@ const layerMakeRoutes = Layer.mergeAll(
           FactoryIssueLaunches.layer,
           FactoryIssueRelationStore.layer,
           FactoryFeedStore.layer,
+          FactoryResearchStore.layer,
           FeedFetch.layer,
           ProjectCoordinators.layer,
           FactoryCommandReceipts.layerFromApplicationReceipts,

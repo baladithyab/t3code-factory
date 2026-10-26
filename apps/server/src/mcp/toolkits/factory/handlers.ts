@@ -1,5 +1,6 @@
 import {
   OrchestratorMcpFailure,
+  FactoryResearchError,
   type FactoryIssueError,
   type FactoryFeedError,
   type ProjectCoordinatorError,
@@ -8,19 +9,71 @@ import * as Effect from "effect/Effect";
 import * as Factory from "../../../factory/FactoryIssueService.ts";
 import * as Relations from "../../../factory/FactoryIssueRelations.ts";
 import * as Feeds from "../../../factory/FactoryFeedService.ts";
+import * as Research from "../../../factory/FactoryResearchService.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { DispatchModeLimit } from "../../../orchestration-v2/DispatchModeLimit.ts";
 import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { readCaller } from "../../threadAccess.ts";
 import { FactoryToolkit } from "./tools.ts";
 
-const failure = (error: FactoryIssueError | FactoryFeedError | ProjectCoordinatorError) =>
+const failure = (
+  error: FactoryIssueError | FactoryFeedError | FactoryResearchError | ProjectCoordinatorError,
+) =>
   new OrchestratorMcpFailure({
     code:
       error.reason === "launch-authority" ? "runtime_mode_escalation_denied" : "invalid_request",
     message: error.message,
   });
 export const layer = McpToolAccess.toLayer(FactoryToolkit, {
+  factory_list_research_protocols: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      yield* readCaller();
+      return yield* (yield* Research.FactoryResearchService)
+        .listProtocols(input)
+        .pipe(Effect.mapError(failure));
+    }),
+  ),
+  factory_read_research_protocol: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      yield* readCaller();
+      return yield* (yield* Research.FactoryResearchService)
+        .readProtocol(input)
+        .pipe(Effect.mapError(failure));
+    }),
+  ),
+  factory_launch_research_run: McpToolAccess.startsThreads(
+    (input) => input,
+    (input, modes) =>
+      Effect.gen(function* () {
+        const caller = yield* readCaller();
+        if (input.role === "verify")
+          return yield* failure(new FactoryResearchError({ reason: "verify-requires-user" }));
+        if (!caller.scope.capabilities.has("worktree"))
+          return yield* new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: "Research runs require worktree authority.",
+          });
+        return yield* (yield* Research.FactoryResearchService)
+          .launchRun({
+            ...input,
+            ...modes,
+            creationSource: "mcp",
+            ...(caller.scope.thread === undefined
+              ? {}
+              : { launchedByThreadId: caller.scope.thread.threadId }),
+          })
+          .pipe(Effect.provideService(DispatchModeLimit, caller.limits), Effect.mapError(failure));
+      }),
+  ),
+  factory_record_research_evidence: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const caller = yield* McpInvocationContext.McpInvocationContext;
+      return yield* (yield* Research.FactoryResearchService)
+        .recordEvidence(input, caller.thread?.threadId)
+        .pipe(Effect.mapError(failure));
+    }),
+  ),
   factory_list_feed_candidates: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       yield* readCaller();

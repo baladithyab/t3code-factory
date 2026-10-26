@@ -145,7 +145,7 @@ make your first commit before pushing.
 ## Factory
 
 Open **Factory** in the sidebar or command palette. Its sections are **Overview**, **Issues**,
-**Sources**, **Workflows**, and **Orchestrator**. **Sessions** and **New thread** still open
+**Sources**, **Research**, **Workflows**, and **Orchestrator**. **Sessions** and **New thread** still open
 ordinary conversations; you do not need an orchestrator to use them.
 
 ### Choose the scope
@@ -369,6 +369,74 @@ Listing feeds and candidates needs `orchestration:read`; binding and unbinding n
 `factory_list_feed_candidates`, `factory_read_feed_candidate` and
 `factory_admit_feed_candidate` under their existing permissions, passing the reviewed
 `revision` as `expectedRevision`. Agents cannot bind, unbind, refresh or dismiss feeds.
+
+### Run a research protocol
+
+Open **Factory → Research** and choose a checkout. A research protocol tests one falsifiable
+hypothesis with a number a run can measure. Research needs a GitHub `origin` and the same
+`orchestration:operate` and `source-control:write` access as admitting an issue, and it is
+not available in the mobile app.
+
+**Seal protocol** fixes, in one step:
+
+- the **hypothesis** and the **run command** a run executes;
+- the **evaluator paths**, the files that measure the result and must not change. The server
+  resolves the base commit itself and records each file's Git blob id, so nothing you type is
+  trusted as a hash;
+- the **metric**: its name, the **line prefix** that precedes the number on the line a run
+  cites, whether lower or higher is better, and an optional **minimum effect**. With no minimum
+  effect nothing can be judged and the finding stays unknown;
+- the **budget**: maximum runs, maximum minutes per run, and the time the window closes.
+
+A sealed protocol cannot be edited. A change is a new protocol. T3 Code does not run the
+command, start training, or use hosted, GPU or paid compute; the agent in each run does,
+inside its own isolated worktree. Closing the window refuses new runs but does not stop a
+thread that is already running; only you stop a thread.
+
+**Launch explore** starts a thread at the base commit. The run records its own evidence: it
+names the commit it measured and the file and line where each number appears, and reports
+anything missing. It supplies no metric value. The server reads each cited line from the run's
+worktree, extracts the number after the line prefix, keeps the file's digest (and its bytes up
+to 256 KiB), checks that the commit descends from the base, re-hashes the evaluators at that
+commit, and pins the commit. Evidence is written once per run and must be recorded before the
+thread ends or its worktree is removed.
+
+Each observation is then labelled by the server as **Acceptable**, **Evaluator changed**,
+**Not a descendant**, **Citation invalid**, **Over budget** or **Unknown**. Over-budget
+evidence is never acceptable, however good the number looks. Open **Details** on a run to see
+why, with the cited lines and their sha256.
+
+**Launch verify** is offered once an acceptable explore run exists on a candidate commit. A
+verification is a second, separate thread pinned to that commit, and it must be launched from
+the app: an agent cannot start one, and a verification launched by the thread that produced the
+result is refused as not independent. T3 Code cannot tell whether the same model or the same
+person is behind both threads, and does not claim to; the human admission below is where trust
+is decided.
+
+The **Finding** is derived each time you open or **Refresh** the protocol, never stored. It is
+**Supported** only when an acceptable explore run and an acceptable verification on the same
+commit both beat the measured baseline by at least the minimum effect, in the sealed
+direction. Otherwise it is **Unsupported** or **Unknown**, with the reasons listed. Each
+role runs once, so variance is unmeasured and a small effect may be noise. Nothing here polls;
+press **Refresh** to read again.
+
+**Admit implementation** is available only for a supported finding. It shows the complete
+protocol and finding as JSON, plus an optional **Instructions** field, and starts an
+implementation thread in its own worktree on the selected commit. The thread receives the
+finding as untrusted data with your instructions kept apart. Your admission is the approval
+record: it names the finding revision and your instructions. If the evidence changed since
+you opened the review, admission is refused; close the review and read the current finding.
+A supported finding is evidence, never automatic promotion. Admitting does not publish,
+merge, or release anything. A protocol has one implementation: admitting again opens the
+existing thread, and if its thread was deleted you can confirm a new attempt.
+
+Listing and reading protocols needs `orchestration:read`; sealing needs
+`orchestration:operate`; launching and admitting need `orchestration:operate` and
+`source-control:write`. Agents can read protocols with `factory_list_research_protocols` and
+`factory_read_research_protocol`, launch an exploration with `factory_launch_research_run`
+(the launching thread is recorded, so it cannot later count as independent verification), and
+record their own thread's evidence with `factory_record_research_evidence`. They cannot seal a
+protocol, launch a verification, or admit an implementation.
 
 ### Start a project orchestrator
 

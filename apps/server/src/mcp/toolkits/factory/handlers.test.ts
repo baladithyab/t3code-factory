@@ -4,6 +4,8 @@ import {
   CommandId,
   EnvironmentId,
   FactoryFeedError,
+  FactoryResearchError,
+  FactoryResearchProtocolId,
   FactoryFeedSourceId,
   MessageId,
   ProjectId,
@@ -22,6 +24,7 @@ import * as Stream from "effect/Stream";
 import * as Factory from "../../../factory/FactoryIssueService.ts";
 import * as Relations from "../../../factory/FactoryIssueRelations.ts";
 import * as Feeds from "../../../factory/FactoryFeedService.ts";
+import * as Research from "../../../factory/FactoryResearchService.ts";
 import { DispatchModeLimit } from "../../../orchestration-v2/DispatchModeLimit.ts";
 import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
@@ -81,6 +84,12 @@ it.effect.each([
         }),
         Layer.mock(Threads.ThreadManagementService)({}),
         Layer.mock(Coordinators.ProjectCoordinatorService)({}),
+        Layer.mock(Research.FactoryResearchService)({
+          launchRun: () => {
+            called = true;
+            return Effect.die("Unauthorized research launch reached the service");
+          },
+        }),
         Layer.mock(Feeds.FactoryFeedService)({
           admitCandidate: () => {
             called = true;
@@ -127,6 +136,21 @@ it.effect.each([
         })
         .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
       assert.deepInclude(feedOutputs.at(-1)?.result, { code });
+      assert.isFalse(called);
+      const researchOutputs = yield* toolkit
+        .handle("factory_launch_research_run", {
+          commandId: CommandId.make("research-launch"),
+          projectId: ProjectId.make("project"),
+          protocolId: FactoryResearchProtocolId.make("protocol"),
+          expectedRepositoryKey: "github.com/owner/repo",
+          expectedProtocolRevision: "reviewed",
+          role: "explore",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+          runtimeMode: requested,
+          interactionMode: "default",
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      assert.deepInclude(researchOutputs.at(-1)?.result, { code });
       assert.isFalse(called);
     }),
 );
@@ -710,5 +734,113 @@ it.effect.each([true, false])(
         Object.keys(FactoryToolkit.tools),
         "factory_revoke_issue_readiness_override",
       );
+    }),
+);
+
+it.effect(
+  "research MCP refuses verify, propagates explore caller and mode ceiling, and records only caller evidence",
+  () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("research-caller");
+      const calls: string[] = [];
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(Context.McpInvocationContext, {
+          environmentId: EnvironmentId.make("test"),
+          requestNamespace: "research",
+          issuedAt: 0,
+          thread: {
+            threadId,
+            providerSessionId: "session",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+          },
+          client: undefined,
+          capabilities: new Set<Context.McpCapability>(["orchestration", "worktree"]),
+        }),
+        Layer.mock(Threads.ThreadManagementService)({
+          getThreadShell: () => Effect.succeed(liveThreadShell(threadId)),
+        }),
+        Layer.mock(Research.FactoryResearchService)({
+          listProtocols: () =>
+            Effect.sync(() => {
+              calls.push("list");
+            }).pipe(
+              Effect.andThen(Effect.fail(new FactoryResearchError({ reason: "missing-protocol" }))),
+            ),
+          readProtocol: () =>
+            Effect.sync(() => {
+              calls.push("read");
+            }).pipe(
+              Effect.andThen(Effect.fail(new FactoryResearchError({ reason: "missing-protocol" }))),
+            ),
+          launchRun: (input) =>
+            Effect.gen(function* () {
+              calls.push("explore");
+              assert.equal(input.role, "explore");
+              assert.equal(input.creationSource, "mcp");
+              assert.equal(input.launchedByThreadId, threadId);
+              assert.isDefined(yield* DispatchModeLimit);
+              return yield* new FactoryResearchError({ reason: "budget-exhausted" });
+            }),
+          recordEvidence: (input, caller) =>
+            Effect.sync(() => {
+              calls.push("evidence");
+              assert.equal(caller, threadId);
+              assert.equal(input.threadId, ThreadId.make("other"));
+            }).pipe(
+              Effect.andThen(Effect.fail(new FactoryResearchError({ reason: "not-run-thread" }))),
+            ),
+        }),
+      );
+      const toolkit = yield* FactoryToolkit.pipe(
+        Effect.provide(
+          Access.HandlersLayer.layer(Handlers.layer).pipe(Layer.provide(dependencies)),
+        ),
+      );
+      const input = {
+        commandId: CommandId.make("research"),
+        projectId: ProjectId.make("project"),
+        protocolId: FactoryResearchProtocolId.make("protocol"),
+        expectedRepositoryKey: "github.com/owner/repo",
+        expectedProtocolRevision: "revision",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+        runtimeMode: "approval-required" as const,
+        interactionMode: "default" as const,
+      };
+      const verify = yield* toolkit
+        .handle("factory_launch_research_run", { ...input, role: "verify" })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      assert.deepInclude(verify.at(-1)?.result, {
+        code: "invalid_request",
+        message: new FactoryResearchError({ reason: "verify-requires-user" }).message,
+      });
+      assert.isEmpty(calls);
+      yield* toolkit
+        .handle("factory_launch_research_run", { ...input, role: "explore", creationSource: "web" })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      yield* toolkit
+        .handle("factory_list_research_protocols", { projectId: input.projectId })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      yield* toolkit
+        .handle("factory_read_research_protocol", {
+          projectId: input.projectId,
+          protocolId: input.protocolId,
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      const evidence = yield* toolkit
+        .handle("factory_record_research_evidence", {
+          projectId: input.projectId,
+          threadId: ThreadId.make("other"),
+          commit: "C1",
+          citations: [{ path: "run.log", line: 2 }],
+          missing: [],
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      assert.deepInclude(evidence.at(-1)?.result, {
+        code: "invalid_request",
+        message: new FactoryResearchError({ reason: "not-run-thread" }).message,
+      });
+      assert.deepEqual(calls, ["explore", "list", "read", "evidence"]);
+      assert.notInclude(Object.keys(FactoryToolkit.tools), "factory_seal_research_protocol");
+      assert.notInclude(Object.keys(FactoryToolkit.tools), "factory_admit_research_implementation");
     }),
 );
