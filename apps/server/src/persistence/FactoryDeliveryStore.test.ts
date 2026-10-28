@@ -164,3 +164,45 @@ it.effect(
       assert.deepEqual(confirmed.remote, remote);
     }).pipe(Effect.provide(layer)),
 );
+
+it.effect("a publish row stored before merge-pr existed still decodes as a publish payload", () =>
+  Effect.gen(function* () {
+    const store = yield* Store.FactoryDeliveryStore;
+    const sql = yield* SqlClient.SqlClient;
+    const publish = intent("stored");
+    yield* sql`INSERT INTO factory_delivery_intents
+      (id, origin_key, thread_id, project_id, kind, acceptance_id, repository_json, base_ref, base_sha,
+       head_sha, payload_json, payload_digest, granted_by, granted_at, request_command_id, status, updated_at)
+      VALUES ('stored', ${originKey}, ${publish.threadId}, 'project', 'publish-pr', 'acceptance:1',
+       ${JSON.stringify(publish.repository)}, 'main', ${publish.baseSha}, ${publish.headSha},
+       '{"title":"Title","body":"Body","draft":false}', ${publish.payloadDigest}, 'environment', ${at},
+       'command:stored', 'pending', ${at})`;
+    assert.deepEqual(Option.getOrThrow(yield* store.get("stored")), publish);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("a merge intent keeps the remote set at grant through a failed settlement", () =>
+  Effect.gen(function* () {
+    const store = yield* Store.FactoryDeliveryStore;
+    const remote = { number: 12, url: "https://github.com/owner/repo/pull/12" };
+    const merge = intent("merge", {
+      kind: "merge-pr",
+      payload: { mergeMethod: "squash" },
+      remote,
+    });
+    assert.deepEqual((yield* store.grant(merge, { recheck: noop, enqueue: noop })).intent, merge);
+    assert.deepEqual(Option.getOrThrow(yield* store.get("merge")).payload, {
+      mergeMethod: "squash",
+    });
+    yield* store.settle("merge", { status: "failed", failure: "rejected", updatedAt: at });
+    const failed = Option.getOrThrow(yield* store.get("merge"));
+    assert.equal(failed.status, "failed");
+    assert.deepEqual(failed.remote, remote);
+    // The live index is per kind, so a merge never blocks or is blocked by a publish.
+    const publish = intent("publish");
+    assert.deepEqual(
+      (yield* store.grant(publish, { recheck: noop, enqueue: noop })).intent,
+      publish,
+    );
+  }).pipe(Effect.provide(layer)),
+);

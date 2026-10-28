@@ -9,11 +9,16 @@ import {
 import { FactoryAcceptance } from "./factoryAcceptance.ts";
 import { FactoryOriginKey } from "./factoryClaims.ts";
 import { FactoryRepository } from "./factory.ts";
+import {
+  PullRequestMergeMethod,
+  PullRequestMergeability,
+  PullRequestState,
+} from "./pullRequest.ts";
 
 export const FACTORY_DELIVERY_TITLE_MAX_CHARS = 256;
 export const FACTORY_DELIVERY_BODY_MAX_CHARS = 65536;
 
-export const FactoryDeliveryKind = Schema.Literal("publish-pr");
+export const FactoryDeliveryKind = Schema.Literals(["publish-pr", "merge-pr"]);
 export type FactoryDeliveryKind = typeof FactoryDeliveryKind.Type;
 
 /**
@@ -29,11 +34,26 @@ export const FactoryDeliveryStatus = Schema.Literals([
 ]);
 export type FactoryDeliveryStatus = typeof FactoryDeliveryStatus.Type;
 
-export const FactoryDeliveryPayload = Schema.Struct({
+export const FactoryDeliveryPublishPayload = Schema.Struct({
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(FACTORY_DELIVERY_TITLE_MAX_CHARS)),
   body: Schema.String.check(Schema.isMaxLength(FACTORY_DELIVERY_BODY_MAX_CHARS)),
   draft: Schema.Boolean,
 });
+export type FactoryDeliveryPublishPayload = typeof FactoryDeliveryPublishPayload.Type;
+
+export const FactoryDeliveryMergePayload = Schema.Struct({
+  mergeMethod: PullRequestMergeMethod,
+});
+export type FactoryDeliveryMergePayload = typeof FactoryDeliveryMergePayload.Type;
+
+/**
+ * A stored `publish-pr` row has no `mergeMethod` and a merge payload has no `title`, so each
+ * shape decodes as exactly one member and rows written before `merge-pr` existed still decode.
+ */
+export const FactoryDeliveryPayload = Schema.Union([
+  FactoryDeliveryPublishPayload,
+  FactoryDeliveryMergePayload,
+]);
 export type FactoryDeliveryPayload = typeof FactoryDeliveryPayload.Type;
 
 /**
@@ -74,6 +94,20 @@ export const FactoryDeliveryPrepareInput = Schema.Struct({
 });
 export type FactoryDeliveryPrepareInput = typeof FactoryDeliveryPrepareInput.Type;
 
+/** What a person is about to merge, as the host reports it now; filled for `merge-pr` only. */
+export const FactoryDeliveryPullRequest = Schema.Struct({
+  number: Schema.Int,
+  url: Schema.String,
+  headSha: Schema.NullOr(Schema.String),
+  state: PullRequestState,
+  mergeability: PullRequestMergeability,
+  isDraft: Schema.Boolean,
+  checksSummary: Schema.NullOr(Schema.String),
+  /** Methods the repository allows; a grant for a disabled one would be refused by the host. */
+  mergeMethods: Schema.Array(PullRequestMergeMethod),
+});
+export type FactoryDeliveryPullRequest = typeof FactoryDeliveryPullRequest.Type;
+
 export const FactoryDeliveryPrepareResult = Schema.Struct({
   acceptance: FactoryAcceptance,
   current: Schema.Boolean,
@@ -84,6 +118,7 @@ export const FactoryDeliveryPrepareResult = Schema.Struct({
   // What a grant must echo back; the grant recomputes it and refuses a mismatch.
   payloadDigest: Schema.String,
   existing: Schema.NullOr(FactoryDeliveryIntent),
+  pullRequest: Schema.NullOr(FactoryDeliveryPullRequest),
 });
 export type FactoryDeliveryPrepareResult = typeof FactoryDeliveryPrepareResult.Type;
 
@@ -131,6 +166,10 @@ export class FactoryDeliveryError extends Schema.TaggedError<FactoryDeliveryErro
       "head-moved",
       "payload-changed",
       "already-delivering",
+      "not-published",
+      "already-merged",
+      "pull-request-head-moved",
+      "not-mergeable",
       "intent-not-found",
       "not-reconcilable",
       "worktree-unavailable",
@@ -155,6 +194,14 @@ export class FactoryDeliveryError extends Schema.TaggedError<FactoryDeliveryErro
         return "The pull request title or body changed since you reviewed it. Review it again.";
       case "already-delivering":
         return "A pull request is already being published, or was published, for this task.";
+      case "not-published":
+        return "Publish the pull request first.";
+      case "already-merged":
+        return "This pull request is already merged.";
+      case "pull-request-head-moved":
+        return "The pull request head is not the accepted commit. Re-accept and refresh.";
+      case "not-mergeable":
+        return "The host reports the pull request cannot be merged right now.";
       case "intent-not-found":
         return "This delivery does not exist in the selected project.";
       case "not-reconcilable":

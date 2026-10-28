@@ -14,13 +14,16 @@ import {
   AuthOrchestrationReadScope,
   CommandId,
   type EnvironmentId,
-  type FactoryDeliveryPayload,
+  type FactoryDeliveryIntent,
+  type FactoryDeliveryKind,
   type FactoryDeliveryPrepareResult,
+  type FactoryDeliveryPublishPayload,
   type FactoryIssue,
   type FactoryIssueStartInput,
   type FactoryRepository,
   type ModelSelection,
   type ProjectId,
+  type PullRequestMergeMethod,
   type RuntimeMode,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -44,6 +47,7 @@ import {
   describeFactoryAcceptanceFailure,
   describeFactoryDeliveryFailure,
   describeFactoryFailure,
+  describeFactoryMergeFailure,
   factoryAcceptanceView,
   factoryIssueStartKey,
   isLiveFactoryDelivery,
@@ -403,12 +407,41 @@ const NO_DELIVERY_PREVIEW = Atom.make(
   AsyncResult.initial<FactoryDeliveryPrepareResult, unknown>(false),
 ).pipe(Atom.withLabel("mobile-factory-delivery-preview:none"));
 
+type DeliveryPreview = AsyncResult.AsyncResult<FactoryDeliveryPrepareResult, unknown>;
+
+// Only a settled success is grantable: a failed re-prepare must not leave the previous digest
+// looking current, and a preview that is still re-reading may be about to change.
+function settledPreview(preview: DeliveryPreview) {
+  return preview._tag === "Success" && !preview.waiting ? preview.value : null;
+}
+
+function describeDeliveryFailure(kind: FactoryDeliveryKind, error: unknown) {
+  return kind === "merge-pr"
+    ? describeFactoryMergeFailure(error)
+    : describeFactoryDeliveryFailure(error);
+}
+
+interface DeliveryState {
+  readonly key: string;
+  // The payload of the last explicit Prepare. Previewing is a read, but it runs only on request
+  // so typing never asks the server to recompute a digest per keystroke.
+  readonly previewed: FactoryDeliveryPublishPayload | null;
+  readonly mergePreviewed: PullRequestMergeMethod | null;
+  readonly pending: boolean;
+  // Tagged so a merge refusal shows under Merge and a publish refusal under Pull request.
+  readonly failure: { readonly kind: FactoryDeliveryKind; readonly failure: FactoryFailure } | null;
+}
+
+function emptyDeliveryState(key: string): DeliveryState {
+  return { key, previewed: null, mergePreviewed: null, pending: false, failure: null };
+}
+
 /**
- * Publishing one task's accepted commit as a pull request. A grant is single-use over the exact
- * preview the human last saw: it echoes that prepare's head and payload digest, never a fresh
- * read, so a moved head or an edited payload is refused by the server instead of published.
- * The server performs the push and the pull request; this hook only previews, grants, and
- * reconciles a lost response.
+ * Publishing one task's accepted commit as a pull request, then merging that pull request. Each
+ * grant is single-use over the exact preview the human last saw: it echoes that prepare's head
+ * and payload digest, never a fresh read, so a moved head, a moved pull request, or an edited
+ * payload is refused by the server instead of delivered. The server performs the push, the pull
+ * request, and the merge; this hook only previews, grants, and reconciles a lost response.
  */
 export function useFactoryDelivery(input: {
   readonly environmentId: EnvironmentId;
@@ -434,15 +467,8 @@ export function useFactoryDelivery(input: {
   });
   const key = JSON.stringify([environmentId, projectId, threadId]);
   const lifetime = useRef<{ readonly key: string; active: boolean; pending: boolean } | null>(null);
-  const [state, setState] = useState<{
-    readonly key: string;
-    // The payload of the last explicit Prepare. Previewing is a read, but it runs only on request
-    // so typing never asks the server to recompute a digest per keystroke.
-    readonly previewed: FactoryDeliveryPayload | null;
-    readonly pending: boolean;
-    readonly failure: FactoryFailure | null;
-  }>({ key, previewed: null, pending: false, failure: null });
-  if (state.key !== key) setState({ key, previewed: null, pending: false, failure: null });
+  const [state, setState] = useState<DeliveryState>(() => emptyDeliveryState(key));
+  if (state.key !== key) setState(emptyDeliveryState(key));
   useLayoutEffect(() => {
     const current = { key, active: true, pending: false };
     lifetime.current = current;
@@ -450,9 +476,17 @@ export function useFactoryDelivery(input: {
       current.active = false;
     };
   }, [key]);
+  // A settled command only updates the lifetime that sent it.
+  const update = useCallback(
+    (stateKey: string, patch: Partial<Omit<DeliveryState, "key">>) =>
+      setState((previous) => (previous.key === stateKey ? { ...previous, ...patch } : previous)),
+    [],
+  );
 
-  const previewed = state.key === key ? state.previewed : null;
-  const previewAtom: Atom.Atom<AsyncResult.AsyncResult<FactoryDeliveryPrepareResult, unknown>> =
+  const current = state.key === key ? state : emptyDeliveryState(key);
+  const { previewed, mergePreviewed } = current;
+
+  const previewAtom: Atom.Atom<DeliveryPreview> =
     readable && previewed !== null
       ? factoryEnvironment.prepareDelivery({
           environmentId,
@@ -461,96 +495,163 @@ export function useFactoryDelivery(input: {
       : NO_DELIVERY_PREVIEW;
   const preview = useAtomValue(previewAtom);
   const refreshPreview = useAtomRefresh(previewAtom);
-  // Only a settled success is grantable: a failed re-prepare must not leave the previous digest
-  // looking current, and a preview that is still re-reading may be about to change.
-  const prepared = preview._tag === "Success" && !preview.waiting ? preview.value : null;
+  const prepared = settledPreview(preview);
   const previewFailure =
     preview._tag === "Failure" ? describeFactoryDeliveryFailure(Cause.squash(preview.cause)) : null;
 
+  const mergePreviewAtom: Atom.Atom<DeliveryPreview> =
+    readable && mergePreviewed !== null
+      ? factoryEnvironment.prepareDelivery({
+          environmentId,
+          input: {
+            projectId,
+            threadId,
+            kind: "merge-pr",
+            payload: { mergeMethod: mergePreviewed },
+          },
+        })
+      : NO_DELIVERY_PREVIEW;
+  const mergePreview = useAtomValue(mergePreviewAtom);
+  const refreshMergePreview = useAtomRefresh(mergePreviewAtom);
+  const mergePrepared = settledPreview(mergePreview);
+  const mergePreviewFailure =
+    mergePreview._tag === "Failure"
+      ? describeFactoryMergeFailure(Cause.squash(mergePreview.cause))
+      : null;
+
   const intents = deliveries.data?.intents ?? [];
-  const liveIntent = intents.find(isLiveFactoryDelivery) ?? null;
+  const publishIntents = intents.filter((intent) => intent.kind === "publish-pr");
+  const mergeIntents = intents.filter((intent) => intent.kind === "merge-pr");
+  const liveIntent = publishIntents.find(isLiveFactoryDelivery) ?? null;
+  const liveMergeIntent = mergeIntents.find(isLiveFactoryDelivery) ?? null;
+  // Merging only ever targets a pull request this task already published.
+  const published = publishIntents.some((intent) => intent.status === "confirmed");
 
   const prepare = useCallback(
-    (payload: FactoryDeliveryPayload) => {
+    (payload: FactoryDeliveryPublishPayload) => {
       if (lifetime.current?.pending) return;
       const next = { ...payload, title: payload.title.trim() };
-      setState({ key, previewed: next, pending: false, failure: null });
+      update(key, { previewed: next, failure: null });
       // Preparing the same text again must still re-read the head and acceptance.
       if (previewed !== null && sameFactoryDeliveryPayload(previewed, next)) refreshPreview();
     },
-    [key, previewed, refreshPreview],
+    [key, previewed, refreshPreview, update],
   );
 
-  const grant = useCallback(async () => {
-    const current = lifetime.current;
-    if (current === null || !current.active || current.pending || prepared === null) return;
-    current.pending = true;
-    setState({ key: current.key, previewed, pending: true, failure: null });
-    const result = await runGrant({
-      environmentId,
-      input: {
-        projectId,
-        threadId,
-        kind: "publish-pr",
-        // A fresh id per grant: a failed intent is not live, so granting again must create a new
-        // intent rather than replay the failed one.
-        commandId: uuidv4(),
-        expectedHeadSha: prepared.headSha,
-        expectedPayloadDigest: prepared.payloadDigest,
-        payload: prepared.payload,
-      },
-    });
-    current.pending = false;
-    if (!current.active || lifetime.current !== current) return;
-    const failure =
-      result._tag === "Failure" && !isAtomCommandInterrupted(result)
-        ? describeFactoryDeliveryFailure(squashAtomCommandFailure(result))
-        : null;
-    setState({ key: current.key, previewed, pending: false, failure });
-  }, [environmentId, prepared, previewed, projectId, runGrant, threadId]);
+  const prepareMerge = useCallback(
+    (mergeMethod: PullRequestMergeMethod) => {
+      if (lifetime.current?.pending) return;
+      update(key, { mergePreviewed: mergeMethod, failure: null });
+      // Preparing the same method again must still re-read the pull request head and checks.
+      if (mergePreviewed === mergeMethod) refreshMergePreview();
+    },
+    [key, mergePreviewed, refreshMergePreview, update],
+  );
 
-  const reconcile = useCallback(
-    async (intentId: string) => {
+  const runGrantFor = useCallback(
+    async (kind: FactoryDeliveryKind, grantFrom: FactoryDeliveryPrepareResult | null) => {
       const current = lifetime.current;
-      if (current === null || !current.active || current.pending) return;
+      if (current === null || !current.active || current.pending || grantFrom === null) return;
       current.pending = true;
-      setState({ key: current.key, previewed, pending: true, failure: null });
-      const result = await runReconcile({ environmentId, input: { projectId, intentId } });
+      update(current.key, { pending: true, failure: null });
+      const result = await runGrant({
+        environmentId,
+        input: {
+          projectId,
+          threadId,
+          kind,
+          // A fresh id per grant: a failed intent is not live, so granting again must create a
+          // new intent rather than replay the failed one.
+          commandId: uuidv4(),
+          expectedHeadSha: grantFrom.headSha,
+          expectedPayloadDigest: grantFrom.payloadDigest,
+          payload: grantFrom.payload,
+        },
+      });
       current.pending = false;
       if (!current.active || lifetime.current !== current) return;
       const failure =
         result._tag === "Failure" && !isAtomCommandInterrupted(result)
-          ? describeFactoryDeliveryFailure(squashAtomCommandFailure(result))
+          ? { kind, failure: describeDeliveryFailure(kind, squashAtomCommandFailure(result)) }
           : null;
-      setState({ key: current.key, previewed, pending: false, failure });
+      update(current.key, { pending: false, failure });
     },
-    [environmentId, previewed, projectId, runReconcile],
+    [environmentId, projectId, runGrant, threadId, update],
+  );
+
+  const grant = useCallback(() => runGrantFor("publish-pr", prepared), [prepared, runGrantFor]);
+  const grantMerge = useCallback(
+    () => runGrantFor("merge-pr", mergePrepared),
+    [mergePrepared, runGrantFor],
+  );
+
+  const reconcile = useCallback(
+    async (intent: FactoryDeliveryIntent) => {
+      const current = lifetime.current;
+      if (current === null || !current.active || current.pending) return;
+      current.pending = true;
+      update(current.key, { pending: true, failure: null });
+      const result = await runReconcile({
+        environmentId,
+        input: { projectId, intentId: intent.id },
+      });
+      current.pending = false;
+      if (!current.active || lifetime.current !== current) return;
+      const failure =
+        result._tag === "Failure" && !isAtomCommandInterrupted(result)
+          ? {
+              kind: intent.kind,
+              failure: describeDeliveryFailure(intent.kind, squashAtomCommandFailure(result)),
+            }
+          : null;
+      update(current.key, { pending: false, failure });
+    },
+    [environmentId, projectId, runReconcile, update],
   );
 
   const refreshDeliveries = deliveries.refresh;
   const refresh = useCallback(() => {
     if (lifetime.current?.pending) return;
-    setState({ key, previewed, pending: false, failure: null });
+    update(key, { failure: null });
     refreshDeliveries();
     if (previewed !== null) refreshPreview();
-  }, [key, previewed, refreshDeliveries, refreshPreview]);
+    if (mergePreviewed !== null) refreshMergePreview();
+  }, [
+    key,
+    mergePreviewed,
+    previewed,
+    refreshDeliveries,
+    refreshMergePreview,
+    refreshPreview,
+    update,
+  ]);
 
-  const current = state.key === key ? state : { pending: false, failure: null };
+  const failureFor = (kind: FactoryDeliveryKind) =>
+    current.failure?.kind === kind ? current.failure.failure : null;
   return {
     supported: readable,
     canGrant,
     canReconcile,
-    intents,
+    publishIntents,
+    mergeIntents,
     liveIntent,
+    liveMergeIntent,
+    published,
     deliveriesLoading: deliveries.isPending,
     deliveriesError: deliveries.error,
     prepared,
     preparing: previewed !== null && preview.waiting,
     previewFailure,
+    mergePrepared,
+    mergePreparing: mergePreviewed !== null && mergePreview.waiting,
+    mergePreviewFailure,
     pending: current.pending,
-    failure: current.failure,
+    failure: failureFor("publish-pr"),
+    mergeFailure: failureFor("merge-pr"),
     prepare,
+    prepareMerge,
     grant,
+    grantMerge,
     reconcile,
     refresh,
   };

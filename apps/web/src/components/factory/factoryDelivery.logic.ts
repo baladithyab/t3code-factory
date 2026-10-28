@@ -1,20 +1,41 @@
-import { FactoryDeliveryError, type FactoryDeliveryIntent } from "@t3tools/contracts";
+import {
+  FactoryDeliveryError,
+  type FactoryDeliveryIntent,
+  type FactoryDeliveryPrepareResult,
+  type PullRequestMergeMethod,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 import { describeFactoryFailure } from "./factoryIssues.logic";
 
 const isFactoryDeliveryError = Schema.is(FactoryDeliveryError);
 
-export function factoryDeliveryFailureMessage(error: unknown, fallbackMessage?: string): string {
+export function factoryDeliveryFailureMessage(
+  error: unknown,
+  fallbackMessage?: string,
+  kind: FactoryDeliveryIntent["kind"] = "publish-pr",
+): string {
   if (isFactoryDeliveryError(error)) {
     switch (error.reason) {
       case "head-moved":
       case "acceptance-stale":
         return "The head moved since acceptance. Re-accept, then prepare again.";
       case "payload-changed":
-        return "The title or body changed since the preview. Prepare again.";
+        return kind === "merge-pr"
+          ? "The merge details changed since the preview. Prepare again."
+          : "The title or body changed since the preview. Prepare again.";
       case "already-delivering":
-        return "A pull request is already being published for this task.";
+        return kind === "merge-pr"
+          ? "A merge has already been granted for this task."
+          : "A pull request is already being published for this task.";
+      case "not-published":
+        return "Publish the pull request first.";
+      case "pull-request-head-moved":
+        return "The pull request head is not the accepted commit. Re-accept and refresh.";
+      case "already-merged":
+        return "This pull request is already merged.";
+      case "not-mergeable":
+        return "GitHub reports the pull request cannot be merged right now.";
       case "not-accepted":
         return "Accept the current commit, then prepare again.";
       case "not-reconcilable":
@@ -33,7 +54,7 @@ export function factoryDeliveryFailureMessage(error: unknown, fallbackMessage?: 
 }
 
 export function isLiveFactoryDelivery(intent: Pick<FactoryDeliveryIntent, "status">): boolean {
-  // Confirmed still owns the single publication slot for this task.
+  // Confirmed still owns the single delivery slot for this task and kind.
   return intent.status !== "failed";
 }
 
@@ -60,4 +81,68 @@ export function factoryDeliveryGrantDisabledReason(conditions: GrantConditions):
 
 export function canGrantFactoryDelivery(conditions: GrantConditions): boolean {
   return factoryDeliveryGrantDisabledReason(conditions) === null;
+}
+
+export function mergeGrantDisabledReason(
+  conditions: GrantConditions & {
+    readonly prepared: Pick<
+      FactoryDeliveryPrepareResult,
+      "current" | "headSha" | "pullRequest"
+    > | null;
+    readonly mergeMethod?: PullRequestMergeMethod;
+  },
+): string | null {
+  if (!conditions.acceptanceCurrent || conditions.prepared?.current === false) {
+    return "The head moved since acceptance. Re-accept, then prepare again.";
+  }
+  if (conditions.existing !== null && isLiveFactoryDelivery(conditions.existing)) {
+    return conditions.existing.status === "confirmed"
+      ? "This pull request is already merged."
+      : "A merge has already been granted for this task.";
+  }
+  if (!conditions.hasPermission) {
+    return "Merging needs operate and source-control write permissions on this environment.";
+  }
+  const prepared = conditions.prepared;
+  const pullRequest = prepared?.pullRequest;
+  if (prepared === null || pullRequest == null) {
+    return "Prepare the merge before granting it.";
+  }
+  if (pullRequest.state === "merged") {
+    return "This pull request is already merged.";
+  }
+  if (pullRequest.headSha !== prepared.headSha) {
+    return "The pull request head is not the accepted commit. Re-accept and refresh.";
+  }
+  if (pullRequest.isDraft) {
+    return "Mark the pull request ready for review before merging.";
+  }
+  if (pullRequest.mergeability === "conflicting" || pullRequest.state === "closed") {
+    return "GitHub reports the pull request cannot be merged right now.";
+  }
+  if (
+    conditions.mergeMethod !== undefined &&
+    !pullRequest.mergeMethods.includes(conditions.mergeMethod)
+  ) {
+    return `The repository does not allow ${conditions.mergeMethod} merges. Choose another method.`;
+  }
+  return null;
+}
+
+export function describeDeliveryStatus(
+  intent: Pick<FactoryDeliveryIntent, "kind" | "status" | "failure">,
+): string {
+  switch (intent.status) {
+    case "pending":
+    case "sending":
+      return intent.kind === "merge-pr" ? "Merging…" : "Publishing…";
+    case "confirmed":
+      return intent.kind === "merge-pr" ? "Merged" : "Published";
+    case "unknown":
+      return "The server lost the response. Reconcile to check GitHub.";
+    case "failed":
+      return (
+        intent.failure ?? (intent.kind === "merge-pr" ? "Merge failed." : "Publication failed.")
+      );
+  }
 }

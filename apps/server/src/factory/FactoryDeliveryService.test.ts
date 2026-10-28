@@ -9,10 +9,13 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  PullRequestOperationError,
   SourceControlProviderError,
   SourceControlProviderKind,
   ThreadId,
-  type FactoryDeliveryPayload,
+  type FactoryDeliveryPublishPayload,
+  type PullRequestActionInput,
+  type PullRequestDetail,
 } from "@t3tools/contracts";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as Effect from "effect/Effect";
@@ -29,6 +32,7 @@ import * as AcceptanceStore from "../persistence/FactoryAcceptanceStore.ts";
 import * as DeliveryStore from "../persistence/FactoryDeliveryStore.ts";
 import { type FactoryLaunchIntent } from "../persistence/FactoryIssueLaunches.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
+import * as PullRequests from "../pullRequest/PullRequestService.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Acceptance from "./FactoryAcceptanceService.ts";
@@ -43,7 +47,11 @@ const unclaimed = ThreadId.make("unclaimed");
 const first = "1".repeat(40);
 const second = "2".repeat(40);
 const base = "b".repeat(40);
-const payload: FactoryDeliveryPayload = { title: "Fix the thing", body: "Details", draft: false };
+const payload: FactoryDeliveryPublishPayload = {
+  title: "Fix the thing",
+  body: "Details",
+  draft: false,
+};
 const pullRequest = { number: 12, url: "https://github.com/owner/repo/pull/12" };
 
 const intent: FactoryLaunchIntent = {
@@ -95,6 +103,24 @@ const harness = (options: { readonly seedSending?: boolean } = {}) => {
     create: "ok" as "ok" | "definite" | "ambiguous",
     calls: [] as string[],
     links: [] as unknown[],
+    // The host's view of the published pull request, which a test moves to simulate a push, a
+    // conflict or a merge made elsewhere.
+    pr: {
+      headSha: first as string | undefined,
+      state: "open" as "open" | "closed" | "merged",
+      mergeability: "mergeable" as "mergeable" | "conflicting" | "unknown",
+      isDraft: false,
+      checks: [
+        ...Array.from({ length: 3 }, () => "success"),
+        "failure",
+        "pending",
+        "skipped",
+      ] as ReadonlyArray<string>,
+    },
+    read: "ok" as "ok" | "fail",
+    merge: "ok" as "ok" | "definite" | "ambiguous",
+    mergeCalls: [] as PullRequestActionInput[],
+    invalidations: 0,
   };
   const providerFailure = (cwd: string, cause: unknown) =>
     new SourceControlProviderError({
@@ -152,7 +178,57 @@ const harness = (options: { readonly seedSending?: boolean } = {}) => {
           );
     },
   });
+  const mergeFailure = (cause: unknown) =>
+    new PullRequestOperationError({ operation: "runAction", detail: "host answered", cause });
+  const pullRequests = Layer.mock(PullRequests.PullRequestService)({
+    invalidate: () => {
+      state.invalidations += 1;
+      return Effect.void;
+    },
+    // Only the fields the delivery service reads; the rest of a detail is not its business.
+    detail: (ref) =>
+      state.read === "fail"
+        ? Effect.fail(
+            new PullRequestOperationError({ operation: "detail", detail: "host unreachable" }),
+          )
+        : Effect.succeed({
+            number: ref.number,
+            url: `https://github.com/owner/repo/pull/${ref.number}`,
+            state: state.pr.state,
+            isDraft: state.pr.isDraft,
+            mergeability: state.pr.mergeability,
+            ...(state.pr.headSha === undefined ? {} : { headSha: state.pr.headSha }),
+            checks: state.pr.checks.map((status, index) => ({
+              name: `check-${index}`,
+              status,
+              description: null,
+              url: null,
+            })),
+            capabilities: { mergeMethods: ["merge", "squash"] },
+          } as unknown as PullRequestDetail),
+    runAction: (input) => {
+      state.mergeCalls.push(input);
+      if (state.merge === "definite")
+        return Effect.fail(
+          mergeFailure({
+            _tag: "PullRequestProviderError",
+            reason: "failed",
+            cause: { _tag: "GitHubApiResponseError", status: 409 },
+          }),
+        );
+      if (state.merge === "ambiguous")
+        return Effect.fail(
+          mergeFailure({
+            _tag: "PullRequestProviderError",
+            reason: "failed",
+            cause: { _tag: "GitHubApiRequestError" },
+          }),
+        );
+      return Effect.void;
+    },
+  });
   const dependencies = Layer.mergeAll(
+    pullRequests,
     Sqlite.layerMemory,
     git,
     NodeCrypto.layer,
@@ -582,3 +658,305 @@ it.effect(
     }).pipe(Effect.provide(layer));
   },
 );
+
+it.effect("the publish digest is unchanged by the merge-pr kind", () =>
+  Effect.sync(() => {
+    assert.equal(
+      Delivery.deliveryPayloadDigest({
+        kind: "publish-pr",
+        repository: intent.repository,
+        baseRef: "main",
+        headSha: first,
+        payload,
+      }),
+      "b0e65da5187c802869f5586342d22a39a9769dce8371e50c7fa0ff301a86ae5c",
+    );
+    assert.equal(
+      Delivery.deliveryPayloadDigest({
+        kind: "merge-pr",
+        repository: intent.repository,
+        baseRef: "main",
+        headSha: first,
+        payload: { mergeMethod: "squash" },
+        pullRequestNumber: pullRequest.number,
+      }),
+      "5017e4191eec331b724c07af383d7901bd1d567a4642be91ecd7d428c6767922",
+    );
+  }),
+);
+
+type MergeMethod = "merge" | "squash" | "rebase";
+const mergePayload = (mergeMethod: MergeMethod = "squash") => ({ mergeMethod });
+const prepareMerge = (mergeMethod?: MergeMethod) =>
+  Effect.flatMap(Delivery.FactoryDeliveryService, (service) =>
+    service.prepare({
+      projectId,
+      threadId: claimed,
+      kind: "merge-pr",
+      payload: mergePayload(mergeMethod),
+    }),
+  );
+const grantMerge = Effect.fn("DeliveryTest.grantMerge")(function* (
+  overrides: {
+    readonly commandId?: string;
+    readonly mergeMethod?: MergeMethod;
+    readonly expectedHeadSha?: string;
+  } = {},
+) {
+  const service = yield* Delivery.FactoryDeliveryService;
+  const prepared = yield* prepareMerge(overrides.mergeMethod);
+  return yield* service.grant({
+    projectId,
+    threadId: claimed,
+    kind: "merge-pr",
+    commandId: overrides.commandId ?? "merge-1",
+    expectedHeadSha: overrides.expectedHeadSha ?? prepared.headSha,
+    expectedPayloadDigest: prepared.payloadDigest,
+    payload: mergePayload(overrides.mergeMethod),
+  });
+});
+const mergeIntent = Effect.gen(function* () {
+  const merge = (yield* deliveries).find((delivery) => delivery.kind === "merge-pr");
+  if (merge === undefined) return yield* Effect.die("expected a merge delivery");
+  return merge;
+});
+// A confirmed publish is the precondition of every merge; the clock moves on so a merge is the
+// newest row, which `read` orders by grant time.
+const published = Effect.gen(function* () {
+  yield* accept;
+  yield* executeGranted();
+  yield* TestClock.adjust("1 second");
+});
+
+it.effect("prepare merge-pr needs a confirmed publish, then reports the pull request", () => {
+  const { state, layer } = harness();
+  return Effect.gen(function* () {
+    yield* accept;
+    assert.equal((yield* prepareMerge().pipe(Effect.flip)).reason, "not-published");
+    // A publish that is only pending does not count.
+    const service = yield* Delivery.FactoryDeliveryService;
+    const granted = yield* grant();
+    assert.equal((yield* prepareMerge().pipe(Effect.flip)).reason, "not-published");
+    yield* service.execute(granted.id);
+
+    const squash = yield* prepareMerge("squash");
+    assert.deepEqual(squash.pullRequest, {
+      number: pullRequest.number,
+      url: pullRequest.url,
+      headSha: first,
+      state: "open",
+      mergeability: "mergeable",
+      isDraft: false,
+      checksSummary: "3 passed, 1 failing, 1 pending",
+      mergeMethods: ["merge", "squash"],
+    });
+    assert.equal(squash.headSha, first);
+    assert.equal(squash.existing, null);
+    assert.deepEqual(squash.payload, { mergeMethod: "squash" });
+    assert.equal(
+      squash.payloadDigest,
+      "5017e4191eec331b724c07af383d7901bd1d567a4642be91ecd7d428c6767922",
+    );
+    assert.notEqual((yield* prepareMerge("rebase")).payloadDigest, squash.payloadDigest);
+    // Advisory reads may use the shared cache; only a grant and a reconcile drop it.
+    assert.equal(state.invalidations, 0);
+
+    const mismatched = yield* service
+      .prepare({ projectId, threadId: claimed, kind: "merge-pr", payload })
+      .pipe(Effect.flip);
+    assert.equal(mismatched.reason, "payload-changed");
+    state.head = second;
+    assert.equal((yield* prepareMerge().pipe(Effect.flip)).reason, "acceptance-stale");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect(
+  "a merge grant is refused for a moved, merged, unmergeable or unreadable pull request",
+  () => {
+    const { state, layer } = harness();
+    return Effect.gen(function* () {
+      yield* published;
+      state.pr.headSha = second;
+      assert.equal((yield* grantMerge().pipe(Effect.flip)).reason, "pull-request-head-moved");
+      state.pr.headSha = undefined;
+      assert.equal((yield* grantMerge().pipe(Effect.flip)).reason, "pull-request-head-moved");
+      state.pr.headSha = first;
+
+      state.pr.state = "merged";
+      assert.equal((yield* grantMerge().pipe(Effect.flip)).reason, "already-merged");
+      state.pr.state = "open";
+
+      state.pr.mergeability = "conflicting";
+      assert.equal((yield* grantMerge().pipe(Effect.flip)).reason, "not-mergeable");
+      state.pr.mergeability = "mergeable";
+      state.pr.isDraft = true;
+      assert.equal((yield* grantMerge().pipe(Effect.flip)).reason, "not-mergeable");
+      state.pr.isDraft = false;
+
+      state.read = "fail";
+      assert.equal((yield* grantMerge().pipe(Effect.flip)).reason, "persistence-failure");
+      state.read = "ok";
+
+      const service = yield* Delivery.FactoryDeliveryService;
+      const prepared = yield* prepareMerge();
+      const changed = yield* service
+        .grant({
+          projectId,
+          threadId: claimed,
+          kind: "merge-pr",
+          commandId: "merge-changed",
+          expectedHeadSha: prepared.headSha,
+          expectedPayloadDigest: prepared.payloadDigest,
+          payload: mergePayload("rebase"),
+        })
+        .pipe(Effect.flip);
+      assert.equal(changed.reason, "payload-changed");
+      // Only the publish row exists: every refusal left the merge out of the database and outbox.
+      assert.lengthOf(yield* deliveries, 1);
+      assert.lengthOf(yield* outboxRows, 1);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("a merge grant stores the pull request at grant and enqueues exactly one effect", () => {
+  const { state, layer } = harness();
+  return Effect.gen(function* () {
+    yield* published;
+    const granted = yield* grantMerge();
+    assert.deepInclude(granted, {
+      kind: "merge-pr",
+      status: "pending",
+      headSha: first,
+      requestCommandId: "merge-1",
+    });
+    assert.deepEqual(granted.payload, { mergeMethod: "squash" });
+    assert.deepEqual(granted.remote, pullRequest);
+    // The grant read the host fresh instead of trusting the shared cache.
+    assert.isAbove(state.invalidations, 0);
+
+    const rows = yield* outboxRows;
+    assert.lengthOf(rows, 2);
+    assert.lengthOf(
+      rows.filter((row) => row.effect_id === `${granted.id}:execute`),
+      1,
+    );
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    const queued = Option.getOrThrow(yield* outbox.get(`${granted.id}:execute`));
+    assert.deepEqual(queued.request, { type: "factory.delivery.execute", intentId: granted.id });
+
+    assert.deepEqual(yield* grantMerge(), granted);
+    assert.lengthOf(yield* outboxRows, 2);
+    assert.equal(
+      (yield* grantMerge({ commandId: "merge-2" }).pipe(Effect.flip)).reason,
+      "already-delivering",
+    );
+    assert.lengthOf(yield* outboxRows, 2);
+    assert.deepEqual(yield* mergeIntent, granted);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("executing a merge pins the host to the accepted head and never touches git", () => {
+  const { state, layer } = harness();
+  return Effect.gen(function* () {
+    yield* published;
+    const service = yield* Delivery.FactoryDeliveryService;
+    state.calls.length = 0;
+    state.links.length = 0;
+    const granted = yield* grantMerge({ mergeMethod: "rebase" });
+    // The worktree has moved on; a merge acts on the pull request alone, so it does not look.
+    state.head = second;
+    yield* service.execute(granted.id);
+    assert.deepEqual(state.mergeCalls, [
+      {
+        projectId,
+        repository: "owner/repo",
+        host: "github.com",
+        number: pullRequest.number,
+        action: "merge",
+        mergeMethod: "rebase",
+        expectedHeadSha: first,
+      },
+    ]);
+    assert.deepEqual(state.calls, []);
+    const settled = yield* mergeIntent;
+    assert.equal(settled.status, "confirmed");
+    assert.deepEqual(settled.remote, pullRequest);
+    assert.equal(settled.failure, null);
+    // The pull request is already linked by its publish.
+    assert.lengthOf(state.links, 0);
+    // A repeated effect is a no-op.
+    yield* service.execute(granted.id);
+    assert.lengthOf(state.mergeCalls, 1);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect(
+  "a definite host rejection fails the merge and an ambiguous one leaves it unknown",
+  () => {
+    const { state, layer } = harness();
+    return Effect.gen(function* () {
+      yield* published;
+      const service = yield* Delivery.FactoryDeliveryService;
+      state.merge = "ambiguous";
+      const ambiguous = yield* grantMerge();
+      yield* service.execute(ambiguous.id);
+      const unknown = yield* mergeIntent;
+      assert.equal(unknown.status, "unknown");
+      assert.include(unknown.failure ?? "", "response lost");
+      assert.deepEqual(unknown.remote, pullRequest);
+      assert.equal(
+        (yield* grantMerge({ commandId: "merge-2" }).pipe(Effect.flip)).reason,
+        "already-delivering",
+      );
+
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE factory_delivery_intents SET status = 'failed' WHERE id = ${unknown.id}`;
+      state.merge = "definite";
+      yield* TestClock.adjust("1 second");
+      const definite = yield* grantMerge({ commandId: "merge-3" });
+      yield* service.execute(definite.id);
+      const failed = yield* mergeIntent;
+      assert.equal(failed.id, definite.id);
+      assert.equal(failed.status, "failed");
+      assert.include(failed.failure ?? "", "merge rejected");
+      assert.deepEqual(failed.remote, pullRequest);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("reconciling a merge reads the pull request and never merges again", () => {
+  const { state, layer } = harness();
+  return Effect.gen(function* () {
+    yield* published;
+    const service = yield* Delivery.FactoryDeliveryService;
+    state.merge = "ambiguous";
+    const granted = yield* grantMerge();
+    yield* service.execute(granted.id);
+    state.mergeCalls.length = 0;
+    state.invalidations = 0;
+
+    // A read that fails proves nothing, so the status stays.
+    state.read = "fail";
+    const unread = yield* service.reconcile({ projectId, intentId: granted.id });
+    assert.equal(unread.status, "unknown");
+    assert.include(unread.failure ?? "", "could not read pull request");
+    state.read = "ok";
+
+    // Readable and not merged: the send did not land, so the origin is released.
+    const released = yield* service.reconcile({ projectId, intentId: granted.id });
+    assert.equal(released.status, "failed");
+    assert.equal(released.failure, "pull request is not merged");
+    assert.isAbove(state.invalidations, 0);
+
+    state.pr.state = "merged";
+    const confirmed = yield* service.reconcile({ projectId, intentId: granted.id });
+    assert.equal(confirmed.status, "confirmed");
+    assert.deepEqual(confirmed.remote, pullRequest);
+    assert.equal(confirmed.failure, null);
+    assert.deepEqual(state.mergeCalls, []);
+    assert.equal(
+      (yield* service.reconcile({ projectId, intentId: granted.id }).pipe(Effect.flip)).reason,
+      "not-reconcilable",
+    );
+  }).pipe(Effect.provide(layer));
+});

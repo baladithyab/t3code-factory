@@ -152,6 +152,8 @@ const make = Effect.gen(function* () {
   ) {
     const repository = yield* encodeRepository(intent.repository);
     const payload = yield* encodePayload(intent.payload);
+    // A merge targets a pull request that already exists, so its remote is known at grant.
+    const remote = intent.remote === null ? null : yield* encodeRemote(intent.remote);
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         const replay = yield* getByCommand(intent.requestCommandId);
@@ -181,7 +183,7 @@ const make = Effect.gen(function* () {
             ${intent.kind}, ${intent.acceptanceId}, ${repository}, ${intent.baseRef},
             ${intent.baseSha}, ${intent.headSha}, ${payload}, ${intent.payloadDigest},
             ${intent.grantedBy}, ${intent.grantedAt}, ${intent.requestCommandId}, 'pending',
-            NULL, NULL, ${intent.updatedAt})
+            ${remote}, NULL, ${intent.updatedAt})
           ON CONFLICT DO NOTHING`;
         const stored = yield* getByCommand(intent.requestCommandId);
         if (Option.isNone(stored))
@@ -205,9 +207,10 @@ const make = Effect.gen(function* () {
     settlement: FactoryDeliverySettlement,
   ) {
     const remote = settlement.remote === undefined ? null : yield* encodeRemote(settlement.remote);
-    // `confirmed` is terminal: a late reconcile or a retried execute never rewrites it.
+    // `confirmed` is terminal: a late reconcile or a retried execute never rewrites it. A
+    // settlement without a remote keeps the one set at grant, which a merge needs to retry.
     yield* sql`UPDATE factory_delivery_intents
-      SET status = ${settlement.status}, remote_json = ${remote},
+      SET status = ${settlement.status}, remote_json = COALESCE(${remote}, remote_json),
         failure = ${settlement.failure}, updated_at = ${settlement.updatedAt}
       WHERE id = ${id} AND status <> 'confirmed'`;
     return yield* get(id);

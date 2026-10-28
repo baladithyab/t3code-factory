@@ -11,6 +11,7 @@ import {
   type FactoryAcceptance,
   type FactoryDeliveryIntent,
   type FactoryDeliveryPrepareResult,
+  type FactoryDeliveryPullRequest,
   type FactoryIssue,
   type FactoryIssueListResult,
   type FactoryIssueTask,
@@ -23,14 +24,24 @@ import {
   describeFactoryAcceptanceFailure,
   describeFactoryDeliveryFailure,
   describeFactoryFailure,
+  describeFactoryMergeFailure,
   EMPTY_FACTORY_ISSUE_PAGES,
   FACTORY_DELIVERY_ALREADY_DELIVERING,
   FACTORY_DELIVERY_HEAD_MOVED,
   FACTORY_DELIVERY_PAYLOAD_CHANGED,
+  FACTORY_MERGE_ALREADY_MERGED,
+  FACTORY_MERGE_ALREADY_MERGING,
+  FACTORY_MERGE_DRAFT,
+  FACTORY_MERGE_METHOD_CHANGED,
+  FACTORY_MERGE_NOT_MERGEABLE,
+  FACTORY_MERGE_NOT_PUBLISHED,
+  FACTORY_MERGE_PR_HEAD_MOVED,
   factoryAcceptanceView,
   factoryDeliveryDefaultPayload,
   factoryDeliveryGrantBlocker,
   factoryDeliveryStatusView,
+  factoryMergeGrantBlocker,
+  factoryPullRequestHeadView,
   factoryIssueAction,
   factoryIssueStartKey,
   factoryRepositoryLabel,
@@ -359,6 +370,7 @@ describe("factory delivery", () => {
     payload,
     payloadDigest: "d".repeat(64),
     existing: null,
+    pullRequest: null,
   };
   function intent(overrides: Partial<FactoryDeliveryIntent> = {}): FactoryDeliveryIntent {
     return {
@@ -472,14 +484,14 @@ describe("factory delivery", () => {
       ),
     ).toEqual({
       kind: "confirmed",
-      text: "Pull request #12",
-      url: "https://github.com/owner/name/pull/12",
+      text: "Published pull request #12",
+      link: { label: "Open pull request #12", url: "https://github.com/owner/name/pull/12" },
     });
     expect(
       factoryDeliveryStatusView(
         intent({ status: "confirmed", remote: { number: 12, url: "http://example.com" } }),
       ),
-    ).toMatchObject({ url: null });
+    ).toMatchObject({ text: "Published pull request #12", link: null });
     expect(factoryDeliveryStatusView(intent({ status: "failed", failure: "boom" })).text).toBe(
       "boom",
     );
@@ -508,5 +520,160 @@ describe("factory delivery", () => {
         }),
       ).kind,
     ).toBe("auth");
+  });
+
+  describe("merge", () => {
+    const pullRequest: FactoryDeliveryPullRequest = {
+      number: 12,
+      url: "https://github.com/owner/name/pull/12",
+      headSha,
+      state: "open",
+      mergeability: "mergeable",
+      isDraft: false,
+      checksSummary: "3 passed",
+      mergeMethods: ["merge", "squash", "rebase"],
+    };
+    const mergePrepared: FactoryDeliveryPrepareResult = {
+      ...prepared,
+      payload: { mergeMethod: "squash" },
+      pullRequest,
+    };
+    const mergeGrantable = {
+      permitted: true,
+      acceptedHeadSha: headSha,
+      acceptanceCurrent: true,
+      liveIntent: null,
+      prepared: mergePrepared,
+      mergeMethod: "squash" as const,
+    };
+    const withPullRequest = (overrides: Partial<typeof pullRequest> | { headSha: null }) => ({
+      ...mergeGrantable,
+      prepared: { ...mergePrepared, pullRequest: { ...pullRequest, ...overrides } },
+    });
+
+    it("grants only the exact pull request head and method last prepared", () => {
+      expect(factoryMergeGrantBlocker(mergeGrantable)).toBeNull();
+      expect(factoryMergeGrantBlocker({ ...mergeGrantable, prepared: null })).toBe(
+        "Prepare a merge preview before granting.",
+      );
+      expect(factoryMergeGrantBlocker({ ...mergeGrantable, mergeMethod: "rebase" })).toBe(
+        FACTORY_MERGE_METHOD_CHANGED,
+      );
+      // A publish preview can never stand in for a merge preview.
+      expect(factoryMergeGrantBlocker({ ...mergeGrantable, prepared })).toBe(
+        FACTORY_MERGE_NOT_PUBLISHED,
+      );
+    });
+
+    it("refuses when the pull request head is not the accepted commit", () => {
+      expect(factoryMergeGrantBlocker(withPullRequest({ headSha: "c".repeat(40) }))).toBe(
+        FACTORY_MERGE_PR_HEAD_MOVED,
+      );
+      expect(factoryMergeGrantBlocker(withPullRequest({ headSha: null }))).toBe(
+        FACTORY_MERGE_PR_HEAD_MOVED,
+      );
+      expect(factoryMergeGrantBlocker({ ...mergeGrantable, acceptedHeadSha: "c".repeat(40) })).toBe(
+        FACTORY_DELIVERY_HEAD_MOVED,
+      );
+      expect(factoryMergeGrantBlocker({ ...mergeGrantable, acceptanceCurrent: false })).toBe(
+        "Merging needs a current accepted commit.",
+      );
+    });
+
+    it("states what GitHub would refuse before the tap", () => {
+      expect(factoryMergeGrantBlocker(withPullRequest({ isDraft: true }))).toBe(
+        FACTORY_MERGE_DRAFT,
+      );
+      expect(factoryMergeGrantBlocker(withPullRequest({ mergeability: "conflicting" }))).toBe(
+        FACTORY_MERGE_NOT_MERGEABLE,
+      );
+      // Unknown mergeability is GitHub still computing; branch protection decides at merge.
+      expect(factoryMergeGrantBlocker(withPullRequest({ mergeability: "unknown" }))).toBeNull();
+      expect(factoryMergeGrantBlocker(withPullRequest({ state: "merged" }))).toBe(
+        FACTORY_MERGE_ALREADY_MERGED,
+      );
+      expect(factoryMergeGrantBlocker({ ...mergeGrantable, permitted: false })).toContain(
+        "isn't permitted to merge",
+      );
+    });
+
+    it("allows one live merge per task, but a failed one can be granted again", () => {
+      const merging = intent({ kind: "merge-pr", payload: { mergeMethod: "squash" } });
+      for (const status of ["pending", "sending", "unknown"] as const) {
+        expect(
+          factoryMergeGrantBlocker({ ...mergeGrantable, liveIntent: { ...merging, status } }),
+        ).toBe(FACTORY_MERGE_ALREADY_MERGING);
+      }
+      expect(
+        factoryMergeGrantBlocker({
+          ...mergeGrantable,
+          liveIntent: { ...merging, status: "confirmed" },
+        }),
+      ).toBe(FACTORY_MERGE_ALREADY_MERGED);
+      expect(
+        factoryMergeGrantBlocker({
+          ...mergeGrantable,
+          prepared: { ...mergePrepared, existing: { ...merging, status: "failed" } },
+        }),
+      ).toBeNull();
+    });
+
+    it("compares the pull request head with the accepted commit", () => {
+      expect(factoryPullRequestHeadView(pullRequest, headSha)).toEqual({
+        matches: true,
+        text: "Head aaaaaaa matches the accepted commit.",
+      });
+      expect(factoryPullRequestHeadView(pullRequest, "c".repeat(40))).toEqual({
+        matches: false,
+        text: "Head aaaaaaa is not the accepted commit ccccccc.",
+      });
+      expect(factoryPullRequestHeadView({ ...pullRequest, headSha: null }, headSha).matches).toBe(
+        false,
+      );
+    });
+
+    it("labels merge rows apart from publish rows", () => {
+      const merging = intent({ kind: "merge-pr", payload: { mergeMethod: "squash" } });
+      expect(factoryDeliveryStatusView({ ...merging, status: "sending" }).text).toBe("Merging…");
+      expect(
+        factoryDeliveryStatusView({
+          ...merging,
+          status: "confirmed",
+          remote: { number: 12, url: pullRequest.url },
+        }),
+      ).toEqual({
+        kind: "confirmed",
+        text: "Merged pull request #12",
+        link: { label: "Open pull request #12", url: pullRequest.url },
+      });
+      expect(factoryDeliveryStatusView({ ...merging, status: "failed" }).text).toBe(
+        "Merging failed.",
+      );
+      expect(factoryDeliveryStatusView({ ...merging, status: "unknown" })).toMatchObject({
+        kind: "unknown",
+        text: expect.stringContaining("merge response"),
+      });
+    });
+
+    it("maps merge refusals to the next step a person can take", () => {
+      const cases = [
+        ["not-published", FACTORY_MERGE_NOT_PUBLISHED],
+        ["pull-request-head-moved", FACTORY_MERGE_PR_HEAD_MOVED],
+        ["already-merged", FACTORY_MERGE_ALREADY_MERGED],
+        ["not-mergeable", FACTORY_MERGE_NOT_MERGEABLE],
+        ["payload-changed", FACTORY_MERGE_METHOD_CHANGED],
+        ["already-delivering", FACTORY_MERGE_ALREADY_MERGING],
+        ["head-moved", FACTORY_DELIVERY_HEAD_MOVED],
+      ] as const;
+      for (const [reason, detail] of cases) {
+        expect(describeFactoryMergeFailure(new FactoryDeliveryError({ reason })).detail).toBe(
+          detail,
+        );
+      }
+      expect(
+        describeFactoryMergeFailure(new FactoryDeliveryError({ reason: "persistence-failure" }))
+          .title,
+      ).toBe("Couldn't merge");
+    });
   });
 });
