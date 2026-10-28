@@ -46,6 +46,7 @@ function claim(overrides: Partial<FactoryClaim> = {}): FactoryClaim {
     creationSource: "web",
     admittedBy: here,
     originConflict: false,
+    acceptance: null,
     ...overrides,
   };
 }
@@ -283,6 +284,34 @@ describe("factoryClaimRowPresentation", () => {
     originKey: issueKey,
     labelOf,
   };
+
+  it("summarizes the accepted commit of the row's own claim without implying it is current", () => {
+    const acceptedAt = "2026-10-27T12:00:00.000Z";
+    const claims = new Map([
+      [
+        here,
+        result(here, [
+          claim({ acceptance: { headSha: "abcdef0123456789", acceptedAt } }),
+          claim({
+            threadId: ThreadId.make("thread-2"),
+            acceptance: { headSha: "123456789abcdef0", acceptedAt },
+          }),
+        ]),
+      ],
+    ]);
+    expect(
+      factoryClaimRowPresentation({
+        ...base,
+        claimsByEnvironment: claims,
+        task: { threadId: ThreadId.make("thread-1") },
+      }).acceptedCommit,
+    ).toEqual({ shortSha: "abcdef0", acceptedAt });
+    expect(factoryClaimRowPresentation({ ...base, task: null }).acceptedCommit).toBeUndefined();
+    expect(
+      factoryClaimRowPresentation({ ...base, task: { threadId: ThreadId.make("thread-1") } })
+        .acceptedCommit,
+    ).toBeUndefined();
+  });
 
   it("shows the conflict and the provenance of the row's own claim", () => {
     const presentation = factoryClaimRowPresentation({

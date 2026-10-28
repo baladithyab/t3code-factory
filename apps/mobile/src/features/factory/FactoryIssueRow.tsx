@@ -1,4 +1,4 @@
-import type { FactoryIssue } from "@t3tools/contracts";
+import type { EnvironmentId, FactoryIssue } from "@t3tools/contracts";
 import { useState } from "react";
 import { Linking, Pressable, View } from "react-native";
 
@@ -6,6 +6,7 @@ import { StatusPill, type StatusTone } from "../../components/StatusPill";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
+import { FactoryAcceptedCommitSection } from "./FactoryAcceptedCommitSection";
 import {
   factoryIssueAction,
   factoryTaskStatusLabel,
@@ -40,6 +41,7 @@ function taskTone(status: NonNullable<FactoryIssue["task"]>["status"]): StatusTo
  * as markup, so an issue cannot style the screen or smuggle a link into it.
  */
 export function FactoryIssueRow(props: {
+  readonly environmentId: EnvironmentId;
   readonly issue: FactoryIssue;
   readonly busy: boolean;
   /** Another issue is being launched; starting is held until it settles. */
@@ -122,6 +124,14 @@ export function FactoryIssueRow(props: {
               Base {issue.task.baseRef.slice(0, 12)} · started{" "}
               {new Date(issue.task.createdAt).toLocaleString()}
             </Text>
+          ) : null}
+          {action.kind === "open" ? (
+            // Mounted only while expanded: each mount reads the worktree head on the server.
+            <FactoryAcceptedCommitSection
+              environmentId={props.environmentId}
+              projectId={action.task.projectId}
+              threadId={action.task.threadId}
+            />
           ) : null}
           {action.kind === "unavailable" ? (
             <Text className="text-sm text-foreground-muted">{action.detail}</Text>

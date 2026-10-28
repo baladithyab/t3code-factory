@@ -152,6 +152,7 @@ export function FactoryIssuesRouteScreen({
       {issues.map((issue, index) => (
         <FactoryIssueRow
           key={issue.number}
+          environmentId={environmentId}
           issue={issue}
           borderTop={index > 0}
           busy={actions.busyIssue === issue.number}

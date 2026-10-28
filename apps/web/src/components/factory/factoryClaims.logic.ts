@@ -191,6 +191,10 @@ export interface FactoryClaimRowPresentation {
   /** Older records in the answering environment that already claim this origin more than once. */
   readonly duplicates: FactoryClaimConflictPresentation | null;
   readonly provenance: string | null;
+  readonly acceptedCommit?: {
+    readonly shortSha: string;
+    readonly acceptedAt: string;
+  };
 }
 
 /**
@@ -221,6 +225,14 @@ export function factoryClaimRowPresentation(input: {
       claim === null || result === undefined
         ? null
         : describeClaimProvenance(claimProvenance(claim, result.environmentId)),
+    ...(claim?.acceptance == null
+      ? {}
+      : {
+          acceptedCommit: {
+            shortSha: claim.acceptance.headSha.slice(0, 7),
+            acceptedAt: claim.acceptance.acceptedAt,
+          },
+        }),
   };
 }
 

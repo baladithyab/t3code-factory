@@ -16,3 +16,13 @@ export const factoryCoordinatorSupportedAtom = Atom.family((environmentId: Envir
         .capabilities.projectCoordinators === true,
   ).pipe(Atom.withLabel(`mobile-factory-coordinators-supported:${environmentId}`)),
 );
+
+// An older server has no acceptance RPC; it must read as unsupported, not as "nothing accepted".
+export const factoryAcceptanceSupportedAtom = Atom.family((environmentId: EnvironmentId | null) =>
+  Atom.make(
+    (get) =>
+      environmentId !== null &&
+      get(environmentPresentations.presentationAtom(environmentId))?.serverConfig?.environment
+        .capabilities.factoryAcceptance === true,
+  ).pipe(Atom.withLabel(`mobile-factory-acceptance-supported:${environmentId}`)),
+);

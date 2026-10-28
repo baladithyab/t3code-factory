@@ -34,6 +34,9 @@ export const FactoryClaim = Schema.Struct({
   // A legacy duplicate group member (feed claims keyed before origin keys existed). Never merged;
   // further admissions against the group are refused.
   originConflict: Schema.Boolean,
+  // The live acceptance record's pin only. Whether it is still current needs a git read per
+  // claim, so the detail read (`factory.readAcceptance`) derives that instead.
+  acceptance: Schema.NullOr(Schema.Struct({ headSha: Schema.String, acceptedAt: IsoDateTime })),
 });
 export type FactoryClaim = typeof FactoryClaim.Type;
 

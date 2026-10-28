@@ -80,6 +80,13 @@ export function createFactoryEnvironmentAtoms<R, E>(
         }),
       );
     });
+  // The live head and `current` are derived from the worktree on every read, so an accepted commit
+  // that has since moved must show as stale on mount and refresh, never from a cached result.
+  const readAcceptance = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:factory:acceptance",
+    tag: WS_METHODS.factoryReadAcceptance,
+    staleTimeMs: 0,
+  });
   return {
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:factory:issues",
@@ -94,6 +101,28 @@ export function createFactoryEnvironmentAtoms<R, E>(
       label: "environment-data:factory:claims",
       tag: WS_METHODS.factoryListClaims,
       staleTimeMs: 0,
+    }),
+    readAcceptance,
+    // The head the reviewer saw is part of the key: accepting a different head is a different
+    // decision and never joins an in-flight request. A failed response can still follow a persisted
+    // acceptance, so every outcome reads the task's acceptance again.
+    acceptCommit: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:accept-commit",
+      tag: WS_METHODS.factoryAcceptCommit,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.projectId, input.threadId, input.expectedHeadSha]),
+      },
+      onSettled: ({ environmentId, input }, registry) =>
+        Effect.sync(() => {
+          registry.refresh(
+            readAcceptance({
+              environmentId,
+              input: { projectId: input.projectId, threadId: input.threadId },
+            }),
+          );
+        }),
     }),
     // Read-only composition of a parent's sub-issues. Each read re-observes every child, so it is
     // fetched only while its panel is open and again on an explicit refresh, never inbox-wide.

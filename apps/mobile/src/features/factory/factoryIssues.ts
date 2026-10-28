@@ -1,6 +1,9 @@
 import {
   EnvironmentAuthorizationError,
+  FactoryAcceptanceError,
   FactoryIssueError,
+  type FactoryAcceptance,
+  type FactoryAcceptanceReadResult,
   type FactoryIssue,
   type FactoryIssueListResult,
   type FactoryIssueTask,
@@ -179,6 +182,7 @@ export interface FactoryFailure {
 }
 
 const isFactoryIssueError = Schema.is(FactoryIssueError);
+const isFactoryAcceptanceError = Schema.is(FactoryAcceptanceError);
 const isAuthorizationError = Schema.is(EnvironmentAuthorizationError);
 
 /** Maps a typed failure to text a person can act on; unknown failures keep their own message. */
@@ -216,6 +220,57 @@ export function describeFactoryFailure(error: unknown, fallbackTitle: string): F
     return { kind: "error", title: fallbackTitle, detail: error.message };
   }
   return { kind: "error", title: fallbackTitle, detail: "The request failed. Try again." };
+}
+
+export function shortFactorySha(sha: string): string {
+  return sha.slice(0, 7);
+}
+
+/**
+ * What the accepted-commit section can honestly say. An unreadable worktree is never shown as
+ * "head moved": the server reports `current: false` then, but nothing is known to have moved.
+ */
+export type FactoryAcceptanceView =
+  | { readonly kind: "none"; readonly liveHeadSha: string | null }
+  | { readonly kind: "current"; readonly acceptance: FactoryAcceptance }
+  | {
+      readonly kind: "moved";
+      readonly acceptance: FactoryAcceptance;
+      readonly liveHeadSha: string;
+    }
+  | { readonly kind: "unverifiable"; readonly acceptance: FactoryAcceptance };
+
+export function factoryAcceptanceView(read: FactoryAcceptanceReadResult): FactoryAcceptanceView {
+  const { acceptance, liveHeadSha } = read;
+  if (acceptance === null) return { kind: "none", liveHeadSha };
+  if (read.current) return { kind: "current", acceptance };
+  if (liveHeadSha === null) return { kind: "unverifiable", acceptance };
+  return { kind: "moved", acceptance, liveHeadSha };
+}
+
+export function describeFactoryAcceptanceFailure(error: unknown): FactoryFailure {
+  if (isFactoryAcceptanceError(error)) {
+    switch (error.reason) {
+      case "head-moved":
+        return {
+          kind: "changed",
+          title: "Head moved",
+          detail: "The head moved while you were reviewing. Refresh and review again.",
+        };
+      case "already-accepted":
+        return {
+          kind: "changed",
+          title: "Already accepted",
+          detail:
+            "A commit is already accepted for this task. Refresh, then use Re-accept at current head to replace it.",
+        };
+      case "worktree-unavailable":
+        return { kind: "repository", title: "Worktree unavailable", detail: error.message };
+      default:
+        return { kind: "error", title: "Couldn't accept the commit", detail: error.message };
+    }
+  }
+  return describeFactoryFailure(error, "Couldn't accept the commit");
 }
 
 export function factoryRepositoryLabel(repository: FactoryRepository): string {

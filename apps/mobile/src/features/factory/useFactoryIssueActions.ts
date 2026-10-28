@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import {
   StackActions,
   useNavigation,
@@ -10,6 +11,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  AuthOrchestrationReadScope,
   CommandId,
   type EnvironmentId,
   type FactoryIssue,
@@ -25,11 +27,15 @@ import { Platform } from "react-native";
 
 import * as Dialog from "../../components/ui/Dialog";
 import { uuidv4 } from "../../lib/uuid";
-import { factoryEnvironment } from "../../state/factory";
+import { factoryAcceptanceSupportedAtom, factoryEnvironment } from "../../state/factory";
+import { useEnvironmentQuery } from "../../state/query";
+import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAndroidWorkspaceSelection } from "../workspace/useAndroidWorkspaceSelection";
 import {
+  describeFactoryAcceptanceFailure,
   describeFactoryFailure,
+  factoryAcceptanceView,
   factoryIssueStartKey,
   type FactoryIssueAction,
   type FactoryFailure,
@@ -289,5 +295,95 @@ export function useFactoryIssueActions(input: {
     perform,
     confirmReview,
     closeReview,
+  };
+}
+
+/**
+ * The accepted commit of one launched task. Accept pins the head the reviewer was last shown:
+ * `expectedHeadSha` always comes from the last read, never a fresh one, so the server refuses
+ * rather than accepting a commit nobody saw. A failure keeps that read on screen with its
+ * explanation; only an explicit refresh replaces what the reviewer is looking at.
+ */
+export function useFactoryAcceptCommit(input: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly threadId: ThreadId;
+}) {
+  const { environmentId, projectId, threadId } = input;
+  const supported = useAtomValue(factoryAcceptanceSupportedAtom(environmentId));
+  const canRead = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
+  const canAccept = useAtomValue(factoryEnvironment.acceptCommit.permissionAtom(environmentId));
+  const query = useEnvironmentQuery(
+    supported && canRead
+      ? factoryEnvironment.readAcceptance({ environmentId, input: { projectId, threadId } })
+      : null,
+  );
+  const run = useAtomCommand(factoryEnvironment.acceptCommit, { reportFailure: false });
+  const key = JSON.stringify([environmentId, projectId, threadId]);
+  const lifetime = useRef<{ readonly key: string; active: boolean; pending: boolean } | null>(null);
+  const [state, setState] = useState<{
+    readonly key: string;
+    readonly pending: boolean;
+    readonly failure: FactoryFailure | null;
+  }>({ key, pending: false, failure: null });
+  if (state.key !== key) setState({ key, pending: false, failure: null });
+  useLayoutEffect(() => {
+    const current = { key, active: true, pending: false };
+    lifetime.current = current;
+    return () => {
+      current.active = false;
+    };
+  }, [key]);
+
+  const liveHeadSha = query.data?.liveHeadSha ?? null;
+  const refreshQuery = query.refresh;
+  const accept = useCallback(
+    async (supersede: boolean) => {
+      const current = lifetime.current;
+      if (current === null || !current.active || current.pending || liveHeadSha === null) return;
+      current.pending = true;
+      setState({ key: current.key, pending: true, failure: null });
+      const result = await run({
+        environmentId,
+        input: {
+          projectId,
+          threadId,
+          expectedHeadSha: liveHeadSha,
+          evidenceRefs: [],
+          ...(supersede ? { supersede: true } : {}),
+        },
+      });
+      current.pending = false;
+      if (!current.active || lifetime.current !== current) return;
+      if (result._tag === "Failure") {
+        const failure = isAtomCommandInterrupted(result)
+          ? null
+          : describeFactoryAcceptanceFailure(squashAtomCommandFailure(result));
+        setState({ key: current.key, pending: false, failure });
+        return;
+      }
+      setState({ key: current.key, pending: false, failure: null });
+      refreshQuery();
+    },
+    [environmentId, liveHeadSha, projectId, refreshQuery, run, threadId],
+  );
+
+  const refresh = useCallback(() => {
+    if (lifetime.current?.pending) return;
+    setState({ key, pending: false, failure: null });
+    refreshQuery();
+  }, [key, refreshQuery]);
+
+  const current = state.key === key ? state : { pending: false, failure: null };
+  return {
+    supported: supported && canRead,
+    canAccept,
+    view: query.data === null ? null : factoryAcceptanceView(query.data),
+    loading: query.isPending,
+    readError: query.error,
+    pending: current.pending,
+    failure: current.failure,
+    accept,
+    refresh,
   };
 }

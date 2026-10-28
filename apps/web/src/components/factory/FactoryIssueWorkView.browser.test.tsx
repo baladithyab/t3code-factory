@@ -19,6 +19,9 @@ import { page, userEvent } from "vite-plus/test/browser";
 
 const state = vi.hoisted(() => ({
   supported: true,
+  acceptanceSupported: false,
+  acceptance: null as unknown,
+  accept: vi.fn(),
   // One entry each time a query goes live or is released, so a read is attributable to an expand
   // and not to a re-render.
   events: [] as string[],
@@ -53,6 +56,9 @@ vi.mock(import("../../state/factory"), async () => {
         stable(String(input.issueNumber)),
       readIssueFrontier: ({ input }: { input: { parentIssueNumber: number } }) =>
         stable(`frontier:${input.parentIssueNumber}`),
+      readAcceptance: ({ input }: { input: { projectId: string; threadId: string } }) =>
+        stable(`acceptance:${input.projectId}:${input.threadId}`),
+      acceptCommit: { key: "accept", permissionAtom },
       setIssueReadinessOverride: { key: "set", permissionAtom },
       revokeIssueReadinessOverride: { key: "revoke", permissionAtom },
     },
@@ -60,9 +66,28 @@ vi.mock(import("../../state/factory"), async () => {
   } as never;
 });
 
+vi.mock(import("../../state/presentation"), async () => {
+  const { Atom } = await import("effect/reactivity");
+  const supported = Atom.make({
+    serverConfig: { environment: { capabilities: { factoryAcceptance: true } } },
+  });
+  const unsupported = Atom.make({
+    serverConfig: { environment: { capabilities: {} } },
+  });
+  return {
+    environmentPresentations: {
+      presentationAtom: () => (state.acceptanceSupported ? supported : unsupported),
+    },
+  } as never;
+});
+
 vi.mock(import("../../state/use-atom-command"), () => ({
   useAtomCommand: ((command: { key: string }) => (value: unknown) =>
-    command.key === "set" ? state.set(value) : state.revoke(value)) as never,
+    command.key === "accept"
+      ? state.accept(value)
+      : command.key === "set"
+        ? state.set(value)
+        : state.revoke(value)) as never,
 }));
 
 vi.mock(import("../../state/query"), async (importOriginal) => ({
@@ -75,7 +100,11 @@ vi.mock(import("../../state/query"), async (importOriginal) => ({
       };
     }, [atom]);
     return {
-      data: atom.key.startsWith("frontier:") ? state.frontier : state.result,
+      data: atom.key.startsWith("acceptance:")
+        ? state.acceptance
+        : atom.key.startsWith("frontier:")
+          ? state.frontier
+          : state.result,
       dataUpdatedAt: 0,
       error: null,
       failure: null,
@@ -206,6 +235,9 @@ const waiver: FactoryReadinessOverride = {
 
 function setup(supported = true) {
   state.supported = supported;
+  state.acceptanceSupported = false;
+  state.acceptance = null;
+  state.accept.mockReset();
   state.events = [];
   state.result = blockedResult;
   state.frontier = null;
@@ -573,6 +605,7 @@ function claimsViewOf(
         creationSource: "web" as const,
         admittedBy,
         originConflict: false,
+        acceptance: null,
       },
     ],
   });
@@ -657,4 +690,49 @@ it("shows no claim UI when the environment does not advertise claims", async () 
   await using screen = await render(claimedView(null));
   await expect.element(screen.getByText(/^Admitted by/)).not.toBeInTheDocument();
   await expect.element(screen.getByText(/Claimed in \d+ environments/)).not.toBeInTheDocument();
+});
+
+it("warns when the head moved and re-accepts the last observed head", async () => {
+  setup();
+  state.acceptanceSupported = true;
+  const liveHeadSha = "b".repeat(40);
+  state.acceptance = {
+    acceptance: {
+      id: "acceptance:one",
+      originKey: originKeyForIssue(repository.canonicalKey, 7),
+      projectId,
+      threadId: ThreadId.make("thread:one"),
+      headSha: "a".repeat(40),
+      baseRef: "main",
+      baseSha: "c".repeat(40),
+      acceptedAt: observedAt,
+      acceptedBy: environmentId,
+      evidenceRefs: ["https://example.test/review"],
+    },
+    liveHeadSha,
+    current: false,
+  };
+  state.accept.mockResolvedValue(AsyncResult.success(undefined));
+  await using screen = await render(
+    claimedView(claimsViewOf({ threadId: "thread:one", admittedBy: environmentId }, null)),
+  );
+  await expect.element(screen.getByText("Head moved since acceptance")).toBeVisible();
+  await expect.element(screen.getByText("aaaaaaa")).toBeVisible();
+  await expect.element(screen.getByText("bbbbbbb")).toBeVisible();
+  const reaccept = screen.getByRole("button", { name: "Re-accept at current head" });
+  await expect.element(reaccept).toBeEnabled();
+  await reaccept.click();
+  await vi.waitFor(() => {
+    expect(state.accept).toHaveBeenCalledWith({
+      environmentId,
+      input: {
+        projectId,
+        threadId: ThreadId.make("thread:one"),
+        expectedHeadSha: liveHeadSha,
+        evidenceRefs: [],
+        supersede: true,
+      },
+    });
+    expect(state.refresh).toHaveBeenCalledTimes(1);
+  });
 });
