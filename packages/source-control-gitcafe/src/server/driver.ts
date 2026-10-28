@@ -11,5 +11,6 @@ export const driver = defineSourceControlDriver({
     sourceControl: GitCafeSourceControlProvider.make,
     discovery: GitCafeSourceControlProvider.makeDiscovery,
     pullRequests: GitCafePullRequestProvider.make,
+    issues: Effect.succeed(null),
   }),
 });

@@ -117,6 +117,7 @@ export function FactoryIssuesRouteScreen({
             environmentId,
             projectId,
             repository: list.repository,
+            displayName: list.capabilities?.displayName ?? null,
             modelSelection: launch.modelSelection,
             modelLabel: launch.label ?? "Default model",
             baseRef: selection.baseRef,
@@ -127,6 +128,7 @@ export function FactoryIssuesRouteScreen({
       environmentId,
       projectId,
       list.repository,
+      list.capabilities?.displayName,
       launch.modelSelection,
       launch.label,
       selection.baseRef,
@@ -147,25 +149,29 @@ export function FactoryIssuesRouteScreen({
   const failure = list.error ? describeFactoryFailure(list.error, "Couldn't load issues") : null;
   const repositoryUrl = list.repository ? safeFactoryIssueUrl(list.repository.url) : null;
 
-  const renderIssues = (issues: ReadonlyArray<FactoryIssue>) => (
-    <SettingsSection>
-      {issues.map((issue, index) => (
-        <FactoryIssueRow
-          key={issue.number}
-          environmentId={environmentId}
-          issue={issue}
-          borderTop={index > 0}
-          busy={actions.busyIssue === issue.number}
-          locked={actions.busyIssue !== null}
-          canStart={
-            canStart && (issue.task?.status === "launching" || launch.modelSelection !== null)
-          }
-          canOpen
-          onPerform={actions.perform}
-        />
-      ))}
-    </SettingsSection>
-  );
+  const { capabilities } = list;
+  const renderIssues = (issues: ReadonlyArray<FactoryIssue>) =>
+    // Capabilities arrive with every page, so rows never render without them.
+    capabilities === null ? null : (
+      <SettingsSection>
+        {issues.map((issue, index) => (
+          <FactoryIssueRow
+            key={issue.number}
+            environmentId={environmentId}
+            issue={issue}
+            capabilities={capabilities}
+            borderTop={index > 0}
+            busy={actions.busyIssue === issue.number}
+            locked={actions.busyIssue !== null}
+            canStart={
+              canStart && (issue.task?.status === "launching" || launch.modelSelection !== null)
+            }
+            canOpen
+            onPerform={actions.perform}
+          />
+        ))}
+      </SettingsSection>
+    );
 
   let body: ReactNode;
   if (!canRead) {
@@ -257,8 +263,8 @@ export function FactoryIssuesRouteScreen({
           <View className="min-h-14 justify-center gap-0.5 border-t border-border-subtle px-4 py-3">
             <Text className="text-sm text-foreground-muted">Issues from</Text>
             <Text className="text-base text-foreground" selectable>
-              {list.repository
-                ? `GitHub · ${factoryRepositoryLabel(list.repository)}`
+              {list.repository && list.capabilities
+                ? `${list.capabilities.displayName} · ${factoryRepositoryLabel(list.repository)}`
                 : list.loading
                   ? "Resolving repository…"
                   : "Repository not resolved"}

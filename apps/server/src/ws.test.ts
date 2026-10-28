@@ -21,6 +21,7 @@ import {
   type OrchestrationProjectShell,
   type ServerConfig,
   type ServerConfigStreamEvent,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -1012,7 +1013,7 @@ it.effect("routes read-only claims and preserves domain refusals", () =>
     const result = {
       environmentId: EnvironmentId.make("claims-owner"),
       repository: {
-        provider: "github" as const,
+        provider: SourceControlProviderKind.make("github"),
         host: "github.com",
         repository: "owner/repo",
         canonicalKey: "github.com/owner/repo",

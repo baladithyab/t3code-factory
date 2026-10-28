@@ -10,6 +10,7 @@ import {
   describeDeliveryStatus,
   factoryDeliveryFailureMessage,
   factoryDeliveryGrantDisabledReason,
+  factoryPublishUnsupportedMessage,
   mergeGrantDisabledReason,
 } from "./factoryDelivery.logic";
 
@@ -17,7 +18,7 @@ describe("factoryDeliveryFailureMessage", () => {
   it.each(["head-moved", "acceptance-stale"] as const)(
     "requires re-acceptance after %s",
     (reason) => {
-      expect(factoryDeliveryFailureMessage(new FactoryDeliveryError({ reason }))).toBe(
+      expect(factoryDeliveryFailureMessage(new FactoryDeliveryError({ reason }), "GitHub")).toBe(
         "The head moved since acceptance. Re-accept, then prepare again.",
       );
     },
@@ -25,18 +26,26 @@ describe("factoryDeliveryFailureMessage", () => {
 
   it("requires another preview after the payload changes", () => {
     expect(
-      factoryDeliveryFailureMessage(new FactoryDeliveryError({ reason: "payload-changed" })),
+      factoryDeliveryFailureMessage(
+        new FactoryDeliveryError({ reason: "payload-changed" }),
+        "GitHub",
+      ),
     ).toBe("The title or body changed since the preview. Prepare again.");
   });
 
   it("explains a competing grant", () => {
     expect(
-      factoryDeliveryFailureMessage(new FactoryDeliveryError({ reason: "already-delivering" })),
+      factoryDeliveryFailureMessage(
+        new FactoryDeliveryError({ reason: "already-delivering" }),
+        "GitHub",
+      ),
     ).toBe("A pull request is already being published for this task.");
   });
 
   it("preserves an unexpected request failure", () => {
-    expect(factoryDeliveryFailureMessage(new Error("Connection lost"))).toBe("Connection lost");
+    expect(factoryDeliveryFailureMessage(new Error("Connection lost"), "GitHub")).toBe(
+      "Connection lost",
+    );
   });
 
   it.each([
@@ -48,13 +57,16 @@ describe("factoryDeliveryFailureMessage", () => {
     ["already-merged", "This pull request is already merged."],
     ["not-mergeable", "GitHub reports the pull request cannot be merged right now."],
   ] as const)("explains merge rejection %s", (reason, message) => {
-    expect(factoryDeliveryFailureMessage(new FactoryDeliveryError({ reason }))).toBe(message);
+    expect(factoryDeliveryFailureMessage(new FactoryDeliveryError({ reason }), "GitHub")).toBe(
+      message,
+    );
   });
 
   it("describes merge payload changes and competing grants without publication labels", () => {
     expect(
       factoryDeliveryFailureMessage(
         new FactoryDeliveryError({ reason: "payload-changed" }),
+        "GitHub",
         undefined,
         "merge-pr",
       ),
@@ -62,10 +74,38 @@ describe("factoryDeliveryFailureMessage", () => {
     expect(
       factoryDeliveryFailureMessage(
         new FactoryDeliveryError({ reason: "already-delivering" }),
+        "GitHub",
         undefined,
         "merge-pr",
       ),
     ).toBe("A merge has already been granted for this task.");
+  });
+
+  it("names the host in copy that blames it", () => {
+    expect(
+      factoryDeliveryFailureMessage(
+        new FactoryDeliveryError({ reason: "not-mergeable" }),
+        "GitLab",
+      ),
+    ).toBe("GitLab reports the pull request cannot be merged right now.");
+  });
+
+  it("explains a refused action on a host that cannot do it, for publishing and merging", () => {
+    const error = new FactoryDeliveryError({ reason: "capability-unsupported" });
+    expect(factoryDeliveryFailureMessage(error, "GitLab")).toBe(
+      "Publishing from GitLab is not supported yet.",
+    );
+    expect(factoryDeliveryFailureMessage(error, "GitLab", undefined, "merge-pr")).toBe(
+      "Merging from GitLab is not supported yet.",
+    );
+  });
+});
+
+describe("factoryPublishUnsupportedMessage", () => {
+  it("is the whole delivery section for a host that cannot publish", () => {
+    expect(factoryPublishUnsupportedMessage("GitLab")).toBe(
+      "Publishing from GitLab is not supported yet.",
+    );
   });
 });
 
@@ -83,6 +123,7 @@ describe("mergeGrantDisabledReason", () => {
   } satisfies NonNullable<FactoryDeliveryPrepareResult["pullRequest"]>;
   const eligible = {
     acceptanceCurrent: true,
+    displayName: "GitHub",
     hasPermission: true,
     existing: null,
     prepared: { current: true, headSha, pullRequest },
@@ -165,6 +206,19 @@ describe("mergeGrantDisabledReason", () => {
       }),
     ).toBeNull();
   });
+
+  it("names the host that rejects a merge", () => {
+    expect(
+      mergeGrantDisabledReason({
+        ...eligible,
+        displayName: "GitLab",
+        prepared: {
+          ...eligible.prepared,
+          pullRequest: { ...pullRequest, mergeability: "conflicting" },
+        },
+      }),
+    ).toBe("GitLab reports the pull request cannot be merged right now.");
+  });
 });
 
 describe("describeDeliveryStatus", () => {
@@ -178,18 +232,24 @@ describe("describeDeliveryStatus", () => {
     ["merge-pr", "confirmed", "Merged"],
     ["merge-pr", "failed", "Merge failed."],
   ] as const)("labels %s %s", (kind, status, message) => {
-    expect(describeDeliveryStatus({ kind, status, failure: null })).toBe(message);
+    expect(describeDeliveryStatus({ kind, status, failure: null }, "GitHub")).toBe(message);
   });
 
   it.each(["publish-pr", "merge-pr"] as const)(
     "preserves failure and lost-response messages for %s",
     (kind) => {
       expect(
-        describeDeliveryStatus({ kind, status: "failed", failure: "Host rejected the SHA" }),
+        describeDeliveryStatus(
+          { kind, status: "failed", failure: "Host rejected the SHA" },
+          "GitHub",
+        ),
       ).toBe("Host rejected the SHA");
-      expect(describeDeliveryStatus({ kind, status: "unknown", failure: "Connection lost" })).toBe(
-        "The server lost the response. Reconcile to check GitHub.",
-      );
+      expect(
+        describeDeliveryStatus({ kind, status: "unknown", failure: "Connection lost" }, "GitHub"),
+      ).toBe("The server lost the response. Reconcile to check GitHub.");
+      expect(
+        describeDeliveryStatus({ kind, status: "unknown", failure: "Connection lost" }, "GitLab"),
+      ).toBe("The server lost the response. Reconcile to check GitLab.");
     },
   );
 });

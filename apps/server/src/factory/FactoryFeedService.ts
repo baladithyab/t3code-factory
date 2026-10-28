@@ -83,8 +83,8 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const environment = yield* ServerEnvironmentIdentity;
   const repositoryResolver = yield* TaskLaunch.makeRepositoryResolver;
-  const resolve = Effect.fn("FactoryFeedService.resolve")((projectId: ProjectId) =>
-    repositoryResolver(projectId).pipe(
+  const resolve = Effect.fn("FactoryFeedService.resolve")(function* (projectId: ProjectId) {
+    const resolved = yield* repositoryResolver(projectId).pipe(
       Effect.mapError(
         (cause) =>
           new FactoryFeedError({
@@ -97,8 +97,13 @@ const make = Effect.gen(function* () {
             cause,
           }),
       ),
-    ),
-  );
+    );
+    // The check that refuses a feed of this repository's own issues only recognizes GitHub's
+    // `/owner/repo/issues/N` links, so feeds stay on GitHub while the shared resolver widens.
+    if (resolved.repository.provider !== "github")
+      return yield* new FactoryFeedError({ reason: "unsupported-provider" });
+    return resolved;
+  });
   const taskLaunch = yield* TaskLaunch.make<Store.FactoryFeedLaunchIntent, FactoryFeedError>({
     span: "FactoryFeedService",
     error: (reason, cause) =>

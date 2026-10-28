@@ -2,6 +2,7 @@ import { SourceControlProviderKind } from "@t3tools/contracts";
 import { defineSourceControlDriver } from "@t3tools/source-control-core/server/driver";
 import * as Effect from "effect/Effect";
 
+import * as GitLabIssueTrackerProvider from "./GitLabIssueTrackerProvider.ts";
 import * as GitLabPullRequestProvider from "./GitLabPullRequestProvider.ts";
 import * as GitLabSourceControlProvider from "./GitLabSourceControlProvider.ts";
 
@@ -11,5 +12,6 @@ export const driver = defineSourceControlDriver({
     sourceControl: GitLabSourceControlProvider.make,
     discovery: Effect.succeed(GitLabSourceControlProvider.discovery),
     pullRequests: GitLabPullRequestProvider.make,
+    issues: GitLabIssueTrackerProvider.make,
   }),
 });

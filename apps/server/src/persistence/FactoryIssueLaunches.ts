@@ -13,7 +13,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import { FactoryLaunchCore } from "../factory/FactoryTaskLaunch.ts";
-import { githubIssueOriginKey } from "../factory/FactoryOriginKey.ts";
+import { issueOriginKey } from "../factory/FactoryOriginKey.ts";
 
 export const FactoryLaunchIntent = Schema.Struct({
   repository: FactoryRepository,
@@ -101,7 +101,7 @@ const make = Effect.gen(function* () {
           yield* sql`INSERT INTO factory_issue_launches
         (thread_id, canonical_key, issue_number, request_command_id, intent_json, origin_key)
         VALUES (${intent.threadId}, ${key.canonicalKey}, ${key.issueNumber}, ${intent.requestCommandId}, ${json},
-          ${githubIssueOriginKey(key.canonicalKey, key.issueNumber)})
+          ${issueOriginKey(intent.repository.provider, key.canonicalKey, key.issueNumber)})
         ON CONFLICT DO NOTHING`;
           const winner = yield* find(key);
           if (Option.isNone(winner))

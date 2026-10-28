@@ -10,15 +10,33 @@ import {
 import { ModelSelection } from "./modelSelection.ts";
 import { OrchestrationV2CreationSource } from "./orchestrationV2.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
+import { SourceControlProviderKind } from "./sourceControl.ts";
 
 export const FactoryRepository = Schema.Struct({
-  provider: Schema.Literal("github"),
+  provider: SourceControlProviderKind,
   host: TrimmedNonEmptyString,
+  // Host path below the origin: `owner/name`, or `group/subgroup/project` on GitLab.
   repository: TrimmedNonEmptyString,
   canonicalKey: TrimmedNonEmptyString,
   url: TrimmedNonEmptyString,
 });
 export type FactoryRepository = typeof FactoryRepository.Type;
+
+/**
+ * A provider's static ceiling for Factory work on its issues. A declared capability says the host
+ * API can express the observation; it is never authority to run, publish or merge anything.
+ * Absent support degrades: readiness stays `unknown`, delivery is refused.
+ */
+export const FactoryIssueCapabilities = Schema.Struct({
+  provider: SourceControlProviderKind,
+  displayName: TrimmedNonEmptyString,
+  blockedBy: Schema.Literals(["none", "listing", "listing-with-total"]),
+  subIssues: Schema.Boolean,
+  closeAcceptance: Schema.Literals(["none", "close-reason"]),
+  publish: Schema.Boolean,
+  headPinnedMerge: Schema.Boolean,
+});
+export type FactoryIssueCapabilities = typeof FactoryIssueCapabilities.Type;
 
 export const FactoryIssueTask = Schema.Struct({
   projectId: ProjectId,
@@ -63,6 +81,7 @@ export const FactoryIssueListInput = Schema.Struct({
 export type FactoryIssueListInput = typeof FactoryIssueListInput.Type;
 export const FactoryIssueListResult = Schema.Struct({
   repository: FactoryRepository,
+  capabilities: FactoryIssueCapabilities,
   issues: Schema.Array(FactoryIssue),
   nextPage: Schema.NullOr(PositiveInt),
   fetchedAt: IsoDateTime,
@@ -75,6 +94,7 @@ export const FactoryIssueReadInput = Schema.Struct({
 export type FactoryIssueReadInput = typeof FactoryIssueReadInput.Type;
 export const FactoryIssueReadResult = Schema.Struct({
   repository: FactoryRepository,
+  capabilities: FactoryIssueCapabilities,
   issue: FactoryIssue,
   fetchedAt: IsoDateTime,
 });
@@ -136,7 +156,7 @@ export class FactoryIssueError extends Schema.TaggedError<FactoryIssueError>()(
   override get message(): string {
     switch (this.reason) {
       case "unsupported-provider":
-        return "The project's intake repository is not supported. Factory issue intake requires GitHub.";
+        return "The project's intake repository is on a host this environment cannot read issues from. Factory issue intake supports GitHub and GitLab.";
       case "missing-project":
         return "The selected project no longer exists.";
       case "missing-repository":
@@ -144,15 +164,15 @@ export class FactoryIssueError extends Schema.TaggedError<FactoryIssueError>()(
       case "repository-changed":
         return "The repository changed since this issue was selected or reserved. Refresh the inbox before starting new work; restore the original remote to resume an unfinished reservation.";
       case "authentication":
-        return "GitHub authentication is required. Check the environment's GitHub credentials.";
+        return "The issue host requires authentication. Check the environment's credentials for this repository's host.";
       case "rate-limited":
-        return "GitHub's request limit was reached. Retry after the limit resets.";
+        return "The issue host's request limit was reached. Retry after the limit resets.";
       case "remote-failure":
-        return "GitHub could not read the issues. Check repository access and connectivity.";
+        return "The issue host could not read the issues. Check repository access and connectivity.";
       case "invalid-response":
-        return "GitHub returned an invalid or incomplete issue response.";
+        return "The issue host returned an invalid or incomplete issue response.";
       case "not-an-issue":
-        return "This GitHub item is a pull request, not an issue.";
+        return "This item is a change request, not an issue.";
       case "closed-issue":
         return "Closed issues cannot start new tasks. An existing task can still be opened.";
       case "deleted-task":

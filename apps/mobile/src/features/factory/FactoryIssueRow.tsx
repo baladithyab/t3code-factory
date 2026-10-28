@@ -1,4 +1,4 @@
-import type { EnvironmentId, FactoryIssue } from "@t3tools/contracts";
+import type { EnvironmentId, FactoryIssue, FactoryIssueCapabilities } from "@t3tools/contracts";
 import { useState } from "react";
 import { Linking, Pressable, View } from "react-native";
 
@@ -37,12 +37,13 @@ function taskTone(status: NonNullable<FactoryIssue["task"]>["status"]): StatusTo
 }
 
 /**
- * One issue. Everything from GitHub is plain text: titles, labels, and the body are never parsed
- * as markup, so an issue cannot style the screen or smuggle a link into it.
+ * One issue. Everything from the issue host is plain text: titles, labels, and the body are never
+ * parsed as markup, so an issue cannot style the screen or smuggle a link into it.
  */
 export function FactoryIssueRow(props: {
   readonly environmentId: EnvironmentId;
   readonly issue: FactoryIssue;
+  readonly capabilities: FactoryIssueCapabilities;
   readonly busy: boolean;
   /** Another issue is being launched; starting is held until it settles. */
   readonly locked: boolean;
@@ -132,6 +133,7 @@ export function FactoryIssueRow(props: {
               projectId={action.task.projectId}
               threadId={action.task.threadId}
               issue={issue}
+              capabilities={props.capabilities}
             />
           ) : null}
           {action.kind === "unavailable" ? (
@@ -148,7 +150,7 @@ export function FactoryIssueRow(props: {
           )}
           {url ? (
             <Button
-              label="View on GitHub"
+              label={`View on ${props.capabilities.displayName}`}
               tone="text"
               icon="arrow.up.right"
               onPress={() => void Linking.openURL(url)}

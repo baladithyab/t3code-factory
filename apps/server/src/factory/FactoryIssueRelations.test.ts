@@ -25,6 +25,7 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Projects from "../project/ProjectService.ts";
 import * as Identities from "../project/RepositoryIdentityResolver.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
+import { fakeIssueTracker, issueTrackersLayer } from "./IssueTrackerProviderRegistry.testkit.ts";
 
 const projectId = ProjectId.make("relations-project");
 const input = { projectId, issueNumber: 12 };
@@ -80,12 +81,17 @@ function harness(
   rest: Remote,
   resolve: Identities.RepositoryIdentityResolver["Service"]["resolve"] = () =>
     Effect.succeed(identity),
+  options: {
+    readonly origin?: string;
+    readonly trackers?: Parameters<typeof issueTrackersLayer>[0];
+  } = {},
 ) {
   const dependencies = Layer.mergeAll(
     NodeCrypto.layer,
     Store.layer.pipe(Layer.provideMerge(Sqlite.layerMemory)),
     Layer.mock(GitHubRest.GitHubRest)({ rest }),
     Layer.succeed(Identities.RepositoryIdentityResolver, { resolve }),
+    issueTrackersLayer(options.trackers),
     Layer.mock(Projects.ProjectService)({
       getById: () =>
         Effect.succeed(
@@ -105,7 +111,7 @@ function harness(
       execute: () =>
         Effect.succeed({
           exitCode: ChildProcessSpawner.ExitCode(0),
-          stdout: "git@github.com:owner/factory.git",
+          stdout: options.origin ?? "git@github.com:owner/factory.git",
           stderr: "",
           stdoutTruncated: false,
           stderrTruncated: false,
@@ -996,5 +1002,113 @@ it.effect(
         [1, 2, 3, 4, 5],
       );
     }).pipe(Effect.provide(harness(routes(pages))));
+  },
+);
+
+const gitlabOrigin = "https://gitlab.com/group/sub/factory.git";
+// Every GitHub REST call is recorded before it dies, so an assertion on the list proves the host
+// was never asked even if a failure were swallowed on the way.
+const recordingRest =
+  (requests: string[]): Remote =>
+  ({ host, path }) => {
+    requests.push(`${host}/${path}`);
+    return Effect.die(`GitLab repository reached GitHub REST at ${host}/${path}`);
+  };
+it.effect(
+  "a GitLab issue derives unknown capability-unsupported readiness and refuses overrides without a host request",
+  () => {
+    const requests: string[] = [];
+    return Effect.gen(function* () {
+      const relations = yield* Relations.FactoryIssueRelations;
+      const result = yield* relations.read(input);
+      assert.deepEqual(result.repository, {
+        provider: "gitlab",
+        host: "gitlab.com",
+        repository: "group/sub/factory",
+        canonicalKey: "gitlab.com/group/sub/factory",
+        url: "https://gitlab.com/group/sub/factory",
+      });
+      assert.deepInclude(result.readiness, {
+        status: "unknown",
+        reasons: ["capability-unsupported"],
+        basis: null,
+        complete: false,
+        listedCount: 0,
+        summaryTotal: null,
+        edges: [],
+      });
+      for (const kind of ["force-not-ready", "waive"] as const) {
+        const refused = yield* relations
+          .setOverride({
+            ...input,
+            commandId: CommandId.make(`gitlab-${kind}`),
+            targetHost: "gitlab.com",
+            targetId: 70,
+            expectedFingerprint: "unobservable",
+            kind,
+            reason: "No blocker listing on this host.",
+          })
+          .pipe(Effect.flip);
+        assert.equal(refused.reason, "override-not-allowed");
+      }
+      assert.deepEqual(requests, []);
+      assert.isTrue(
+        Option.isNone(
+          yield* (yield* Store.FactoryIssueRelationStore).findOverrideCommand(
+            CommandId.make("gitlab-waive"),
+          ),
+        ),
+      );
+    }).pipe(
+      Effect.provide(
+        harness(recordingRest(requests), () => Effect.succeed(identity), { origin: gitlabOrigin }),
+      ),
+    );
+  },
+);
+it.effect(
+  "a GitLab frontier reads the parent through its tracker and reports an incomplete, empty enumeration",
+  () => {
+    const requests: string[] = [];
+    const reads: unknown[] = [];
+    const gitlab = fakeIssueTracker("gitlab", {
+      getIssue: (request) =>
+        Effect.sync(() => {
+          reads.push(request);
+          return {
+            number: request.number,
+            title: "Factory map",
+            body: null,
+            state: "open" as const,
+            url: "https://gitlab.com/group/sub/factory/-/issues/2",
+            labels: [],
+            updatedAt: at,
+          };
+        }),
+    });
+    return Effect.gen(function* () {
+      const frontier = yield* (yield* Relations.FactoryIssueRelations).readFrontier({
+        projectId,
+        parentIssueNumber: 2,
+      });
+      assert.deepInclude(frontier, {
+        parentIssueNumber: 2,
+        parentTitle: "Factory map",
+        complete: false,
+        summaryTotal: null,
+        children: [],
+      });
+      assert.deepEqual(reads, [
+        { cwd: "/repo", host: "gitlab.com", repository: "group/sub/factory", number: 2 },
+      ]);
+      assert.deepEqual(requests, []);
+    }).pipe(
+      Effect.provide(
+        harness(recordingRest(requests), () => Effect.succeed(identity), {
+          origin: gitlabOrigin,
+          trackers: [fakeIssueTracker("github"), gitlab],
+        }),
+      ),
+    );
   },
 );

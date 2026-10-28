@@ -2,6 +2,7 @@ import { SourceControlProviderKind } from "@t3tools/contracts";
 import { defineSourceControlDriver } from "@t3tools/source-control-core/server/driver";
 import * as Effect from "effect/Effect";
 
+import * as GitHubIssueTrackerProvider from "./GitHubIssueTrackerProvider.ts";
 import * as GitHubPullRequestProvider from "./GitHubPullRequestProvider.ts";
 import * as GitHubSourceControlProvider from "./GitHubSourceControlProvider.ts";
 
@@ -11,5 +12,6 @@ export const driver = defineSourceControlDriver({
     sourceControl: GitHubSourceControlProvider.make,
     discovery: GitHubSourceControlProvider.makeDiscovery,
     pullRequests: GitHubPullRequestProvider.make,
+    issues: GitHubIssueTrackerProvider.make,
   }),
 });

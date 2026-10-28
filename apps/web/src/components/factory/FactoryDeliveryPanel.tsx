@@ -8,6 +8,7 @@ import {
   FACTORY_DELIVERY_TITLE_MAX_CHARS,
   type EnvironmentId,
   type FactoryDeliveryPrepareInput,
+  type FactoryIssueCapabilities,
   type ProjectId,
   type PullRequestMergeMethod,
   type ThreadId,
@@ -52,9 +53,12 @@ export function FactoryDeliveryPanel(props: {
   readonly issueTitle: string;
   readonly issueUrl: string;
   readonly acceptanceCurrent: boolean;
+  /** Merge controls need a host that can pin the merge to the accepted head. */
+  readonly capabilities: Pick<FactoryIssueCapabilities, "displayName" | "headPinnedMerge">;
   readonly onGranted: () => void;
 }) {
   const { environmentId, projectId, threadId } = props;
+  const { displayName, headPinnedMerge } = props.capabilities;
   const registry = useContext(RegistryContext);
   const headingId = useId();
   const titleId = useId();
@@ -129,6 +133,7 @@ export function FactoryDeliveryPanel(props: {
     null;
   const mergeDisabledReason =
     mergeGrantDisabledReason({
+      displayName,
       acceptanceCurrent: props.acceptanceCurrent,
       existing: mergeExisting,
       hasPermission: hasGrantPermission,
@@ -211,7 +216,7 @@ export function FactoryDeliveryPanel(props: {
       setPrepareInput(null);
       props.onGranted();
     } else if (!isAtomCommandInterrupted(result)) {
-      setFailure(factoryDeliveryFailureMessage(squashAtomCommandFailure(result)));
+      setFailure(factoryDeliveryFailureMessage(squashAtomCommandFailure(result), displayName));
       deliveries.refresh();
     }
   };
@@ -257,7 +262,12 @@ export function FactoryDeliveryPanel(props: {
       props.onGranted();
     } else if (!isAtomCommandInterrupted(result)) {
       setMergeFailure(
-        factoryDeliveryFailureMessage(squashAtomCommandFailure(result), undefined, "merge-pr"),
+        factoryDeliveryFailureMessage(
+          squashAtomCommandFailure(result),
+          displayName,
+          undefined,
+          "merge-pr",
+        ),
       );
       deliveries.refresh();
     }
@@ -278,21 +288,28 @@ export function FactoryDeliveryPanel(props: {
     if (result._tag === "Success") {
       deliveries.refresh();
     } else if (!isAtomCommandInterrupted(result)) {
-      setFailure(factoryDeliveryFailureMessage(squashAtomCommandFailure(result)));
+      setFailure(factoryDeliveryFailureMessage(squashAtomCommandFailure(result), displayName));
     }
   };
 
   const readFailure =
     deliveries.error === null
       ? null
-      : factoryDeliveryFailureMessage(deliveries.failure, deliveries.error);
+      : factoryDeliveryFailureMessage(deliveries.failure, displayName, deliveries.error);
   const prepareFailure =
-    preview.error === null ? null : factoryDeliveryFailureMessage(preview.failure, preview.error);
+    preview.error === null
+      ? null
+      : factoryDeliveryFailureMessage(preview.failure, displayName, preview.error);
   const visibleFailure = failure ?? prepareFailure ?? readFailure;
   const mergePrepareFailure =
     mergePreview.error === null
       ? null
-      : factoryDeliveryFailureMessage(mergePreview.failure, mergePreview.error, "merge-pr");
+      : factoryDeliveryFailureMessage(
+          mergePreview.failure,
+          displayName,
+          mergePreview.error,
+          "merge-pr",
+        );
   const visibleMergeFailure = mergeFailure ?? mergePrepareFailure;
 
   return (
@@ -418,7 +435,7 @@ export function FactoryDeliveryPanel(props: {
           </p>
         ) : null}
       </div>
-      {published ? (
+      {published && headPinnedMerge ? (
         <section aria-labelledby={mergeHeadingId} className="space-y-2">
           <h4 id={mergeHeadingId} className="font-medium text-sm">
             Merge
@@ -561,11 +578,11 @@ export function FactoryDeliveryPanel(props: {
               {intent.status === "pending" || intent.status === "sending" ? (
                 <Badge variant="outline">
                   <CircleDotIcon />
-                  {describeDeliveryStatus(intent)}
+                  {describeDeliveryStatus(intent, displayName)}
                 </Badge>
               ) : intent.status === "confirmed" ? (
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="secondary">{describeDeliveryStatus(intent)}</Badge>
+                  <Badge variant="secondary">{describeDeliveryStatus(intent, displayName)}</Badge>
                   {href !== null && intent.remote !== null ? (
                     <a
                       href={href}
@@ -578,7 +595,9 @@ export function FactoryDeliveryPanel(props: {
                   ) : null}
                 </div>
               ) : (
-                <p className="[overflow-wrap:anywhere]">{describeDeliveryStatus(intent)}</p>
+                <p className="[overflow-wrap:anywhere]">
+                  {describeDeliveryStatus(intent, displayName)}
+                </p>
               )}
               {intent.status === "unknown" || intent.status === "failed" ? (
                 <Button

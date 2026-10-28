@@ -1,4 +1,10 @@
-import type { EnvironmentId, FactoryAcceptance, ProjectId, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  FactoryAcceptance,
+  FactoryIssueCapabilities,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 import type { ReactNode } from "react";
 import { View } from "react-native";
 
@@ -33,6 +39,7 @@ export function FactoryAcceptedCommitSection(props: {
   readonly projectId: ProjectId;
   readonly threadId: ThreadId;
   readonly issue: { readonly number: number; readonly title: string; readonly url: string };
+  readonly capabilities: FactoryIssueCapabilities;
 }) {
   const acceptance = useFactoryAcceptCommit(props);
   if (!acceptance.supported) return null;
@@ -148,6 +155,7 @@ export function FactoryAcceptedCommitSection(props: {
           issue={props.issue}
           acceptedHeadSha={view.acceptance.headSha}
           acceptanceCurrent={view.kind === "current"}
+          capabilities={props.capabilities}
         />
       ) : null}
     </View>

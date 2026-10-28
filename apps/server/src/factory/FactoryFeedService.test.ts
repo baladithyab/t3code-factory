@@ -49,6 +49,7 @@ import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexA
 import { DispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
 import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
 import { feedItemOriginKey } from "./FactoryOriginKey.ts";
+import { issueTrackersLayer } from "./IssueTrackerProviderRegistry.testkit.ts";
 
 const environmentId = EnvironmentId.make("feed-environment");
 
@@ -89,7 +90,10 @@ const admission = (
 });
 function harness(
   response: () => Response,
-  options: { readonly resolveCommit?: Git.GitVcsDriver["Service"]["resolveCommit"] } = {},
+  options: {
+    readonly resolveCommit?: Git.GitVcsDriver["Service"]["resolveCommit"];
+    readonly origin?: string;
+  } = {},
 ) {
   const database = Sqlite.layerMemory;
   const settings = Settings.layerTest();
@@ -115,6 +119,7 @@ function harness(
     Layer.succeed(Identities.RepositoryIdentityResolver, {
       resolve: () => Effect.succeed(identity),
     }),
+    issueTrackersLayer(),
     Layer.succeed(Favicons.ProjectFaviconResolver, {
       resolvePath: () => Effect.succeed(null),
       invalidate: () => Effect.void,
@@ -133,7 +138,7 @@ function harness(
       execute: () =>
         Effect.succeed({
           exitCode: ChildProcessSpawner.ExitCode(0),
-          stdout: "git@github.com:owner/factory.git",
+          stdout: options.origin ?? "git@github.com:owner/factory.git",
           stderr: "",
           stdoutTruncated: false,
           stderrTruncated: false,
@@ -622,6 +627,34 @@ it.effect(
             ),
           { resolveCommit: () => Effect.die("Forge identity guard must precede git") },
         ),
+      ),
+    ),
+);
+
+it.effect(
+  "a GitLab project's candidates read without a repository and admission is refused unsupported-provider",
+  () =>
+    Effect.gen(function* () {
+      const factory = yield* seed;
+      const { source } = yield* factory.bindSource(bind);
+      const listed = yield* factory.listCandidates({ projectId });
+      assert.isNull(listed.repository);
+      const candidate = listed.candidates[0]!;
+      const refused = yield* factory
+        .admitCandidate({
+          ...admission(source.id, candidate.revision),
+          expectedRepositoryKey: "gitlab.com/group/factory",
+        })
+        .pipe(Effect.flip);
+      assert.equal(refused.reason, "unsupported-provider");
+      const sql = yield* SqlClient.SqlClient;
+      assert.deepEqual(yield* sql`SELECT thread_id FROM factory_feed_launches`, []);
+    }).pipe(
+      Effect.provide(
+        harness(() => new Response(feed("reviewed text")), {
+          origin: "https://gitlab.com/group/factory.git",
+          resolveCommit: () => Effect.die("An unsupported repository must be refused before git"),
+        }),
       ),
     ),
 );

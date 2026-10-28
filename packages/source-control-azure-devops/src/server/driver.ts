@@ -11,5 +11,6 @@ export const driver = defineSourceControlDriver({
     sourceControl: AzureDevOpsSourceControlProvider.make,
     discovery: Effect.succeed(AzureDevOpsSourceControlProvider.discovery),
     pullRequests: AzureDevOpsPullRequestProvider.make,
+    issues: Effect.succeed(null),
   }),
 });

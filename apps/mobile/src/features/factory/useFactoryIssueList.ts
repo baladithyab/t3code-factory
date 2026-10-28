@@ -152,6 +152,7 @@ export function useFactoryIssueList(input: {
   return {
     requestKey: key,
     repository: pages.repository,
+    capabilities: pages.capabilities,
     issues: pages.issues,
     fetchedAt: pages.fetchedAt,
     hasMore: nextPage !== null,

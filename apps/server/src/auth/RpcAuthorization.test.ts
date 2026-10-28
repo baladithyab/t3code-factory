@@ -27,6 +27,7 @@ import {
   WS_METHODS,
   WsRpcGroup,
   type AuthEnvironmentScope,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -434,11 +435,20 @@ describe("factory authorization", () => {
     Effect.gen(function* () {
       const result = {
         repository: {
-          provider: "github" as const,
+          provider: SourceControlProviderKind.make("github"),
           host: "github.com",
           repository: "owner/repo",
           canonicalKey: "github.com/owner/repo",
           url: "https://github.com/owner/repo",
+        },
+        capabilities: {
+          provider: SourceControlProviderKind.make("github"),
+          displayName: "GitHub",
+          blockedBy: "listing-with-total" as const,
+          subIssues: true,
+          closeAcceptance: "close-reason" as const,
+          publish: true,
+          headPinnedMerge: true,
         },
         issues: [],
         nextPage: null,
@@ -477,7 +487,7 @@ describe("factory readiness authorization", () => {
       let called = false;
       const result = {
         repository: {
-          provider: "github" as const,
+          provider: SourceControlProviderKind.make("github"),
           host: "github.com",
           repository: "owner/repo",
           canonicalKey: "github.com/owner/repo",
@@ -992,7 +1002,7 @@ describe("factory claims authorization", () => {
       const result = {
         environmentId: EnvironmentId.make("owner"),
         repository: {
-          provider: "github" as const,
+          provider: SourceControlProviderKind.make("github"),
           host: "github.com",
           repository: "owner/repo",
           canonicalKey: "github.com/owner/repo",

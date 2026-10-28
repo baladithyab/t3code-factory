@@ -42,11 +42,15 @@ import * as PullRequests from "../pullRequest/PullRequestService.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Acceptance from "./FactoryAcceptanceService.ts";
+import { IssueTrackerProviderRegistry } from "./IssueTrackerProviderRegistry.ts";
 
 const FAILURE_MAX_CHARS = 1000;
 
 // A rejection the forge answered definitively, so nothing was created. Everything else (network,
 // timeout, 5xx, an undecodable answer) may still have created the pull request and is `unknown`.
+// The tags are GitHub's: a host whose rejections are not classified here could settle a request
+// that never landed as `unknown`, which is why `publish` stays undeclared on every other host and
+// prepare and grant refuse them by capability.
 const DEFINITE_REJECTION_TAGS = new Set([
   "GitHubApiAuthenticationError",
   "GitHubApiRateLimitError",
@@ -249,6 +253,7 @@ const makeService = Effect.gen(function* () {
   const git = yield* Git.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
   const providers = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  const trackers = yield* IssueTrackerProviderRegistry;
   const pullRequests = yield* PullRequests.PullRequestService;
   const outbox = yield* EffectOutbox.EffectOutboxV2;
   const crypto = yield* Crypto.Crypto;
@@ -258,10 +263,12 @@ const makeService = Effect.gen(function* () {
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
   // What the grantor is shown and what a grant re-derives: the claim, the live acceptance, and
-  // whether the worktree still sits on the accepted commit.
+  // whether the worktree still sits on the accepted commit. Every caller reads it before the host,
+  // so a host that cannot deliver with the exact-commit guarantee is refused without being asked.
   const observe = Effect.fn("FactoryDeliveryService.observe")(function* (input: {
     readonly projectId: FactoryDeliveryReadInput["projectId"];
     readonly threadId: FactoryDeliveryReadInput["threadId"];
+    readonly kind: FactoryDeliveryKind;
   }) {
     const origin = yield* acceptanceStore
       .resolveOrigin(input.threadId)
@@ -271,6 +278,14 @@ const makeService = Effect.gen(function* () {
       .pipe(Effect.mapError(fromAcceptance));
     if (Option.isNone(origin))
       return yield* new FactoryDeliveryError({ reason: "not-a-factory-task" });
+    // The provider frozen into the claim at admission, not whatever the checkout points at now.
+    const capabilities = trackers.get(origin.value.repository.provider)?.capabilities;
+    if (
+      capabilities === undefined ||
+      !capabilities.publish ||
+      (input.kind === "merge-pr" && !capabilities.headPinnedMerge)
+    )
+      return yield* new FactoryDeliveryError({ reason: "capability-unsupported" });
     if (read.acceptance === null || read.acceptance.originKey !== origin.value.originKey)
       return yield* new FactoryDeliveryError({ reason: "not-accepted" });
     return {

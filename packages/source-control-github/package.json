@@ -15,6 +15,10 @@
       "types": "./src/server/GitHubRest.ts",
       "import": "./src/server/GitHubRest.ts"
     },
+    "./server/GitHubIssueTrackerProvider": {
+      "types": "./src/server/GitHubIssueTrackerProvider.ts",
+      "import": "./src/server/GitHubIssueTrackerProvider.ts"
+    },
     "./server/gitHubAuthStatus": {
       "types": "./src/server/gitHubAuthStatus.ts",
       "import": "./src/server/gitHubAuthStatus.ts"

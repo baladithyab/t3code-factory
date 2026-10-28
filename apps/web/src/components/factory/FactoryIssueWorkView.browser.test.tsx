@@ -4,10 +4,12 @@ import {
   FactoryReadinessOverrideId,
   ProjectId,
   ProviderInstanceId,
+  SourceControlProviderKind,
   ThreadId,
   type FactoryDeliveryIntent,
   type FactoryDeliveryPrepareResult,
   type FactoryIssue,
+  type FactoryIssueCapabilities,
   type FactoryIssueFrontierReadResult,
   type FactoryIssueReadinessReadResult,
   type FactoryReadiness,
@@ -184,12 +186,22 @@ function issue(number: number, issueState: FactoryIssue["state"]): FactoryIssue 
 }
 
 const repository = {
-  provider: "github",
+  provider: SourceControlProviderKind.make("github"),
   host: "github.com",
   repository: "owner/repo",
   canonicalKey: "github.com/owner/repo",
   url: "https://github.com/owner/repo",
 } as const;
+
+const capabilities: FactoryIssueCapabilities = {
+  provider: repository.provider,
+  displayName: "GitHub",
+  blockedBy: "listing-with-total",
+  subIssues: true,
+  closeAcceptance: "close-reason",
+  publish: true,
+  headPinnedMerge: true,
+};
 
 const openEdge: FactoryReadinessEdge = {
   targetId: 9009,
@@ -303,7 +315,8 @@ const workView = (
     projectTitleById={new Map()}
     refreshing={false}
     claims={null}
-    repositoryKey={repository.canonicalKey}
+    repository={repository}
+    capabilities={capabilities}
     onStart={vi.fn()}
     onRestart={vi.fn()}
     onResume={vi.fn()}
@@ -638,7 +651,7 @@ function claimsViewOf(
     fetchedAt: observedAt,
     claims: [
       {
-        originKey: originKeyForIssue(repository.canonicalKey, 7),
+        originKey: originKeyForIssue(repository.provider, repository.canonicalKey, 7),
         origin: "github-issue" as const,
         projectId,
         workspaceRoot: "/work/repo",
@@ -692,7 +705,8 @@ const claimedView = (claims: FactoryClaimsView | null) => (
     projectTitleById={new Map()}
     refreshing={false}
     claims={claims}
-    repositoryKey={repository.canonicalKey}
+    repository={repository}
+    capabilities={capabilities}
     onStart={vi.fn()}
     onRestart={vi.fn()}
     onResume={vi.fn()}
@@ -744,7 +758,7 @@ it("warns when the head moved and re-accepts the last observed head", async () =
   state.acceptance = {
     acceptance: {
       id: "acceptance:one",
-      originKey: originKeyForIssue(repository.canonicalKey, 7),
+      originKey: originKeyForIssue(repository.provider, repository.canonicalKey, 7),
       projectId,
       threadId: ThreadId.make("thread:one"),
       headSha: "a".repeat(40),
@@ -788,7 +802,7 @@ it("reconciles an unknown publication without granting another delivery", async 
   const headSha = "a".repeat(40);
   const acceptance = {
     id: "acceptance:one",
-    originKey: originKeyForIssue(repository.canonicalKey, 7),
+    originKey: originKeyForIssue(repository.provider, repository.canonicalKey, 7),
     projectId,
     threadId: ThreadId.make("thread:one"),
     headSha,
@@ -862,7 +876,7 @@ it("disables the merge grant when the published PR head is not the accepted comm
   const headSha = "a".repeat(40);
   const acceptance = {
     id: "acceptance:one",
-    originKey: originKeyForIssue(repository.canonicalKey, 7),
+    originKey: originKeyForIssue(repository.provider, repository.canonicalKey, 7),
     projectId,
     threadId: ThreadId.make("thread:one"),
     headSha,

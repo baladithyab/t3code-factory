@@ -1,5 +1,12 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, MessageId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  MessageId,
+  ProjectId,
+  ProviderInstanceId,
+  SourceControlProviderKind,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -8,15 +15,16 @@ import * as Launches from "./FactoryIssueLaunches.ts";
 import * as Sqlite from "./Sqlite.ts";
 import { runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
-import { githubIssueOriginKey } from "../factory/FactoryOriginKey.ts";
+import { issueOriginKey } from "../factory/FactoryOriginKey.ts";
 
+const github = SourceControlProviderKind.make("github");
 const key = { canonicalKey: "github.com/owner/repo", issueNumber: 7 };
 const intent = (
   id: string,
   previousThreadId: ThreadId | null = null,
 ): Launches.FactoryLaunchIntent => ({
   repository: {
-    provider: "github",
+    provider: github,
     host: "github.com",
     repository: "owner/repo",
     canonicalKey: key.canonicalKey,
@@ -64,7 +72,7 @@ it.effect(
       const sql = yield* SqlClient.SqlClient;
       assert.equal((yield* sql`SELECT * FROM factory_issue_launches`).length, 1);
       const rows = yield* sql`SELECT origin_key FROM factory_issue_launches`;
-      assert.equal(rows[0]?.origin_key, githubIssueOriginKey(key.canonicalKey, key.issueNumber));
+      assert.equal(rows[0]?.origin_key, issueOriginKey(github, key.canonicalKey, key.issueNumber));
       assert.isUndefined(a.intent.admittedBy);
     }).pipe(Effect.provide(layer)),
 );
@@ -128,7 +136,7 @@ it.effect("075 backfills legacy issue keys without requiring admission provenanc
       VALUES (${legacy.threadId}, ${key.canonicalKey}, ${key.issueNumber}, ${legacy.requestCommandId}, ${JSON.stringify(legacy)})`;
     yield* runMigrations();
     const rows = yield* sql`SELECT origin_key FROM factory_issue_launches`;
-    assert.equal(rows[0]?.origin_key, githubIssueOriginKey(key.canonicalKey, key.issueNumber));
+    assert.equal(rows[0]?.origin_key, issueOriginKey(github, key.canonicalKey, key.issueNumber));
     const stored = Option.getOrThrow(yield* (yield* Launches.FactoryIssueLaunches).get(key));
     assert.deepEqual(stored.intent, legacy);
     assert.isUndefined(stored.intent.admittedBy);

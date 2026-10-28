@@ -7,6 +7,7 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  SourceControlProviderKind,
   ThreadId,
   type FactoryRepository,
   type FactoryResearchProtocol,
@@ -31,11 +32,12 @@ import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Claims from "./FactoryClaimsService.ts";
 import {
   feedItemOriginKey,
-  githubIssueOriginKey,
+  issueOriginKey,
   knowledgeBriefOriginKey,
   researchRunOriginKey,
 } from "./FactoryOriginKey.ts";
 import { type FactoryLaunchCore } from "./FactoryTaskLaunch.ts";
+import { issueTrackersLayer } from "./IssueTrackerProviderRegistry.testkit.ts";
 
 const at = "2026-10-25T00:00:00.000Z";
 const owner = ProjectId.make("owner");
@@ -43,7 +45,7 @@ const caller = ProjectId.make("another-checkout");
 const environmentId = EnvironmentId.make("answering-environment");
 const copiedFrom = EnvironmentId.make("original-environment");
 const repository: FactoryRepository = {
-  provider: "github",
+  provider: SourceControlProviderKind.make("github"),
   host: "github.com",
   repository: "owner/repo",
   canonicalKey: "github.com/owner/repo",
@@ -79,55 +81,59 @@ const protocol: FactoryResearchProtocol = {
   revision: "sealed",
   sealedAt: at,
 };
-const dependencies = Layer.mergeAll(
-  Sqlite.layerMemory,
-  Layer.succeed(ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(environmentId) }),
-  Layer.mock(Projects.ProjectService)({
-    getById: (id) =>
-      Effect.succeed(
-        Option.some({
-          id,
-          title: "Factory",
-          workspaceRoot: id === caller ? "/second-repo" : "/owner-repo",
-          defaultModelSelection: null,
-          scripts: [],
-          createdAt: at,
-          updatedAt: at,
-          deletedAt: null,
+const dependencies = (origin: string) =>
+  Layer.mergeAll(
+    Sqlite.layerMemory,
+    Layer.succeed(ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(environmentId) }),
+    issueTrackersLayer(),
+    Layer.mock(Projects.ProjectService)({
+      getById: (id) =>
+        Effect.succeed(
+          Option.some({
+            id,
+            title: "Factory",
+            workspaceRoot: id === caller ? "/second-repo" : "/owner-repo",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: at,
+            updatedAt: at,
+            deletedAt: null,
+          }),
+        ),
+    }),
+    Layer.succeed(Identities.RepositoryIdentityResolver, {
+      resolve: () =>
+        Effect.succeed({
+          canonicalKey: repository.canonicalKey,
+          provider: "github",
+          rootPath: "/second-repo",
+          locator: {
+            source: "git-remote",
+            remoteName: "origin",
+            remoteUrl: "git@github.com:owner/repo.git",
+          },
         }),
-      ),
-  }),
-  Layer.succeed(Identities.RepositoryIdentityResolver, {
-    resolve: () =>
-      Effect.succeed({
-        canonicalKey: repository.canonicalKey,
-        provider: "github",
-        rootPath: "/second-repo",
-        locator: {
-          source: "git-remote",
-          remoteName: "origin",
-          remoteUrl: "git@github.com:owner/repo.git",
-        },
-      }),
-  }),
-  Layer.mock(Git.GitVcsDriver)({
-    execute: () =>
-      Effect.succeed({
-        exitCode: ChildProcessSpawner.ExitCode(0),
-        stdout: "git@github.com:owner/repo.git",
-        stderr: "",
-        stdoutTruncated: false,
-        stderrTruncated: false,
-      }),
-  }),
-  Layer.mock(Threads.ThreadManagementService)({
-    getThreadShell: (id) => Effect.succeed(id === "research" ? liveThreadShell(id) : null),
-  }),
-  Layer.mock(Receipts.CommandReceiptStoreV2)({
-    getByCommandId: () => Effect.succeed(Option.none()),
-  }),
-);
-const layer = Claims.layer.pipe(Layer.provideMerge(dependencies));
+    }),
+    // The resolver takes the provider and canonical key from the origin remote.
+    Layer.mock(Git.GitVcsDriver)({
+      execute: () =>
+        Effect.succeed({
+          exitCode: ChildProcessSpawner.ExitCode(0),
+          stdout: origin,
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        }),
+    }),
+    Layer.mock(Threads.ThreadManagementService)({
+      getThreadShell: (id) => Effect.succeed(id === "research" ? liveThreadShell(id) : null),
+    }),
+    Layer.mock(Receipts.CommandReceiptStoreV2)({
+      getByCommandId: () => Effect.succeed(Option.none()),
+    }),
+  );
+const layerFor = (origin: string) => Claims.layer.pipe(Layer.provideMerge(dependencies(origin)));
+const layer = layerFor("git@github.com:owner/repo.git");
 
 it.effect(
   "lists all current repository origins, conflicts and provenance with shared task statuses",
@@ -149,7 +155,7 @@ it.effect(
           task: null,
         },
       };
-      const issueKey = githubIssueOriginKey(repository.canonicalKey, 12);
+      const issueKey = issueOriginKey(repository.provider, repository.canonicalKey, 12);
       for (const [id, superseded, canonicalKey] of [
         ["issue", 0, repository.canonicalKey],
         ["superseded", 1, repository.canonicalKey],
@@ -162,7 +168,7 @@ it.effect(
           repository: { ...repository, canonicalKey },
         };
         yield* sql`INSERT INTO factory_issue_launches (thread_id, canonical_key, issue_number, request_command_id, intent_json, origin_key, superseded)
-        VALUES (${intent.threadId}, ${canonicalKey}, 12, ${intent.requestCommandId}, ${JSON.stringify(intent)}, ${githubIssueOriginKey(canonicalKey, 12)}, ${superseded})`;
+        VALUES (${intent.threadId}, ${canonicalKey}, 12, ${intent.requestCommandId}, ${JSON.stringify(intent)}, ${issueOriginKey(repository.provider, canonicalKey, 12)}, ${superseded})`;
       }
       const feed: FactoryFeedLaunchIntent = {
         ...core("feed"),
@@ -332,4 +338,46 @@ it.effect(
         },
       ]);
     }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "a GitLab launch lists as a gitlab-issue claim and a row from a host with no claim origin is left out",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const gitlab: FactoryRepository = {
+        provider: SourceControlProviderKind.make("gitlab"),
+        host: "gitlab.com",
+        repository: "group/sub/repo",
+        canonicalKey: "gitlab.com/group/sub/repo",
+        url: "https://gitlab.com/group/sub/repo",
+      };
+      for (const [provider, number] of [
+        ["gitlab", 12],
+        ["forgejo", 13],
+      ] as const) {
+        const intent: FactoryLaunchIntent = {
+          ...core(provider),
+          repository: { ...gitlab, provider: SourceControlProviderKind.make(provider) },
+          issue: {
+            number,
+            title: "Task",
+            body: null,
+            state: "open",
+            url: `${gitlab.url}/-/issues/${number}`,
+            labels: [],
+            updatedAt: at,
+            task: null,
+          },
+        };
+        yield* sql`INSERT INTO factory_issue_launches (thread_id, canonical_key, issue_number, request_command_id, intent_json, origin_key)
+        VALUES (${intent.threadId}, ${gitlab.canonicalKey}, ${number}, ${intent.requestCommandId}, ${JSON.stringify(intent)}, ${issueOriginKey(intent.repository.provider, gitlab.canonicalKey, number)})`;
+      }
+      const result = yield* (yield* Claims.FactoryClaimsService).list({ projectId: caller });
+      assert.deepEqual(result.repository, gitlab);
+      assert.deepEqual(
+        result.claims.map((claim) => [claim.origin, claim.originKey, claim.threadId]),
+        [["gitlab-issue", "gitlab:gitlab.com/group/sub/repo#12", "gitlab"]],
+      );
+    }).pipe(Effect.provide(layerFor("https://gitlab.com/group/sub/repo.git"))),
 );

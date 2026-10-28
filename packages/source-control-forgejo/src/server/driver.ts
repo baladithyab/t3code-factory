@@ -11,5 +11,6 @@ export const driver = defineSourceControlDriver({
     sourceControl: ForgejoSourceControlProvider.make,
     discovery: ForgejoSourceControlProvider.makeDiscovery,
     pullRequests: ForgejoPullRequestProvider.make,
+    issues: Effect.succeed(null),
   }),
 });

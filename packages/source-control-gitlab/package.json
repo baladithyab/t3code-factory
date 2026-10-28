@@ -19,6 +19,10 @@
       "types": "./src/server/GitLabCli.ts",
       "import": "./src/server/GitLabCli.ts"
     },
+    "./server/GitLabIssueTrackerProvider": {
+      "types": "./src/server/GitLabIssueTrackerProvider.ts",
+      "import": "./src/server/GitLabIssueTrackerProvider.ts"
+    },
     "./server/gitLabMergeRequestJson": {
       "types": "./src/server/gitLabMergeRequestJson.ts",
       "import": "./src/server/gitLabMergeRequestJson.ts"

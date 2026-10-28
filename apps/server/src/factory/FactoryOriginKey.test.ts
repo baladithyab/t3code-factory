@@ -1,17 +1,29 @@
 import { assert, it } from "@effect/vitest";
+import { SourceControlProviderKind } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import {
   feedItemOriginKey,
-  githubIssueOriginKey,
+  issueOriginKey,
   knowledgeBriefOriginKey,
   researchRunOriginKey,
 } from "./FactoryOriginKey.ts";
 
+const github = SourceControlProviderKind.make("github");
+const gitlab = SourceControlProviderKind.make("gitlab");
+
 it.effect("origin keys escape delimiters and percent sequences without component collisions", () =>
   Effect.sync(() => {
     assert.equal(
-      githubIssueOriginKey("github.com/owner/repo", 12),
+      issueOriginKey(github, "github.com/owner/repo", 12),
       "github:github.com/owner/repo#12",
+    );
+    assert.equal(
+      issueOriginKey(gitlab, "gitlab.com/group/subgroup/project", 12),
+      "gitlab:gitlab.com/group/subgroup/project#12",
+    );
+    assert.notEqual(
+      issueOriginKey(github, "forge.example/owner/repo", 12),
+      issueOriginKey(gitlab, "forge.example/owner/repo", 12),
     );
     assert.equal(
       feedItemOriginKey("repo", "https://news/feed", "atom:X"),
@@ -29,7 +41,7 @@ it.effect("origin keys escape delimiters and percent sequences without component
       researchRunOriginKey("p:explore", "verify"),
       researchRunOriginKey("p", "explore:verify"),
     );
-    assert.notEqual(githubIssueOriginKey("repo#12", 3), githubIssueOriginKey("repo%2312", 3));
+    assert.notEqual(issueOriginKey(github, "repo#12", 3), issueOriginKey(github, "repo%2312", 3));
     assert.equal(knowledgeBriefOriginKey("brief:1234"), "knowledge:brief%3A1234");
     assert.notEqual(knowledgeBriefOriginKey("a%3Ab"), knowledgeBriefOriginKey("a:b"));
     assert.equal(

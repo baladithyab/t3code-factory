@@ -92,6 +92,8 @@ export interface FactoryStartSettings {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly repository: FactoryRepository | null;
+  /** Names the issue host in failure text; null until the list has loaded. */
+  readonly displayName: string | null;
   readonly modelSelection: ModelSelection | null;
   readonly modelLabel: string;
   readonly baseRef: string | null;
@@ -101,6 +103,7 @@ export interface FactoryStartSettings {
 interface FactoryLaunchRequest {
   readonly environmentId: EnvironmentId;
   readonly input: FactoryIssueStartInput;
+  readonly displayName: string | null;
   readonly key: string;
 }
 
@@ -178,7 +181,11 @@ export function useFactoryIssueActions(input: {
       if (result._tag === "Failure") {
         const failure = isAtomCommandInterrupted(result)
           ? null
-          : describeFactoryFailure(squashAtomCommandFailure(result), "Couldn't start the task");
+          : describeFactoryFailure(
+              squashAtomCommandFailure(result),
+              "Couldn't start the task",
+              request.displayName ?? undefined,
+            );
         if (current.review !== null) {
           current.review = { ...current.review, failure };
         } else if (failure !== null) {
@@ -246,6 +253,7 @@ export function useFactoryIssueActions(input: {
       const request: FactoryLaunchRequest = {
         key,
         environmentId: settings.environmentId,
+        displayName: settings.displayName,
         input: {
           commandId: CommandId.make(commandId),
           projectId: settings.projectId,
@@ -415,10 +423,10 @@ function settledPreview(preview: DeliveryPreview) {
   return preview._tag === "Success" && !preview.waiting ? preview.value : null;
 }
 
-function describeDeliveryFailure(kind: FactoryDeliveryKind, error: unknown) {
+function describeDeliveryFailure(kind: FactoryDeliveryKind, error: unknown, displayName: string) {
   return kind === "merge-pr"
-    ? describeFactoryMergeFailure(error)
-    : describeFactoryDeliveryFailure(error);
+    ? describeFactoryMergeFailure(error, displayName)
+    : describeFactoryDeliveryFailure(error, displayName);
 }
 
 interface DeliveryState {
@@ -447,8 +455,9 @@ export function useFactoryDelivery(input: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly threadId: ThreadId;
+  readonly displayName: string;
 }) {
-  const { environmentId, projectId, threadId } = input;
+  const { environmentId, projectId, threadId, displayName } = input;
   const supported = useAtomValue(factoryDeliverySupportedAtom(environmentId));
   const canRead = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
   const canGrant = useAtomValue(factoryEnvironment.grantDelivery.permissionAtom(environmentId));
@@ -497,7 +506,9 @@ export function useFactoryDelivery(input: {
   const refreshPreview = useAtomRefresh(previewAtom);
   const prepared = settledPreview(preview);
   const previewFailure =
-    preview._tag === "Failure" ? describeFactoryDeliveryFailure(Cause.squash(preview.cause)) : null;
+    preview._tag === "Failure"
+      ? describeFactoryDeliveryFailure(Cause.squash(preview.cause), displayName)
+      : null;
 
   const mergePreviewAtom: Atom.Atom<DeliveryPreview> =
     readable && mergePreviewed !== null
@@ -516,7 +527,7 @@ export function useFactoryDelivery(input: {
   const mergePrepared = settledPreview(mergePreview);
   const mergePreviewFailure =
     mergePreview._tag === "Failure"
-      ? describeFactoryMergeFailure(Cause.squash(mergePreview.cause))
+      ? describeFactoryMergeFailure(Cause.squash(mergePreview.cause), displayName)
       : null;
 
   const intents = deliveries.data?.intents ?? [];
@@ -572,11 +583,14 @@ export function useFactoryDelivery(input: {
       if (!current.active || lifetime.current !== current) return;
       const failure =
         result._tag === "Failure" && !isAtomCommandInterrupted(result)
-          ? { kind, failure: describeDeliveryFailure(kind, squashAtomCommandFailure(result)) }
+          ? {
+              kind,
+              failure: describeDeliveryFailure(kind, squashAtomCommandFailure(result), displayName),
+            }
           : null;
       update(current.key, { pending: false, failure });
     },
-    [environmentId, projectId, runGrant, threadId, update],
+    [displayName, environmentId, projectId, runGrant, threadId, update],
   );
 
   const grant = useCallback(() => runGrantFor("publish-pr", prepared), [prepared, runGrantFor]);
@@ -601,12 +615,16 @@ export function useFactoryDelivery(input: {
         result._tag === "Failure" && !isAtomCommandInterrupted(result)
           ? {
               kind: intent.kind,
-              failure: describeDeliveryFailure(intent.kind, squashAtomCommandFailure(result)),
+              failure: describeDeliveryFailure(
+                intent.kind,
+                squashAtomCommandFailure(result),
+                displayName,
+              ),
             }
           : null;
       update(current.key, { pending: false, failure });
     },
-    [environmentId, projectId, runReconcile, update],
+    [displayName, environmentId, projectId, runReconcile, update],
   );
 
   const refreshDeliveries = deliveries.refresh;

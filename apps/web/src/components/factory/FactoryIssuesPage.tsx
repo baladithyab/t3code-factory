@@ -115,7 +115,7 @@ export function FactoryIssuesPage() {
           Issues
         </h2>
         <p className="text-muted-foreground text-sm">
-          Review GitHub issues in one checkout before starting isolated, supervised work.
+          Review issues in one checkout before starting isolated, supervised work.
         </p>
       </div>
       {member === null ? (
@@ -162,7 +162,7 @@ export function FactoryIssuesPage() {
         <FactoryEmptyState
           icon={<FactoryIcon />}
           title="Issue inbox unsupported"
-          description={`Update the server on ${environment.label} to use the GitHub issue inbox.`}
+          description={`Update the server on ${environment.label} to use the issue inbox.`}
         />
       ) : !canRead ? (
         <FactoryEmptyState
@@ -306,7 +306,13 @@ function FactoryInbox(props: {
       return;
     }
     if (isAtomCommandInterrupted(result)) return;
-    setStartFailure(describeFactoryFailure(squashAtomCommandFailure(result)));
+    setStartFailure(
+      describeFactoryFailure(
+        squashAtomCommandFailure(result),
+        undefined,
+        query.data?.capabilities.displayName,
+      ),
+    );
     // The failure may mean the row is stale (closed, deleted, already launched elsewhere).
     refreshAll();
   };
@@ -330,7 +336,10 @@ function FactoryInbox(props: {
     });
   };
 
-  const failure = query.error === null ? null : describeFactoryFailure(query.failure, query.error);
+  const failure =
+    query.error === null
+      ? null
+      : describeFactoryFailure(query.failure, query.error, query.data?.capabilities.displayName);
   const data = failure === null ? query.data : null;
   const refreshing = query.isPending;
 
@@ -431,7 +440,7 @@ function FactoryInbox(props: {
               description={
                 data.nextPage === null
                   ? "Nothing to show for this filter."
-                  : "GitHub returned no issues on this page, but more pages exist."
+                  : `${data.capabilities.displayName} returned no issues on this page, but more pages exist.`
               }
             />
           ) : (
@@ -447,7 +456,8 @@ function FactoryInbox(props: {
               projectTitleById={props.projectTitleById}
               refreshing={refreshing}
               claims={claims}
-              repositoryKey={data.repository.canonicalKey}
+              repository={data.repository}
+              capabilities={data.capabilities}
               onStart={(issue) => {
                 setStartFailure(null);
                 setDialog({ issue, repository: data.repository, restart: false });
@@ -504,7 +514,11 @@ function FactoryInbox(props: {
               : describeClaimsElsewhere(
                   claimsElsewhere(
                     claims.claimsByEnvironment,
-                    originKeyForIssue(dialog.repository.canonicalKey, dialog.issue.number),
+                    originKeyForIssue(
+                      dialog.repository.provider,
+                      dialog.repository.canonicalKey,
+                      dialog.issue.number,
+                    ),
                     environmentId,
                   ),
                   claims.labelOf,

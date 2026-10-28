@@ -7,12 +7,14 @@ import {
   FactoryOriginKey,
   ProjectId,
   ProviderInstanceId,
+  SourceControlProviderKind,
   ThreadId,
   type FactoryAcceptance,
   type FactoryDeliveryIntent,
   type FactoryDeliveryPrepareResult,
   type FactoryDeliveryPullRequest,
   type FactoryIssue,
+  type FactoryIssueCapabilities,
   type FactoryIssueListResult,
   type FactoryIssueTask,
   type FactoryRepository,
@@ -31,9 +33,9 @@ import {
   FACTORY_DELIVERY_PAYLOAD_CHANGED,
   FACTORY_MERGE_ALREADY_MERGED,
   FACTORY_MERGE_ALREADY_MERGING,
-  FACTORY_MERGE_DRAFT,
+  factoryMergeDraft,
   FACTORY_MERGE_METHOD_CHANGED,
-  FACTORY_MERGE_NOT_MERGEABLE,
+  factoryMergeNotMergeable,
   FACTORY_MERGE_NOT_PUBLISHED,
   FACTORY_MERGE_PR_HEAD_MOVED,
   factoryAcceptanceView,
@@ -41,6 +43,8 @@ import {
   factoryDeliveryGrantBlocker,
   factoryDeliveryStatusView,
   factoryMergeGrantBlocker,
+  factoryMergeabilityLabel,
+  factoryPublishUnsupportedText,
   factoryPullRequestHeadView,
   factoryIssueAction,
   factoryIssueStartKey,
@@ -51,7 +55,7 @@ import {
 } from "./factoryIssues";
 
 const repository: FactoryRepository = {
-  provider: "github",
+  provider: SourceControlProviderKind.make("github"),
   host: "github.com",
   repository: "owner/name",
   canonicalKey: "github.com/owner/name",
@@ -86,8 +90,34 @@ function issue(overrides: Partial<FactoryIssue> = {}): FactoryIssue {
   };
 }
 
+const githubCapabilities: FactoryIssueCapabilities = {
+  provider: SourceControlProviderKind.make("github"),
+  displayName: "GitHub",
+  blockedBy: "listing-with-total",
+  subIssues: true,
+  closeAcceptance: "close-reason",
+  publish: true,
+  headPinnedMerge: true,
+};
+
+const gitlabCapabilities: FactoryIssueCapabilities = {
+  provider: SourceControlProviderKind.make("gitlab"),
+  displayName: "GitLab",
+  blockedBy: "none",
+  subIssues: false,
+  closeAcceptance: "none",
+  publish: false,
+  headPinnedMerge: false,
+};
+
 function page(issues: FactoryIssue[], nextPage: number | null): FactoryIssueListResult {
-  return { repository, issues, nextPage, fetchedAt: "2026-01-01T00:00:00.000Z" };
+  return {
+    repository,
+    capabilities: githubCapabilities,
+    issues,
+    nextPage,
+    fetchedAt: "2026-01-01T00:00:00.000Z",
+  };
 }
 
 describe("applyFactoryIssuePage", () => {
@@ -138,6 +168,27 @@ describe("applyFactoryIssuePage", () => {
       },
     });
     expect(second.repository?.canonicalKey).toBe("github.com/other/repository");
+    expect(second.issues.map((entry) => entry.number)).toEqual([9]);
+  });
+});
+
+describe("applyFactoryIssuePage capabilities", () => {
+  it("takes the capabilities of the page, so a changed host replaces them", () => {
+    const first = applyFactoryIssuePage(EMPTY_FACTORY_ISSUE_PAGES, 1, page([issue()], 2));
+    expect(first.capabilities).toEqual(githubCapabilities);
+    const gitlabRepository: FactoryRepository = {
+      provider: SourceControlProviderKind.make("gitlab"),
+      host: "gitlab.com",
+      repository: "group/project",
+      canonicalKey: "gitlab.com/group/project",
+      url: "https://gitlab.com/group/project",
+    };
+    const second = applyFactoryIssuePage(first, 2, {
+      ...page([issue({ number: 9 })], null),
+      repository: gitlabRepository,
+      capabilities: gitlabCapabilities,
+    });
+    expect(second.capabilities).toEqual(gitlabCapabilities);
     expect(second.issues.map((entry) => entry.number)).toEqual([9]);
   });
 });
@@ -257,6 +308,15 @@ describe("describeFactoryFailure", () => {
     expect(
       describeFactoryFailure(new FactoryIssueError({ reason: "launch-failure" }), "x").kind,
     ).toBe("retry");
+  });
+
+  it("names the host in sign-in and rate-limit titles only when it is known", () => {
+    const auth = new FactoryIssueError({ reason: "authentication" });
+    const limited = new FactoryIssueError({ reason: "rate-limited" });
+    expect(describeFactoryFailure(auth, "x", "GitLab").title).toBe("GitLab sign-in required");
+    expect(describeFactoryFailure(limited, "x", "GitLab").title).toBe("GitLab rate limit reached");
+    expect(describeFactoryFailure(auth, "x").title).toBe("Sign-in required");
+    expect(describeFactoryFailure(limited, "x").title).toBe("Rate limit reached");
   });
 
   it("reports authorization failures as not permitted", () => {
@@ -474,13 +534,17 @@ describe("factory delivery", () => {
   });
 
   it("describes each intent status without inventing a link", () => {
-    expect(factoryDeliveryStatusView(intent({ status: "sending" })).text).toBe("Publishing…");
+    const { displayName } = githubCapabilities;
+    expect(factoryDeliveryStatusView(intent({ status: "sending" }), displayName).text).toBe(
+      "Publishing…",
+    );
     expect(
       factoryDeliveryStatusView(
         intent({
           status: "confirmed",
           remote: { number: 12, url: "https://github.com/owner/name/pull/12" },
         }),
+        displayName,
       ),
     ).toEqual({
       kind: "confirmed",
@@ -490,27 +554,51 @@ describe("factory delivery", () => {
     expect(
       factoryDeliveryStatusView(
         intent({ status: "confirmed", remote: { number: 12, url: "http://example.com" } }),
+        displayName,
       ),
     ).toMatchObject({ text: "Published pull request #12", link: null });
-    expect(factoryDeliveryStatusView(intent({ status: "failed", failure: "boom" })).text).toBe(
-      "boom",
+    expect(
+      factoryDeliveryStatusView(intent({ status: "failed", failure: "boom" }), displayName).text,
+    ).toBe("boom");
+    expect(factoryDeliveryStatusView(intent({ status: "unknown" }), displayName).text).toBe(
+      "The server lost the response. Reconcile to check GitHub.",
     );
-    expect(factoryDeliveryStatusView(intent({ status: "unknown" })).text).toContain("Reconcile");
+  });
+
+  it("names the host of the repository in host-specific copy", () => {
+    expect(factoryDeliveryStatusView(intent({ status: "unknown" }), "GitLab").text).toBe(
+      "The server lost the response. Reconcile to check GitLab.",
+    );
+    expect(factoryMergeabilityLabel("unknown", "GitLab")).toBe(
+      "GitLab has not decided mergeability yet",
+    );
+    expect(factoryMergeabilityLabel("conflicting", "GitLab")).toBe("Has merge conflicts");
+    expect(factoryMergeDraft("GitLab")).toBe(
+      "The pull request is a draft. Mark it ready for review on GitLab, then prepare again.",
+    );
+    expect(factoryMergeNotMergeable("GitLab")).toBe(
+      "GitLab reports the pull request cannot be merged right now.",
+    );
   });
 
   it("maps refusals to the next step a person can take", () => {
+    const { displayName } = githubCapabilities;
     for (const reason of ["head-moved", "acceptance-stale"] as const) {
-      expect(describeFactoryDeliveryFailure(new FactoryDeliveryError({ reason })).detail).toBe(
-        FACTORY_DELIVERY_HEAD_MOVED,
-      );
+      expect(
+        describeFactoryDeliveryFailure(new FactoryDeliveryError({ reason }), displayName).detail,
+      ).toBe(FACTORY_DELIVERY_HEAD_MOVED);
     }
     expect(
-      describeFactoryDeliveryFailure(new FactoryDeliveryError({ reason: "payload-changed" }))
-        .detail,
+      describeFactoryDeliveryFailure(
+        new FactoryDeliveryError({ reason: "payload-changed" }),
+        displayName,
+      ).detail,
     ).toBe(FACTORY_DELIVERY_PAYLOAD_CHANGED);
     expect(
-      describeFactoryDeliveryFailure(new FactoryDeliveryError({ reason: "already-delivering" }))
-        .detail,
+      describeFactoryDeliveryFailure(
+        new FactoryDeliveryError({ reason: "already-delivering" }),
+        displayName,
+      ).detail,
     ).toBe(FACTORY_DELIVERY_ALREADY_DELIVERING);
     expect(
       describeFactoryDeliveryFailure(
@@ -518,8 +606,26 @@ describe("factory delivery", () => {
           message: "nope",
           requiredScope: "source-control:write",
         }),
+        displayName,
       ).kind,
     ).toBe("auth");
+  });
+
+  it("maps capability-unsupported to the host's own one-line text", () => {
+    const error = new FactoryDeliveryError({ reason: "capability-unsupported" });
+    expect(factoryPublishUnsupportedText("GitLab")).toBe(
+      "Publishing from GitLab is not supported yet.",
+    );
+    expect(describeFactoryDeliveryFailure(error, "GitLab")).toEqual({
+      kind: "unsupported",
+      title: "Not supported",
+      detail: "Publishing from GitLab is not supported yet.",
+    });
+    expect(describeFactoryMergeFailure(error, "GitLab")).toEqual({
+      kind: "unsupported",
+      title: "Not supported",
+      detail: "Publishing from GitLab is not supported yet.",
+    });
   });
 
   describe("merge", () => {
@@ -545,6 +651,7 @@ describe("factory delivery", () => {
       liveIntent: null,
       prepared: mergePrepared,
       mergeMethod: "squash" as const,
+      displayName: githubCapabilities.displayName,
     };
     const withPullRequest = (overrides: Partial<typeof pullRequest> | { headSha: null }) => ({
       ...mergeGrantable,
@@ -582,10 +689,10 @@ describe("factory delivery", () => {
 
     it("states what GitHub would refuse before the tap", () => {
       expect(factoryMergeGrantBlocker(withPullRequest({ isDraft: true }))).toBe(
-        FACTORY_MERGE_DRAFT,
+        factoryMergeDraft("GitHub"),
       );
       expect(factoryMergeGrantBlocker(withPullRequest({ mergeability: "conflicting" }))).toBe(
-        FACTORY_MERGE_NOT_MERGEABLE,
+        factoryMergeNotMergeable("GitHub"),
       );
       // Unknown mergeability is GitHub still computing; branch protection decides at merge.
       expect(factoryMergeGrantBlocker(withPullRequest({ mergeability: "unknown" }))).toBeNull();
@@ -634,45 +741,56 @@ describe("factory delivery", () => {
 
     it("labels merge rows apart from publish rows", () => {
       const merging = intent({ kind: "merge-pr", payload: { mergeMethod: "squash" } });
-      expect(factoryDeliveryStatusView({ ...merging, status: "sending" }).text).toBe("Merging…");
+      const { displayName } = githubCapabilities;
+      expect(factoryDeliveryStatusView({ ...merging, status: "sending" }, displayName).text).toBe(
+        "Merging…",
+      );
       expect(
-        factoryDeliveryStatusView({
-          ...merging,
-          status: "confirmed",
-          remote: { number: 12, url: pullRequest.url },
-        }),
+        factoryDeliveryStatusView(
+          {
+            ...merging,
+            status: "confirmed",
+            remote: { number: 12, url: pullRequest.url },
+          },
+          displayName,
+        ),
       ).toEqual({
         kind: "confirmed",
         text: "Merged pull request #12",
         link: { label: "Open pull request #12", url: pullRequest.url },
       });
-      expect(factoryDeliveryStatusView({ ...merging, status: "failed" }).text).toBe(
+      expect(factoryDeliveryStatusView({ ...merging, status: "failed" }, displayName).text).toBe(
         "Merging failed.",
       );
-      expect(factoryDeliveryStatusView({ ...merging, status: "unknown" })).toMatchObject({
+      expect(
+        factoryDeliveryStatusView({ ...merging, status: "unknown" }, displayName),
+      ).toMatchObject({
         kind: "unknown",
-        text: expect.stringContaining("merge response"),
+        text: "The server lost the merge response. Reconcile to check GitHub.",
       });
     });
 
     it("maps merge refusals to the next step a person can take", () => {
+      const { displayName } = githubCapabilities;
       const cases = [
         ["not-published", FACTORY_MERGE_NOT_PUBLISHED],
         ["pull-request-head-moved", FACTORY_MERGE_PR_HEAD_MOVED],
         ["already-merged", FACTORY_MERGE_ALREADY_MERGED],
-        ["not-mergeable", FACTORY_MERGE_NOT_MERGEABLE],
+        ["not-mergeable", factoryMergeNotMergeable(displayName)],
         ["payload-changed", FACTORY_MERGE_METHOD_CHANGED],
         ["already-delivering", FACTORY_MERGE_ALREADY_MERGING],
         ["head-moved", FACTORY_DELIVERY_HEAD_MOVED],
       ] as const;
       for (const [reason, detail] of cases) {
-        expect(describeFactoryMergeFailure(new FactoryDeliveryError({ reason })).detail).toBe(
-          detail,
-        );
+        expect(
+          describeFactoryMergeFailure(new FactoryDeliveryError({ reason }), displayName).detail,
+        ).toBe(detail);
       }
       expect(
-        describeFactoryMergeFailure(new FactoryDeliveryError({ reason: "persistence-failure" }))
-          .title,
+        describeFactoryMergeFailure(
+          new FactoryDeliveryError({ reason: "persistence-failure" }),
+          displayName,
+        ).title,
       ).toBe("Couldn't merge");
     });
   });

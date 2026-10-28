@@ -117,6 +117,7 @@ export const FactoryReadinessReason = Schema.Literals([
   "remote-failure",
   "cycle",
   "overridden-not-ready",
+  "capability-unsupported",
 ]);
 export type FactoryReadinessReason = typeof FactoryReadinessReason.Type;
 

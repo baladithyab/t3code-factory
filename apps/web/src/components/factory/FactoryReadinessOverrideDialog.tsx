@@ -32,6 +32,7 @@ import { FactoryReviewFailure } from "./FactoryReview";
 export function FactoryReadinessOverrideDialog(props: {
   readonly row: FactoryReadinessEdgeRow;
   readonly action: FactoryReadinessOverrideAction;
+  readonly displayName: string;
   readonly canOperate: boolean;
   readonly pending: boolean;
   readonly failure: FactoryFailure | null;
@@ -61,7 +62,7 @@ export function FactoryReadinessOverrideDialog(props: {
       <DialogPopup className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{copy.title}</DialogTitle>
-          <DialogDescription>{copy.description}</DialogDescription>
+          <DialogDescription>{copy.description(props.displayName)}</DialogDescription>
         </DialogHeader>
         <DialogPanel>
           <fieldset disabled={pending || changed} className="min-w-0 space-y-4">

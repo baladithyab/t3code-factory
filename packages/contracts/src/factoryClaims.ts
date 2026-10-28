@@ -20,7 +20,13 @@ export type FactoryOriginKey = typeof FactoryOriginKey.Type;
 
 export const FactoryClaim = Schema.Struct({
   originKey: FactoryOriginKey,
-  origin: Schema.Literals(["github-issue", "feed-item", "research-run", "knowledge-brief"]),
+  origin: Schema.Literals([
+    "github-issue",
+    "gitlab-issue",
+    "feed-item",
+    "research-run",
+    "knowledge-brief",
+  ]),
   projectId: ProjectId,
   workspaceRoot: Schema.String,
   threadId: ThreadId,

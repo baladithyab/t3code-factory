@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type FactoryResearchProtocol,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -24,7 +25,7 @@ const protocol: FactoryResearchProtocol = {
   id: FactoryResearchProtocolId.make("protocol"),
   projectId: ProjectId.make("project"),
   repository: {
-    provider: "github",
+    provider: SourceControlProviderKind.make("github"),
     host: "github.com",
     repository: "owner/repo",
     canonicalKey: "github.com/owner/repo",

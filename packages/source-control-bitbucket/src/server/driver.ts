@@ -11,5 +11,6 @@ export const driver = defineSourceControlDriver({
     sourceControl: BitbucketSourceControlProvider.make,
     discovery: BitbucketSourceControlProvider.makeDiscovery,
     pullRequests: BitbucketPullRequestProvider.make,
+    issues: Effect.succeed(null),
   }),
 });

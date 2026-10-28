@@ -6,6 +6,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -59,7 +60,7 @@ const intent = (
   previousThreadId: ThreadId | null = null,
 ): Store.FactoryFeedLaunchIntent => ({
   repository: {
-    provider: "github",
+    provider: SourceControlProviderKind.make("github"),
     host: "github.com",
     repository: "owner/repo",
     canonicalKey: "github.com/owner/repo",
