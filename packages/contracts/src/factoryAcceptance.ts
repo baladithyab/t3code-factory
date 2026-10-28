@@ -87,7 +87,7 @@ export class FactoryAcceptanceError extends Schema.TaggedError<FactoryAcceptance
       case "head-moved":
         return "The worktree head moved since you reviewed it. Review the current commit before accepting.";
       case "already-accepted":
-        return "A commit is already accepted for this task. Acceptance is write-once.";
+        return "A commit is already accepted for this task. Re-accept at the current head to replace it.";
       case "persistence-failure":
         return "The environment could not read or save the acceptance.";
     }
