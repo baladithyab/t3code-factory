@@ -11,7 +11,7 @@ import { Atom } from "effect/reactivity";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { FACTORY_DEFAULT_RUNTIME_MODE, type FactoryIssueFilter } from "./factoryIssues";
 
-export type FactorySection = "overview" | "issues" | "workflows" | "orchestrator";
+export type FactorySection = "overview" | "issues" | "briefs" | "workflows" | "orchestrator";
 
 /**
  * Factory-owned scope and section, independent from Settings filters. Model and branch picker

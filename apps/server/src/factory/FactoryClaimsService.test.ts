@@ -22,6 +22,7 @@ import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
 import { type FactoryFeedLaunchIntent } from "../persistence/FactoryFeedStore.ts";
 import { type FactoryLaunchIntent } from "../persistence/FactoryIssueLaunches.ts";
+import { type FactoryKnowledgeLaunchIntent } from "../persistence/FactoryKnowledgeStore.ts";
 import { type FactoryResearchLaunchIntent } from "../persistence/FactoryResearchStore.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Projects from "../project/ProjectService.ts";
@@ -31,6 +32,7 @@ import * as Claims from "./FactoryClaimsService.ts";
 import {
   feedItemOriginKey,
   githubIssueOriginKey,
+  knowledgeBriefOriginKey,
   researchRunOriginKey,
 } from "./FactoryOriginKey.ts";
 import { type FactoryLaunchCore } from "./FactoryTaskLaunch.ts";
@@ -232,6 +234,7 @@ it.effect(
         admittedBy: environmentId,
         originConflict: false,
         acceptance: { headSha: "c".repeat(40), acceptedAt: at },
+        artifactAcceptance: null,
       });
       assert.deepInclude(result.claims, {
         originKey: feedKey,
@@ -246,6 +249,7 @@ it.effect(
         admittedBy: copiedFrom,
         originConflict: true,
         acceptance: null,
+        artifactAcceptance: null,
       });
       assert.deepInclude(result.claims, {
         originKey: researchKey,
@@ -260,7 +264,72 @@ it.effect(
         admittedBy: null,
         originConflict: false,
         acceptance: null,
+        artifactAcceptance: null,
       });
       assert.isString(result.fetchedAt);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "lists knowledge briefs of the project with no base ref and the artifact acceptance pin",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const intent: FactoryKnowledgeLaunchIntent = {
+        briefId: "brief:one",
+        briefRevision: "r".repeat(64),
+        title: "Survey",
+        projectId: caller,
+        workspaceRoot: "/second-repo",
+        requestCommandId: CommandId.make("request:brief"),
+        commandId: CommandId.make("command:brief"),
+        threadId: ThreadId.make("research"),
+        messageId: MessageId.make("message:brief"),
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        prompt: "Frozen brief",
+        createdBy: "user",
+        creationSource: "web",
+        createdAt: at,
+        admittedBy: environmentId,
+        previousThreadId: null,
+      };
+      const key = knowledgeBriefOriginKey(intent.briefId);
+      // A launch in another project and a retired attempt of this brief must not show.
+      for (const [thread, brief, project, superseded] of [
+        [intent.threadId, intent.briefId, caller, 0],
+        [ThreadId.make("retired"), intent.briefId, caller, 1],
+        [ThreadId.make("elsewhere"), "brief:two", owner, 0],
+      ] as const) {
+        const stored = { ...intent, threadId: thread, briefId: brief, projectId: project };
+        yield* sql`INSERT INTO factory_knowledge_launches (thread_id, brief_id, request_command_id, intent_json, origin_key, accepted, superseded)
+        VALUES (${thread}, ${brief}, ${`request:${thread}`}, ${JSON.stringify(stored)}, ${knowledgeBriefOriginKey(brief)}, 1, ${superseded})`;
+      }
+      for (const [id, superseded, sha] of [
+        ["old", 1, "a".repeat(64)],
+        ["live", 0, "b".repeat(64)],
+      ] as const) {
+        yield* sql`INSERT INTO factory_knowledge_acceptances (id, brief_id, thread_id, project_id, artifact_path, sha256, bytes, accepted_at, accepted_by, superseded)
+        VALUES (${id}, ${intent.briefId}, ${intent.threadId}, ${caller}, 'DELIVERABLE.md', ${sha}, 3, ${at}, ${environmentId}, ${superseded})`;
+      }
+      const result = yield* (yield* Claims.FactoryClaimsService).list({ projectId: caller });
+      assert.deepEqual(result.claims, [
+        {
+          originKey: key,
+          origin: "knowledge-brief",
+          projectId: caller,
+          workspaceRoot: "/second-repo",
+          threadId: intent.threadId,
+          status: "running",
+          baseRef: null,
+          createdAt: at,
+          creationSource: "web",
+          admittedBy: environmentId,
+          originConflict: false,
+          acceptance: null,
+          artifactAcceptance: { sha256: "b".repeat(64), acceptedAt: at },
+        },
+      ]);
     }).pipe(Effect.provide(layer)),
 );

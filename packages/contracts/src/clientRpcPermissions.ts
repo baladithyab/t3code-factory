@@ -24,6 +24,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.factoryAdmitResearchImplementation]: AuthOrchestrationOperateScope,
   [WS_METHODS.factoryAcceptCommit]: AuthOrchestrationOperateScope,
   [WS_METHODS.factoryGrantDelivery]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryCreateKnowledgeBrief]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryStartKnowledgeTask]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryAcceptKnowledgeArtifact]: AuthOrchestrationOperateScope,
   [WS_METHODS.factoryReconcileDelivery]: AuthOrchestrationOperateScope,
   // Binding causes server-side egress to a user-entered URL, like the OTLP endpoint check.
   [WS_METHODS.factoryBindFeedSource]: AuthSettingsWriteScope,

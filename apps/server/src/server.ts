@@ -8,8 +8,10 @@ import * as FactoryResearchService from "./factory/FactoryResearchService.ts";
 import * as FactoryResearchStore from "./persistence/FactoryResearchStore.ts";
 import * as FactoryClaimsService from "./factory/FactoryClaimsService.ts";
 import * as FactoryAcceptanceService from "./factory/FactoryAcceptanceService.ts";
+import * as FactoryKnowledgeService from "./factory/FactoryKnowledgeService.ts";
 import * as FactoryDeliveryService from "./factory/FactoryDeliveryService.ts";
 import * as FactoryAcceptanceStore from "./persistence/FactoryAcceptanceStore.ts";
+import * as FactoryKnowledgeStore from "./persistence/FactoryKnowledgeStore.ts";
 import * as FactoryDeliveryStore from "./persistence/FactoryDeliveryStore.ts";
 import * as FeedFetch from "./factory/FeedFetch.ts";
 import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
@@ -776,6 +778,7 @@ const layerMakeRoutes = Layer.mergeAll(
       FactoryResearchService.layer,
       FactoryClaimsService.layer,
       FactoryAcceptanceService.layer,
+      FactoryKnowledgeService.layer,
       FactoryDeliveryService.layer.pipe(Layer.provide(FactoryAcceptanceService.layer)),
       ProjectCoordinatorService.layer,
     ).pipe(
@@ -786,6 +789,7 @@ const layerMakeRoutes = Layer.mergeAll(
           FactoryFeedStore.layer,
           FactoryResearchStore.layer,
           FactoryAcceptanceStore.layer,
+          FactoryKnowledgeStore.layer,
           FactoryDeliveryStore.layer,
           // The same instance the effect worker drains, so a grant wakes it.
           EffectOutbox.layer,

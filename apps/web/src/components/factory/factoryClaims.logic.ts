@@ -195,6 +195,10 @@ export interface FactoryClaimRowPresentation {
     readonly shortSha: string;
     readonly acceptedAt: string;
   };
+  readonly acceptedArtifact?: {
+    readonly shortSha: string;
+    readonly acceptedAt: string;
+  };
 }
 
 /**
@@ -225,12 +229,20 @@ export function factoryClaimRowPresentation(input: {
       claim === null || result === undefined
         ? null
         : describeClaimProvenance(claimProvenance(claim, result.environmentId)),
-    ...(claim?.acceptance == null
+    ...(claim?.acceptance == null || claim.baseRef === null
       ? {}
       : {
           acceptedCommit: {
             shortSha: claim.acceptance.headSha.slice(0, 7),
             acceptedAt: claim.acceptance.acceptedAt,
+          },
+        }),
+    ...(claim?.artifactAcceptance == null
+      ? {}
+      : {
+          acceptedArtifact: {
+            shortSha: claim.artifactAcceptance.sha256.slice(0, 7),
+            acceptedAt: claim.artifactAcceptance.acceptedAt,
           },
         }),
   };

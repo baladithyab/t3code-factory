@@ -650,6 +650,7 @@ function claimsViewOf(
         admittedBy,
         originConflict: false,
         acceptance: null,
+        artifactAcceptance: null,
       },
     ],
   });

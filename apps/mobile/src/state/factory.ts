@@ -36,3 +36,13 @@ export const factoryDeliverySupportedAtom = Atom.family((environmentId: Environm
         .capabilities.factoryDelivery === true,
   ).pipe(Atom.withLabel(`mobile-factory-delivery-supported:${environmentId}`)),
 );
+
+// Briefs need the knowledge RPCs; an older server must read as unsupported, not as "no briefs".
+export const factoryKnowledgeSupportedAtom = Atom.family((environmentId: EnvironmentId | null) =>
+  Atom.make(
+    (get) =>
+      environmentId !== null &&
+      get(environmentPresentations.presentationAtom(environmentId))?.serverConfig?.environment
+        .capabilities.factoryKnowledge === true,
+  ).pipe(Atom.withLabel(`mobile-factory-knowledge-supported:${environmentId}`)),
+);

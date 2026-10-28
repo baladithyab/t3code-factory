@@ -99,6 +99,39 @@ export function createFactoryEnvironmentAtoms<R, E>(
     tag: WS_METHODS.factoryReadDeliveries,
     staleTimeMs: 0,
   });
+  // The artifact digest, `current` and the task's folder are derived from the file on every read,
+  // so a rewritten deliverable must show as changed on mount and refresh, never from a cache.
+  const listKnowledgeBriefs = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:factory:knowledge-briefs",
+    tag: WS_METHODS.factoryListKnowledgeBriefs,
+    staleTimeMs: 0,
+  });
+  const readKnowledgeTask = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:factory:knowledge-task",
+    tag: WS_METHODS.factoryReadKnowledgeTask,
+    staleTimeMs: 0,
+  });
+  const refreshKnowledgeBrief = (
+    target: {
+      readonly environmentId: EnvironmentId;
+      readonly input: { readonly projectId: ProjectId; readonly briefId: string };
+    },
+    registry: AtomRegistry.AtomRegistry,
+  ) =>
+    Effect.sync(() => {
+      registry.refresh(
+        listKnowledgeBriefs({
+          environmentId: target.environmentId,
+          input: { projectId: target.input.projectId },
+        }),
+      );
+      registry.refresh(
+        readKnowledgeTask({
+          environmentId: target.environmentId,
+          input: { projectId: target.input.projectId, briefId: target.input.briefId },
+        }),
+      );
+    });
   return {
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:factory:issues",
@@ -135,6 +168,50 @@ export function createFactoryEnvironmentAtoms<R, E>(
             }),
           );
         }),
+    }),
+    listKnowledgeBriefs,
+    readKnowledgeTask,
+    // Briefs are immutable and each command id is one authoring attempt, so only a retry of the
+    // same attempt coalesces. The brief has no read of its own yet; the list is what changed, even
+    // after a failed response that followed a persisted brief.
+    createKnowledgeBrief: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:create-knowledge-brief",
+      tag: WS_METHODS.factoryCreateKnowledgeBrief,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.projectId, input.commandId]),
+      },
+      onSettled: ({ environmentId, input }, registry) =>
+        Effect.sync(() => {
+          registry.refresh(
+            listKnowledgeBriefs({ environmentId, input: { projectId: input.projectId } }),
+          );
+        }),
+    }),
+    // The revision the reviewer saw is part of the key so a start against a replaced brief never
+    // joins an earlier request. A failed response can still follow a reserved launch.
+    startKnowledgeTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:start-knowledge-task",
+      tag: WS_METHODS.factoryStartKnowledgeTask,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.projectId, input.briefId, input.expectedRevision]),
+      },
+      onSettled: refreshKnowledgeBrief,
+    }),
+    // The digest the reviewer saw is part of the key: accepting different bytes is a different
+    // decision and never joins an in-flight request.
+    acceptKnowledgeArtifact: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:accept-knowledge-artifact",
+      tag: WS_METHODS.factoryAcceptKnowledgeArtifact,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.projectId, input.briefId, input.expectedSha256]),
+      },
+      onSettled: refreshKnowledgeBrief,
     }),
     prepareDelivery,
     readDeliveries,

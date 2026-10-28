@@ -4,6 +4,7 @@ import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
 import * as FactoryResearchService from "./factory/FactoryResearchService.ts";
 import * as FactoryClaimsService from "./factory/FactoryClaimsService.ts";
 import * as FactoryAcceptanceService from "./factory/FactoryAcceptanceService.ts";
+import * as FactoryKnowledgeService from "./factory/FactoryKnowledgeService.ts";
 import * as FactoryDeliveryService from "./factory/FactoryDeliveryService.ts";
 import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
@@ -1286,6 +1287,7 @@ export const layerWsRpc = (
       const factoryResearch = yield* FactoryResearchService.FactoryResearchService;
       const factoryClaims = yield* FactoryClaimsService.FactoryClaimsService;
       const factoryAcceptance = yield* FactoryAcceptanceService.FactoryAcceptanceService;
+      const factoryKnowledge = yield* FactoryKnowledgeService.FactoryKnowledgeService;
       const factoryDelivery = yield* FactoryDeliveryService.FactoryDeliveryService;
       const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
@@ -2592,6 +2594,11 @@ export const layerWsRpc = (
         [WS_METHODS.factoryListClaims]: (input) => factoryClaims.list(input),
         [WS_METHODS.factoryAcceptCommit]: (input) => factoryAcceptance.acceptCommit(input),
         [WS_METHODS.factoryReadAcceptance]: (input) => factoryAcceptance.read(input),
+        [WS_METHODS.factoryCreateKnowledgeBrief]: (input) => factoryKnowledge.createBrief(input),
+        [WS_METHODS.factoryListKnowledgeBriefs]: (input) => factoryKnowledge.list(input),
+        [WS_METHODS.factoryStartKnowledgeTask]: (input) => factoryKnowledge.start(input),
+        [WS_METHODS.factoryReadKnowledgeTask]: (input) => factoryKnowledge.read(input),
+        [WS_METHODS.factoryAcceptKnowledgeArtifact]: (input) => factoryKnowledge.accept(input),
         [WS_METHODS.factoryPrepareDelivery]: (input) => factoryDelivery.prepare(input),
         [WS_METHODS.factoryGrantDelivery]: (input) => factoryDelivery.grant(input),
         [WS_METHODS.factoryReadDeliveries]: (input) => factoryDelivery.read(input),
@@ -3333,6 +3340,7 @@ export const layer = Layer.unwrap(
     const factoryResearch = yield* FactoryResearchService.FactoryResearchService;
     const factoryClaims = yield* FactoryClaimsService.FactoryClaimsService;
     const factoryAcceptance = yield* FactoryAcceptanceService.FactoryAcceptanceService;
+    const factoryKnowledge = yield* FactoryKnowledgeService.FactoryKnowledgeService;
     const factoryDelivery = yield* FactoryDeliveryService.FactoryDeliveryService;
     const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
@@ -3423,6 +3431,9 @@ export const layer = Layer.unwrap(
               ),
               Layer.provide(
                 Layer.succeed(FactoryAcceptanceService.FactoryAcceptanceService, factoryAcceptance),
+              ),
+              Layer.provide(
+                Layer.succeed(FactoryKnowledgeService.FactoryKnowledgeService, factoryKnowledge),
               ),
               Layer.provide(
                 Layer.succeed(FactoryDeliveryService.FactoryDeliveryService, factoryDelivery),
