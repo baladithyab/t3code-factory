@@ -22,6 +22,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.factorySealResearchProtocol]: AuthOrchestrationOperateScope,
   [WS_METHODS.factoryLaunchResearchRun]: AuthOrchestrationOperateScope,
   [WS_METHODS.factoryAdmitResearchImplementation]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryAcceptCommit]: AuthOrchestrationOperateScope,
   // Binding causes server-side egress to a user-entered URL, like the OTLP endpoint check.
   [WS_METHODS.factoryBindFeedSource]: AuthSettingsWriteScope,
   [WS_METHODS.factoryUnbindFeedSource]: AuthSettingsWriteScope,
@@ -93,7 +94,8 @@ export function clientRpcRequiredScopes(
     method === WS_METHODS.factoryStartIssue ||
     method === WS_METHODS.factoryAdmitFeedCandidate ||
     method === WS_METHODS.factoryLaunchResearchRun ||
-    method === WS_METHODS.factoryAdmitResearchImplementation
+    method === WS_METHODS.factoryAdmitResearchImplementation ||
+    method === WS_METHODS.factoryAcceptCommit
   )
     return [AuthOrchestrationOperateScope, AuthSourceControlWriteScope];
   if (method === WS_METHODS.gitPreparePullRequestThread && input !== undefined) {
