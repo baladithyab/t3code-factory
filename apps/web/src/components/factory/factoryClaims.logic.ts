@@ -5,6 +5,7 @@ import {
   type FactoryClaimListResult,
   type FactoryIssueTask,
   type ProjectId,
+  type SourceControlProviderKind,
 } from "@t3tools/contracts";
 
 /**
@@ -20,8 +21,15 @@ function escapeOriginComponent(value: string): string {
   );
 }
 
-export function originKeyForIssue(repositoryKey: string, issueNumber: number): FactoryOriginKey {
-  return FactoryOriginKey.make(`github:${escapeOriginComponent(repositoryKey)}#${issueNumber}`);
+/** The provider kind is the namespace, so `github:` keys match rows written before other forges. */
+export function originKeyForIssue(
+  provider: SourceControlProviderKind,
+  repositoryKey: string,
+  issueNumber: number,
+): FactoryOriginKey {
+  return FactoryOriginKey.make(
+    `${provider}:${escapeOriginComponent(repositoryKey)}#${issueNumber}`,
+  );
 }
 
 export function originKeyForFeedItem(

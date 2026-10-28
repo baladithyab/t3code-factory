@@ -8,6 +8,7 @@ import {
   FactoryResearchProtocolId,
   ProjectId,
   ProviderInstanceId,
+  SourceControlProviderKind,
   ThreadId,
   type FactoryRepository,
   type FactoryResearchFinding,
@@ -50,7 +51,7 @@ const candidateCommit = "c".repeat(40);
 const laterCommit = "d".repeat(40);
 
 const repository: FactoryRepository = {
-  provider: "github",
+  provider: SourceControlProviderKind.make("github"),
   host: "github.com",
   repository: "owner/repo",
   canonicalKey: "github.com/owner/repo",

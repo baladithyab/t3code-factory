@@ -12,6 +12,7 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
+  SourceControlProviderKind,
   type FactoryIssueTask,
   type RepositoryIdentity,
 } from "@t3tools/contracts";
@@ -32,6 +33,7 @@ import {
   exceededDispatchModeLimit,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
+import * as IssueTrackers from "./IssueTrackerProviderRegistry.ts";
 
 export const FactoryLaunchCore = Schema.Struct({
   projectId: ProjectId,
@@ -64,26 +66,33 @@ type LaunchReason =
   | "provider-unavailable"
   | "launch-failure";
 
-function repositoryTarget(identity: RepositoryIdentity, remote: string): FactoryRepository | null {
+function repositoryTarget(
+  identity: RepositoryIdentity,
+  remote: string,
+  trackers: IssueTrackers.IssueTrackerProviderRegistry["Service"],
+) {
   const canonicalKey = normalizeGitRemoteUrl(remote);
   const detected = detectSourceControlProviderFromGitRemoteUrl(remote)?.kind;
   const provider =
     detected === "unknown" && canonicalKey === identity.canonicalKey ? identity.provider : detected;
-  if (provider !== "github") return null;
-  const match = /^([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)\/([a-z0-9_.-]+)\/([a-z0-9_.-]+)$/.exec(
-    canonicalKey,
-  );
+  const tracker =
+    provider === undefined ? null : trackers.get(SourceControlProviderKind.make(provider));
+  if (tracker === null) return null;
+  const match = /^([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)\/(.+)$/.exec(canonicalKey);
   if (match === null) return null;
-  const [, host, owner, name] = match;
-  if (!host || !owner || !name || owner === "." || owner === ".." || name === "." || name === "..")
-    return null;
-  const repository = `${owner}/${name}`;
+  const [, host, path] = match;
+  if (!host || !path) return null;
+  const repository = tracker.repositoryPath(path);
+  if (repository === null) return null;
   return {
-    provider: "github",
-    host,
-    repository,
-    canonicalKey,
-    url: `https://${host}/${repository}`,
+    tracker,
+    repository: {
+      provider: tracker.kind,
+      host,
+      repository,
+      canonicalKey,
+      url: `https://${host}/${repository}`,
+    } satisfies FactoryRepository,
   };
 }
 
@@ -91,6 +100,7 @@ export const makeRepositoryResolver = Effect.gen(function* () {
   const projects = yield* Projects.ProjectService;
   const identities = yield* Identities.RepositoryIdentityResolver;
   const git = yield* Git.GitVcsDriver;
+  const trackers = yield* IssueTrackers.IssueTrackerProviderRegistry;
   return Effect.fn("FactoryIssueService.resolve")(function* (projectId: ProjectId) {
     const project = yield* projects
       .getById(projectId)
@@ -119,10 +129,9 @@ export const makeRepositoryResolver = Effect.gen(function* () {
       origin.stdout.trim().length === 0
     )
       return yield* new FactoryIssueError({ reason: "missing-repository" });
-    const repository = repositoryTarget(identity, origin.stdout.trim());
-    if (repository === null)
-      return yield* new FactoryIssueError({ reason: "unsupported-provider" });
-    return { project: project.value, repository };
+    const target = repositoryTarget(identity, origin.stdout.trim(), trackers);
+    if (target === null) return yield* new FactoryIssueError({ reason: "unsupported-provider" });
+    return { project: project.value, ...target };
   });
 });
 

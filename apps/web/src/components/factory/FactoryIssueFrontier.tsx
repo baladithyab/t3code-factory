@@ -33,6 +33,7 @@ export function FactoryIssueFrontier(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly issueNumber: number;
+  readonly displayName: string;
 }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
@@ -55,6 +56,7 @@ export function FactoryIssueFrontier(props: {
           environmentId={props.environmentId}
           projectId={props.projectId}
           issueNumber={props.issueNumber}
+          displayName={props.displayName}
         />
       ) : null}
     </div>
@@ -67,6 +69,7 @@ function FactoryIssueFrontierPanel(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly issueNumber: number;
+  readonly displayName: string;
 }) {
   const nowMs = useNowSecond();
   const query = useEnvironmentQuery(
@@ -75,9 +78,14 @@ function FactoryIssueFrontierPanel(props: {
       input: { projectId: props.projectId, parentIssueNumber: props.issueNumber },
     }),
   );
-  const failure = query.error === null ? null : describeFactoryFailure(query.failure, query.error);
+  const failure =
+    query.error === null
+      ? null
+      : describeFactoryFailure(query.failure, query.error, props.displayName);
   const presentation =
-    failure === null && query.data !== null ? factoryFrontierPresentation(query.data, nowMs) : null;
+    failure === null && query.data !== null
+      ? factoryFrontierPresentation(query.data, nowMs, props.displayName)
+      : null;
   const refreshing = query.isPending;
 
   return (
@@ -125,7 +133,7 @@ function FactoryIssueFrontierPanel(props: {
           ) : (
             <Table>
               <caption className="sr-only">
-                Sub-issues of issue #{props.issueNumber}, in GitHub's order
+                Sub-issues of issue #{props.issueNumber}, in {props.displayName}'s order
               </caption>
               <TableHeader>
                 <TableRow>
@@ -171,8 +179,9 @@ function FactoryIssueFrontierPanel(props: {
             </Table>
           )}
           <p className="text-muted-foreground text-xs">
-            Read from GitHub's sub-issue list in its own order. Evidence only: it does not pick,
-            order or start work, and assignees are shown but never counted. Refresh observes again.
+            Read from {props.displayName}'s sub-issue list in its own order. Evidence only: it does
+            not pick, order or start work, and assignees are shown but never counted. Refresh
+            observes again.
           </p>
         </>
       )}

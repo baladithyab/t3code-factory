@@ -353,8 +353,8 @@ const make = Effect.gen(function* () {
     };
   });
   const repositoryResolver = yield* TaskLaunch.makeRepositoryResolver;
-  const resolve = Effect.fn("FactoryResearchService.resolve")((projectId: ProjectId) =>
-    repositoryResolver(projectId).pipe(
+  const resolve = Effect.fn("FactoryResearchService.resolve")(function* (projectId: ProjectId) {
+    const resolved = yield* repositoryResolver(projectId).pipe(
       Effect.mapError(
         (cause) =>
           new FactoryResearchError({
@@ -367,8 +367,13 @@ const make = Effect.gen(function* () {
             cause,
           }),
       ),
-    ),
-  );
+    );
+    // Research protocols are sealed against GitHub repositories only. The shared resolver widens
+    // with issue intake; research must not widen with it silently.
+    if (resolved.repository.provider !== "github")
+      return yield* new FactoryResearchError({ reason: "unsupported-provider" });
+    return resolved;
+  });
   const requireProtocol = Effect.fn("FactoryResearchService.requireProtocol")(function* (
     input: FactoryResearchProtocolReadInput,
   ) {

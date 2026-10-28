@@ -6,6 +6,7 @@ import {
   FactoryFeedSourceId,
   ProjectId,
   ProviderInstanceId,
+  SourceControlProviderKind,
   ThreadId,
   type FactoryFeedCandidate,
   type FactoryFeedSource,
@@ -35,7 +36,7 @@ const sourceId = FactoryFeedSourceId.make("source-1");
 const model: ModelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" };
 
 const repository: FactoryRepository = {
-  provider: "github",
+  provider: SourceControlProviderKind.make("github"),
   host: "github.com",
   repository: "owner/repo",
   canonicalKey: "github.com/owner/repo",

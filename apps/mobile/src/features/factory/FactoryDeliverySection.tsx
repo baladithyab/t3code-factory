@@ -4,6 +4,7 @@ import {
   type EnvironmentId,
   type FactoryDeliveryIntent,
   type FactoryDeliveryPublishPayload,
+  type FactoryIssueCapabilities,
   type ProjectId,
   type PullRequestMergeMethod,
   type ThreadId,
@@ -24,6 +25,7 @@ import {
   factoryMergeabilityLabel,
   factoryMergeGrantBlocker,
   factoryPullRequestHeadView,
+  factoryPublishUnsupportedText,
   factoryRepositoryLabel,
   safeFactoryIssueUrl,
   shortFactorySha,
@@ -33,11 +35,12 @@ import { useFactoryDelivery } from "./useFactoryIssueActions";
 
 function DeliveryStatusRow(props: {
   readonly intent: FactoryDeliveryIntent;
+  readonly displayName: string;
   readonly busy: boolean;
   readonly canReconcile: boolean;
   readonly onReconcile: (intent: FactoryDeliveryIntent) => void;
 }) {
-  const view = factoryDeliveryStatusView(props.intent);
+  const view = factoryDeliveryStatusView(props.intent, props.displayName);
   const link = view.kind === "confirmed" ? view.link : null;
   // Static text while the server publishes or merges: no spinner, so nothing repaints while it
   // waits.
@@ -66,7 +69,7 @@ function DeliveryStatusRow(props: {
           <Button
             tone="secondary"
             label="Reconcile"
-            accessibilityLabel="Reconcile with GitHub"
+            accessibilityLabel={`Reconcile with ${props.displayName}`}
             accessibilityHint={
               props.canReconcile
                 ? undefined
@@ -112,6 +115,7 @@ type Delivery = ReturnType<typeof useFactoryDelivery>;
  */
 function MergeSection(props: {
   readonly delivery: Delivery;
+  readonly displayName: string;
   readonly acceptedHeadSha: string | null;
   readonly acceptanceCurrent: boolean;
 }) {
@@ -130,6 +134,7 @@ function MergeSection(props: {
     liveIntent,
     prepared,
     mergeMethod,
+    displayName: props.displayName,
   });
   const prepareBlocker = props.acceptanceCurrent
     ? null
@@ -148,6 +153,7 @@ function MergeSection(props: {
         <DeliveryStatusRow
           key={intent.id}
           intent={intent}
+          displayName={props.displayName}
           busy={delivery.pending}
           canReconcile={delivery.canReconcile}
           onReconcile={(target) => void delivery.reconcile(target)}
@@ -203,7 +209,7 @@ function MergeSection(props: {
                     : "text-sm text-foreground"
                 }
               >
-                {factoryMergeabilityLabel(pullRequest.mergeability)}
+                {factoryMergeabilityLabel(pullRequest.mergeability, props.displayName)}
               </Text>
               {pullRequest.isDraft ? (
                 <Text className="text-sm text-danger-foreground">
@@ -247,7 +253,8 @@ function MergeSection(props: {
  * Publishing a pull request for the accepted commit, then merging it. The human previews the
  * exact title, body, head, and base, then grants that one preview; the server holds the forge
  * credentials and does the push and the merge. Nothing here retries on its own: a lost response
- * is settled by an explicit Reconcile, which reads GitHub and never creates or merges.
+ * is settled by an explicit Reconcile, which reads the host and never creates or merges. A host
+ * that cannot publish gets one line saying so instead of the controls.
  */
 export function FactoryDeliverySection(props: {
   readonly environmentId: EnvironmentId;
@@ -256,8 +263,40 @@ export function FactoryDeliverySection(props: {
   readonly issue: { readonly number: number; readonly title: string; readonly url: string };
   readonly acceptedHeadSha: string | null;
   readonly acceptanceCurrent: boolean;
+  readonly capabilities: FactoryIssueCapabilities;
 }) {
-  const delivery = useFactoryDelivery(props);
+  // Decided before the delivery hook runs, so a host that cannot publish never reads deliveries.
+  if (!props.capabilities.publish) {
+    return (
+      <View className="gap-2">
+        <Text accessibilityRole="header" className="text-sm font-t3-semibold text-foreground">
+          Pull request
+        </Text>
+        <Text className="text-sm text-foreground-muted">
+          {factoryPublishUnsupportedText(props.capabilities.displayName)}
+        </Text>
+      </View>
+    );
+  }
+  return <PublishSection {...props} />;
+}
+
+function PublishSection(props: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly threadId: ThreadId;
+  readonly issue: { readonly number: number; readonly title: string; readonly url: string };
+  readonly acceptedHeadSha: string | null;
+  readonly acceptanceCurrent: boolean;
+  readonly capabilities: FactoryIssueCapabilities;
+}) {
+  const { displayName } = props.capabilities;
+  const delivery = useFactoryDelivery({
+    environmentId: props.environmentId,
+    projectId: props.projectId,
+    threadId: props.threadId,
+    displayName,
+  });
   const [draft, setDraft] = useState<FactoryDeliveryPublishPayload>(() =>
     factoryDeliveryDefaultPayload(props.issue),
   );
@@ -291,6 +330,7 @@ export function FactoryDeliverySection(props: {
         <DeliveryStatusRow
           key={intent.id}
           intent={intent}
+          displayName={displayName}
           busy={delivery.pending}
           canReconcile={delivery.canReconcile}
           onReconcile={(target) => void delivery.reconcile(target)}
@@ -362,9 +402,11 @@ export function FactoryDeliverySection(props: {
         </>
       ) : null}
       {delivery.failure ? <FailureNotice failure={delivery.failure} live /> : null}
-      {delivery.published ? (
+      {/* Capabilities are a ceiling: a host that cannot pin the merge to the head gets no grant. */}
+      {delivery.published && props.capabilities.headPinnedMerge ? (
         <MergeSection
           delivery={delivery}
+          displayName={displayName}
           acceptedHeadSha={props.acceptedHeadSha}
           acceptanceCurrent={props.acceptanceCurrent}
         />

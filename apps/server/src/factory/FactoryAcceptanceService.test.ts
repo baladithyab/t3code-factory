@@ -6,6 +6,7 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  SourceControlProviderKind,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -20,7 +21,7 @@ import { type FactoryLaunchIntent } from "../persistence/FactoryIssueLaunches.ts
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Acceptance from "./FactoryAcceptanceService.ts";
-import { githubIssueOriginKey } from "./FactoryOriginKey.ts";
+import { issueOriginKey } from "./FactoryOriginKey.ts";
 
 const at = "2026-10-27T00:00:00.000Z";
 const environmentId = EnvironmentId.make("claim-holder");
@@ -34,7 +35,7 @@ const base = "b".repeat(40);
 
 const intent: FactoryLaunchIntent = {
   repository: {
-    provider: "github",
+    provider: SourceControlProviderKind.make("github"),
     host: "github.com",
     repository: "owner/repo",
     canonicalKey: "github.com/owner/repo",
@@ -112,7 +113,7 @@ const seedClaim = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`INSERT INTO factory_issue_launches (thread_id, canonical_key, issue_number, request_command_id, intent_json, origin_key)
     VALUES (${claimed}, ${intent.repository.canonicalKey}, 7, ${intent.requestCommandId}, ${JSON.stringify(intent)},
-      ${githubIssueOriginKey(intent.repository.canonicalKey, 7)})`;
+      ${issueOriginKey(intent.repository.provider, intent.repository.canonicalKey, 7)})`;
 });
 const accept = Effect.fn("AcceptanceTest.accept")(function* (
   expectedHeadSha: string,
@@ -145,7 +146,7 @@ it.effect("accepting pins the observed head, the resolved base and the claim hol
     assert.equal(accepted.current, true);
     assert.equal(accepted.liveHeadSha, first);
     assert.deepInclude(accepted.acceptance, {
-      originKey: githubIssueOriginKey(intent.repository.canonicalKey, 7),
+      originKey: issueOriginKey(intent.repository.provider, intent.repository.canonicalKey, 7),
       threadId: claimed,
       projectId,
       headSha: first,

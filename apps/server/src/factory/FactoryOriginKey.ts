@@ -1,11 +1,17 @@
-import { FactoryOriginKey } from "@t3tools/contracts";
+import { FactoryOriginKey, type SourceControlProviderKind } from "@t3tools/contracts";
 
 // Escape the escape marker too, so literal percent sequences cannot impersonate delimiters.
 const component = (value: string) =>
   value.replaceAll("%", "%25").replaceAll("|", "%7C").replaceAll("#", "%23").replaceAll(":", "%3A");
 
-export const githubIssueOriginKey = (canonicalKey: string, number: number): FactoryOriginKey =>
-  FactoryOriginKey.make(`github:${component(canonicalKey)}#${number}`);
+// The provider kind is the namespace, so `github:` keys stay byte-identical to the rows written
+// before other forges existed. The canonical key already carries the host, so two forges never
+// produce the same key for different issues.
+export const issueOriginKey = (
+  provider: SourceControlProviderKind,
+  canonicalKey: string,
+  number: number,
+): FactoryOriginKey => FactoryOriginKey.make(`${provider}:${component(canonicalKey)}#${number}`);
 
 export const feedItemOriginKey = (
   canonicalKey: string,

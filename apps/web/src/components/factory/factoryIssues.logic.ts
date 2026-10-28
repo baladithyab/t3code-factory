@@ -132,7 +132,15 @@ const isFactoryIssueError = Schema.is(FactoryIssueError);
 
 const GENERIC_FAILURE_MESSAGE = "The environment request failed.";
 
-export function describeFactoryFailure(error: unknown, fallbackMessage?: string): FactoryFailure {
+/**
+ * `displayName` names the issue host in titles that blame it. A failure raised before any issue
+ * read has answered carries none, so those titles stay host-neutral instead of guessing one.
+ */
+export function describeFactoryFailure(
+  error: unknown,
+  fallbackMessage?: string,
+  displayName?: string,
+): FactoryFailure {
   if (isAuthorizationError(error)) {
     return {
       kind: "permission",
@@ -183,14 +191,15 @@ export function describeFactoryFailure(error: unknown, fallbackMessage?: string)
       case "authentication":
         return {
           kind: "other",
-          title: "GitHub sign-in required",
+          title: displayName === undefined ? "Sign-in required" : `${displayName} sign-in required`,
           message: error.message,
           reason: error.reason,
         };
       case "rate-limited":
         return {
           kind: "other",
-          title: "GitHub rate limit reached",
+          title:
+            displayName === undefined ? "Rate limit reached" : `${displayName} rate limit reached`,
           message: error.message,
           reason: error.reason,
         };
@@ -307,26 +316,51 @@ export interface FactoryReadinessPresentation {
   readonly overridesLockedReason: string | null;
 }
 
-// Keyed by the contract's reason union, so a new server reason fails to compile here instead of
-// reaching the screen as a raw token.
-const READINESS_REASON_LABELS: Record<FactoryReadinessReason, string> = {
-  "closed-subject": "the issue is closed",
-  "open-blocker": "a blocker is still open",
-  "unaccepted-blocker": "a blocker was closed without completion",
-  "deleted-blocker": "a blocker was deleted",
-  "inaccessible-blocker": "a blocker is not accessible",
-  "moved-blocker": "a blocker moved",
-  "unverified-blocker": "a blocker could not be verified",
-  "partial-listing": "GitHub returned only part of the blocker list",
-  "summary-missing": "GitHub did not report how many blockers exist",
-  "truncated-response": "the blocker list was truncated",
-  "invalid-response": "GitHub returned a response that could not be read",
-  authentication: "GitHub sign-in is required",
-  "rate-limited": "the GitHub rate limit was reached",
-  "remote-failure": "GitHub could not be reached",
-  cycle: "the blockers form a cycle",
-  "overridden-not-ready": "a blocker is disputed",
-};
+// A switch over the contract's reason union, so a new server reason fails to compile here instead
+// of reaching the screen as a raw token.
+function readinessReasonLabel(reason: FactoryReadinessReason, displayName: string): string {
+  switch (reason) {
+    case "closed-subject":
+      return "the issue is closed";
+    case "open-blocker":
+      return "a blocker is still open";
+    case "unaccepted-blocker":
+      return "a blocker was closed without completion";
+    case "deleted-blocker":
+      return "a blocker was deleted";
+    case "inaccessible-blocker":
+      return "a blocker is not accessible";
+    case "moved-blocker":
+      return "a blocker moved";
+    case "unverified-blocker":
+      return "a blocker could not be verified";
+    case "partial-listing":
+      return `${displayName} returned only part of the blocker list`;
+    case "summary-missing":
+      return `${displayName} did not report how many blockers exist`;
+    case "truncated-response":
+      return "the blocker list was truncated";
+    case "invalid-response":
+      return `${displayName} returned a response that could not be read`;
+    case "authentication":
+      return `${displayName} sign-in is required`;
+    case "rate-limited":
+      return `the ${displayName} rate limit was reached`;
+    case "remote-failure":
+      return `${displayName} could not be reached`;
+    case "capability-unsupported":
+      return `${displayName} does not expose blocking relationships`;
+    case "cycle":
+      return "the blockers form a cycle";
+    case "overridden-not-ready":
+      return "a blocker is disputed";
+  }
+}
+
+/** The whole blockers panel for a host whose API cannot express blocking relationships. */
+export function factoryBlockersUnsupportedMessage(displayName: string): string {
+  return `${displayName} does not expose blocking relationships; readiness stays unknown.`;
+}
 
 function edgeStateLabel(edge: FactoryReadinessEdge): string {
   if (edge.state === "open") return "Open";
@@ -481,6 +515,7 @@ function readinessVerdict(
   readiness: FactoryReadiness,
   active: ReadonlyMap<FactoryReadinessOverrideId, FactoryReadinessOverride>,
   now: number,
+  displayName: string,
 ): ReadinessVerdict {
   const stale = !(now - Date.parse(readiness.observedAt) <= FACTORY_READINESS_TTL_MS);
   let label: string;
@@ -521,7 +556,7 @@ function readinessVerdict(
     }
     case "unknown": {
       const reason = readiness.reasons[0];
-      label = `Readiness unknown: ${reason === undefined ? "no reason reported" : READINESS_REASON_LABELS[reason]}`;
+      label = `Readiness unknown: ${reason === undefined ? "no reason reported" : readinessReasonLabel(reason, displayName)}`;
       tone = "info";
       break;
     }
@@ -545,9 +580,10 @@ function readinessVerdict(
 export function factoryReadinessPresentation(
   readiness: FactoryReadiness,
   now: number,
+  displayName: string,
 ): FactoryReadinessPresentation {
   const active = activeOverridesById(readiness);
-  const verdict = readinessVerdict(readiness, active, now);
+  const verdict = readinessVerdict(readiness, active, now, displayName);
   const overridable = readiness.status !== "not-applicable";
   return {
     label: verdict.label,
@@ -592,6 +628,7 @@ export interface FactoryFrontierPresentation {
 export function factoryFrontierPresentation(
   result: FactoryIssueFrontierReadResult,
   now: number,
+  displayName: string,
 ): FactoryFrontierPresentation {
   const rows = result.children.map((child): FactoryFrontierRow => {
     const title = child.title.trim();
@@ -605,7 +642,7 @@ export function factoryFrontierPresentation(
       tone = "info";
     } else {
       const active = activeOverridesById(child.readiness);
-      ({ label: verdictLabel, tone } = readinessVerdict(child.readiness, active, now));
+      ({ label: verdictLabel, tone } = readinessVerdict(child.readiness, active, now, displayName));
     }
     return {
       key: String(child.number),
@@ -623,8 +660,8 @@ export function factoryFrontierPresentation(
   if (!result.complete) {
     note =
       result.summaryTotal === null
-        ? "Incomplete: GitHub did not report how many sub-issues exist, so this list may be missing some."
-        : `Incomplete: GitHub reports ${result.summaryTotal} ${result.summaryTotal === 1 ? "sub-issue" : "sub-issues"}, ${rows.length} listed here. This list may be missing some.`;
+        ? `Incomplete: ${displayName} did not report how many sub-issues exist, so this list may be missing some.`
+        : `Incomplete: ${displayName} reports ${result.summaryTotal} ${result.summaryTotal === 1 ? "sub-issue" : "sub-issues"}, ${rows.length} listed here. This list may be missing some.`;
   }
   return {
     rows,
@@ -639,7 +676,7 @@ export const FACTORY_OVERRIDE_ACTIONS: Record<
     readonly kind: FactoryReadinessOverrideKind;
     readonly buttonLabel: string;
     readonly title: string;
-    readonly description: string;
+    readonly description: (displayName: string) => string;
     readonly confirmLabel: string;
     readonly pendingLabel: string;
   }
@@ -648,8 +685,8 @@ export const FACTORY_OVERRIDE_ACTIONS: Record<
     kind: "force-not-ready",
     buttonLabel: "Dispute",
     title: "Dispute blocker",
-    description:
-      "GitHub reports this blocker as completed. Recording a dispute keeps the issue reading as blocked until you revoke it or the blocker changes. It is your recorded decision and never allows or prevents starting work.",
+    description: (displayName) =>
+      `${displayName} reports this blocker as completed. Recording a dispute keeps the issue reading as blocked until you revoke it or the blocker changes. It is your recorded decision and never allows or prevents starting work.`,
     confirmLabel: "Record dispute",
     pendingLabel: "Recording…",
   },
@@ -657,8 +694,8 @@ export const FACTORY_OVERRIDE_ACTIONS: Record<
     kind: "waive",
     buttonLabel: "Waive",
     title: "Waive blocker",
-    description:
-      "This blocker can no longer be resolved or verified on GitHub. Waiving it stops counting it, so the issue can read as having no unresolved blockers with the basis shown as override. It lapses if the blocker changes, and never allows or prevents starting work.",
+    description: (displayName) =>
+      `This blocker can no longer be resolved or verified on ${displayName}. Waiving it stops counting it, so the issue can read as having no unresolved blockers with the basis shown as override. It lapses if the blocker changes, and never allows or prevents starting work.`,
     confirmLabel: "Record waiver",
     pendingLabel: "Recording…",
   },

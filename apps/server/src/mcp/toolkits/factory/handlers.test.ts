@@ -12,6 +12,7 @@ import {
   ProjectId,
   ProjectCoordinatorError,
   ProviderInstanceId,
+  SourceControlProviderKind,
   ThreadId,
   type AuthMcpClientAccess,
   type OrchestratorMcpFailure,
@@ -199,7 +200,7 @@ it.effect.each([true, false])(
       let called = false;
       const result = {
         repository: {
-          provider: "github" as const,
+          provider: SourceControlProviderKind.make("github"),
           host: "github.com",
           repository: "owner/repo",
           canonicalKey: "github.com/owner/repo",
@@ -686,7 +687,7 @@ it.effect.each([true, false])(
       let called = false;
       const result = {
         repository: {
-          provider: "github" as const,
+          provider: SourceControlProviderKind.make("github"),
           host: "github.com",
           repository: "owner/repo",
           canonicalKey: "github.com/owner/repo",
@@ -897,7 +898,7 @@ it.effect.each([true, false])(
       const result = {
         environmentId: EnvironmentId.make("claim-owner"),
         repository: {
-          provider: "github" as const,
+          provider: SourceControlProviderKind.make("github"),
           host: "github.com",
           repository: "owner/repo",
           canonicalKey: "github.com/owner/repo",

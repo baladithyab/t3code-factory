@@ -11,7 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
-import { feedItemOriginKey, githubIssueOriginKey } from "../factory/FactoryOriginKey.ts";
+import { feedItemOriginKey, issueOriginKey } from "../factory/FactoryOriginKey.ts";
 import { FactoryFeedLaunchIntent } from "./FactoryFeedStore.ts";
 import { FactoryLaunchIntent } from "./FactoryIssueLaunches.ts";
 
@@ -25,7 +25,7 @@ const decodeOrigins = Schema.decodeUnknownEffect(
   Schema.Array(
     Schema.Union([
       Schema.Struct({
-        origin: Schema.Literal("github-issue"),
+        origin: Schema.Literal("issue"),
         originKey: Schema.NullOr(FactoryOriginKey),
         intent: Schema.fromJsonString(FactoryLaunchIntent),
       }),
@@ -81,7 +81,7 @@ const make = Effect.gen(function* () {
   ) {
     const rows = yield* decodeOrigins(
       yield* sql`
-        SELECT 'github-issue' AS origin, origin_key AS originKey, intent_json AS intent
+        SELECT 'issue' AS origin, origin_key AS originKey, intent_json AS intent
         FROM factory_issue_launches WHERE thread_id = ${threadId} AND superseded = 0
         UNION ALL
         SELECT 'feed-item', origin_key, intent_json
@@ -93,8 +93,12 @@ const make = Effect.gen(function* () {
     // Rows admitted before origin keys were recorded derive the same key the claims list shows.
     const originKey =
       row.originKey ??
-      (row.origin === "github-issue"
-        ? githubIssueOriginKey(row.intent.repository.canonicalKey, row.intent.issue.number)
+      (row.origin === "issue"
+        ? issueOriginKey(
+            row.intent.repository.provider,
+            row.intent.repository.canonicalKey,
+            row.intent.issue.number,
+          )
         : feedItemOriginKey(
             row.intent.repository.canonicalKey,
             row.intent.snapshot.feed,

@@ -12,6 +12,7 @@ import {
   type FactoryDeliveryPrepareResult,
   type FactoryDeliveryPublishPayload,
   type FactoryIssue,
+  type FactoryIssueCapabilities,
   type FactoryIssueListResult,
   type FactoryIssueTask,
   type FactoryRepository,
@@ -40,6 +41,8 @@ export const FACTORY_SUPERVISION_NOTICE =
 
 export interface FactoryIssuePages {
   readonly repository: FactoryRepository | null;
+  /** What the issue host supports; null until the first page lands. */
+  readonly capabilities: FactoryIssueCapabilities | null;
   readonly issues: ReadonlyArray<FactoryIssue>;
   readonly nextPage: number | null;
   readonly fetchedAt: string | null;
@@ -47,6 +50,7 @@ export interface FactoryIssuePages {
 
 export const EMPTY_FACTORY_ISSUE_PAGES: FactoryIssuePages = {
   repository: null,
+  capabilities: null,
   issues: [],
   nextPage: null,
   fetchedAt: null,
@@ -64,6 +68,7 @@ export function applyFactoryIssuePage(
   if (page <= 1 || current.repository?.canonicalKey !== result.repository.canonicalKey) {
     return {
       repository: result.repository,
+      capabilities: result.capabilities,
       issues: result.issues,
       nextPage: result.nextPage,
       fetchedAt: result.fetchedAt,
@@ -80,6 +85,7 @@ export function applyFactoryIssuePage(
   }
   return {
     repository: result.repository,
+    capabilities: result.capabilities,
     issues: merged,
     nextPage: result.nextPage,
     fetchedAt: result.fetchedAt,
@@ -195,8 +201,16 @@ const isFactoryAcceptanceError = Schema.is(FactoryAcceptanceError);
 const isFactoryDeliveryError = Schema.is(FactoryDeliveryError);
 const isAuthorizationError = Schema.is(EnvironmentAuthorizationError);
 
-/** Maps a typed failure to text a person can act on; unknown failures keep their own message. */
-export function describeFactoryFailure(error: unknown, fallbackTitle: string): FactoryFailure {
+/**
+ * Maps a typed failure to text a person can act on; unknown failures keep their own message.
+ * `displayName` names the issue host when it is known; a list that never loaded has none, so the
+ * title stays provider-neutral rather than guessing a host.
+ */
+export function describeFactoryFailure(
+  error: unknown,
+  fallbackTitle: string,
+  displayName?: string,
+): FactoryFailure {
   if (isAuthorizationError(error)) {
     return {
       kind: "auth",
@@ -209,9 +223,17 @@ export function describeFactoryFailure(error: unknown, fallbackTitle: string): F
       case "unsupported-provider":
         return { kind: "unsupported", title: "Repository not supported", detail: error.message };
       case "authentication":
-        return { kind: "auth", title: "GitHub sign-in required", detail: error.message };
+        return {
+          kind: "auth",
+          title: displayName ? `${displayName} sign-in required` : "Sign-in required",
+          detail: error.message,
+        };
       case "rate-limited":
-        return { kind: "retry", title: "GitHub rate limit reached", detail: error.message };
+        return {
+          kind: "retry",
+          title: displayName ? `${displayName} rate limit reached` : "Rate limit reached",
+          detail: error.message,
+        };
       case "missing-project":
       case "missing-repository":
       case "repository-changed":
@@ -418,24 +440,27 @@ export const FACTORY_MERGE_NOT_PUBLISHED = "Publish the pull request first.";
 export const FACTORY_MERGE_PR_HEAD_MOVED =
   "The pull request head is not the accepted commit. Re-accept and refresh.";
 export const FACTORY_MERGE_ALREADY_MERGED = "This pull request is already merged.";
-export const FACTORY_MERGE_NOT_MERGEABLE =
-  "GitHub reports the pull request cannot be merged right now.";
+export const factoryMergeNotMergeable = (displayName: string) =>
+  `${displayName} reports the pull request cannot be merged right now.`;
 export const FACTORY_MERGE_ALREADY_MERGING = "A merge is already in progress for this task.";
 export const FACTORY_MERGE_METHOD_CHANGED =
   "The merge method changed since the preview. Prepare again.";
-export const FACTORY_MERGE_DRAFT =
-  "The pull request is a draft. Mark it ready for review on GitHub, then prepare again.";
+export const factoryMergeDraft = (displayName: string) =>
+  `The pull request is a draft. Mark it ready for review on ${displayName}, then prepare again.`;
 
 type FactoryMergePullRequest = NonNullable<FactoryDeliveryPrepareResult["pullRequest"]>;
 
-export function factoryMergeabilityLabel(mergeability: PullRequestMergeability): string {
+export function factoryMergeabilityLabel(
+  mergeability: PullRequestMergeability,
+  displayName: string,
+): string {
   switch (mergeability) {
     case "mergeable":
       return "No merge conflicts";
     case "conflicting":
       return "Has merge conflicts";
     case "unknown":
-      return "GitHub has not decided mergeability yet";
+      return `${displayName} has not decided mergeability yet`;
   }
 }
 
@@ -463,9 +488,9 @@ export function factoryPullRequestHeadView(
 }
 
 /**
- * Why Grant merge is unavailable, or null when it may be pressed. GitHub branch protection
+ * Why Grant merge is unavailable, or null when it may be pressed. The host's branch protection
  * still decides required checks and reviews; this only states what would make the server or
- * GitHub refuse this exact grant.
+ * the host refuse this exact grant.
  */
 export function factoryMergeGrantBlocker(input: {
   readonly permitted: boolean;
@@ -474,6 +499,7 @@ export function factoryMergeGrantBlocker(input: {
   readonly liveIntent: FactoryDeliveryIntent | null;
   readonly prepared: FactoryDeliveryPrepareResult | null;
   readonly mergeMethod: PullRequestMergeMethod;
+  readonly displayName: string;
 }): string | null {
   if (!input.permitted) {
     return "This connection isn't permitted to merge pull requests in this environment.";
@@ -496,8 +522,10 @@ export function factoryMergeGrantBlocker(input: {
   if (!factoryPullRequestHeadView(pullRequest, input.acceptedHeadSha).matches) {
     return FACTORY_MERGE_PR_HEAD_MOVED;
   }
-  if (pullRequest.isDraft) return FACTORY_MERGE_DRAFT;
-  if (pullRequest.mergeability === "conflicting") return FACTORY_MERGE_NOT_MERGEABLE;
+  if (pullRequest.isDraft) return factoryMergeDraft(input.displayName);
+  if (pullRequest.mergeability === "conflicting") {
+    return factoryMergeNotMergeable(input.displayName);
+  }
   if (prepared.existing !== null && isLiveFactoryDelivery(prepared.existing)) {
     return prepared.existing.status === "confirmed"
       ? FACTORY_MERGE_ALREADY_MERGED
@@ -528,6 +556,7 @@ export type FactoryDeliveryStatusView =
 /** Publish and merge rows share a list shape, so each says which act it records. */
 export function factoryDeliveryStatusView(
   intent: FactoryDeliveryIntent,
+  displayName: string,
 ): FactoryDeliveryStatusView {
   const merge = intent.kind === "merge-pr";
   switch (intent.status) {
@@ -559,13 +588,20 @@ export function factoryDeliveryStatusView(
       return {
         kind: "unknown",
         text: merge
-          ? "The server lost the merge response. Reconcile to check GitHub."
-          : "The server lost the response. Reconcile to check GitHub.",
+          ? `The server lost the merge response. Reconcile to check ${displayName}.`
+          : `The server lost the response. Reconcile to check ${displayName}.`,
       };
   }
 }
 
-export function describeFactoryDeliveryFailure(error: unknown): FactoryFailure {
+/** What a host that cannot publish says instead of offering the pull request controls. */
+export const factoryPublishUnsupportedText = (displayName: string) =>
+  `Publishing from ${displayName} is not supported yet.`;
+
+export function describeFactoryDeliveryFailure(
+  error: unknown,
+  displayName: string,
+): FactoryFailure {
   if (isFactoryDeliveryError(error)) {
     switch (error.reason) {
       case "head-moved":
@@ -591,14 +627,20 @@ export function describeFactoryDeliveryFailure(error: unknown): FactoryFailure {
         };
       case "worktree-unavailable":
         return { kind: "repository", title: "Worktree unavailable", detail: error.message };
+      case "capability-unsupported":
+        return {
+          kind: "unsupported",
+          title: "Not supported",
+          detail: factoryPublishUnsupportedText(displayName),
+        };
       default:
         return { kind: "error", title: "Couldn't publish", detail: error.message };
     }
   }
-  return describeFactoryFailure(error, "Couldn't publish");
+  return describeFactoryFailure(error, "Couldn't publish", displayName);
 }
 
-export function describeFactoryMergeFailure(error: unknown): FactoryFailure {
+export function describeFactoryMergeFailure(error: unknown, displayName: string): FactoryFailure {
   if (isFactoryDeliveryError(error)) {
     switch (error.reason) {
       case "not-published":
@@ -612,7 +654,11 @@ export function describeFactoryMergeFailure(error: unknown): FactoryFailure {
       case "already-merged":
         return { kind: "changed", title: "Already merged", detail: FACTORY_MERGE_ALREADY_MERGED };
       case "not-mergeable":
-        return { kind: "retry", title: "Not mergeable", detail: FACTORY_MERGE_NOT_MERGEABLE };
+        return {
+          kind: "retry",
+          title: "Not mergeable",
+          detail: factoryMergeNotMergeable(displayName),
+        };
       case "head-moved":
       case "acceptance-stale":
         return { kind: "changed", title: "Head moved", detail: FACTORY_DELIVERY_HEAD_MOVED };
@@ -630,9 +676,15 @@ export function describeFactoryMergeFailure(error: unknown): FactoryFailure {
           title: "No accepted commit",
           detail: "Accept a commit before merging a pull request.",
         };
+      case "capability-unsupported":
+        return {
+          kind: "unsupported",
+          title: "Not supported",
+          detail: factoryPublishUnsupportedText(displayName),
+        };
       default:
         return { kind: "error", title: "Couldn't merge", detail: error.message };
     }
   }
-  return describeFactoryFailure(error, "Couldn't merge");
+  return describeFactoryFailure(error, "Couldn't merge", displayName);
 }

@@ -6,6 +6,7 @@ import {
   ProjectId,
   ThreadId,
   type FactoryDeliveryIntent,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -27,7 +28,7 @@ const intent = (
   kind: "publish-pr",
   acceptanceId: "acceptance:1",
   repository: {
-    provider: "github",
+    provider: SourceControlProviderKind.make("github"),
     host: "github.com",
     repository: "owner/repo",
     canonicalKey: "github.com/owner/repo",

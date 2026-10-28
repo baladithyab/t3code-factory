@@ -1,4 +1,5 @@
 import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
+import * as IssueTrackerProviderRegistry from "./factory/IssueTrackerProviderRegistry.ts";
 import * as FactoryIssueLaunches from "./persistence/FactoryIssueLaunches.ts";
 import * as FactoryIssueRelations from "./factory/FactoryIssueRelations.ts";
 import * as FactoryIssueRelationStore from "./persistence/FactoryIssueRelationStore.ts";
@@ -652,6 +653,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
+  Layer.provideMerge(IssueTrackerProviderRegistry.layer),
   Layer.provideMerge(layerServerSettings),
   Layer.provideMerge(layerSourceControlProviderRegistry),
   Layer.provideMerge(layerGit),

@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   FactoryOriginKey,
   ProjectId,
+  SourceControlProviderKind,
   ThreadId,
   type FactoryClaim,
   type FactoryClaimListResult,
@@ -29,7 +30,9 @@ const there = EnvironmentId.make("env-there");
 const third = EnvironmentId.make("env-third");
 const projectId = ProjectId.make("project-1");
 const otherProjectId = ProjectId.make("project-2");
-const issueKey = originKeyForIssue("github.com/example/repo", 12);
+const github = SourceControlProviderKind.make("github");
+const gitlab = SourceControlProviderKind.make("gitlab");
+const issueKey = originKeyForIssue(github, "github.com/example/repo", 12);
 
 const labels: Record<string, string> = { [here]: "Laptop", [there]: "Dev box", [third]: "CI" };
 const labelOf = (id: EnvironmentId) => labels[id] ?? id;
@@ -60,7 +63,7 @@ function result(
   return {
     environmentId,
     repository: {
-      provider: "github",
+      provider: github,
       host: "github.com",
       repository: "example/repo",
       canonicalKey: "github.com/example/repo",
@@ -73,8 +76,17 @@ function result(
 
 describe("origin keys", () => {
   it("encodes a GitHub issue as github:<repository>#<number>", () => {
-    expect(originKeyForIssue("github.com/example/repo", 12)).toBe(
+    expect(originKeyForIssue(github, "github.com/example/repo", 12)).toBe(
       "github:github.com/example/repo#12",
+    );
+  });
+
+  it("encodes a GitLab issue under its own provider prefix, keeping the project path", () => {
+    expect(originKeyForIssue(gitlab, "gitlab.com/group/sub/project", 12)).toBe(
+      "gitlab:gitlab.com/group/sub/project#12",
+    );
+    expect(originKeyForIssue(gitlab, "forge.example/repo", 1)).not.toBe(
+      originKeyForIssue(github, "forge.example/repo", 1),
     );
   });
 
@@ -89,7 +101,7 @@ describe("origin keys", () => {
   });
 
   it("escapes %, |, # and : in every component and keeps slashes", () => {
-    expect(originKeyForIssue("a%b|c#d:e/f", 1)).toBe("github:a%25b%7Cc%23d%3Ae/f#1");
+    expect(originKeyForIssue(github, "a%b|c#d:e/f", 1)).toBe("github:a%25b%7Cc%23d%3Ae/f#1");
     expect(originKeyForFeedItem("r", "l|1", "k|2#3%")).toBe("feed:r|l%7C1|k%7C2%233%25");
   });
 
@@ -116,7 +128,9 @@ describe("claimConflicts", () => {
         [here, result(here, [claim()])],
         [
           there,
-          result(there, [claim({ originKey: originKeyForIssue("github.com/example/repo", 13) })]),
+          result(there, [
+            claim({ originKey: originKeyForIssue(github, "github.com/example/repo", 13) }),
+          ]),
         ],
       ]),
     );
@@ -220,7 +234,11 @@ describe("claimsElsewhere", () => {
 
   it("is empty when only this environment claims the origin", () => {
     expect(
-      claimsElsewhere(byEnvironment, originKeyForIssue("github.com/example/repo", 99), here),
+      claimsElsewhere(
+        byEnvironment,
+        originKeyForIssue(github, "github.com/example/repo", 99),
+        here,
+      ),
     ).toEqual([]);
   });
 
@@ -344,6 +362,25 @@ describe("factoryClaimRowPresentation", () => {
     expect(presentation.provenance).toContain("Admitted by another environment");
   });
 
+  it("shows a GitLab issue claim's conflict and provenance like a GitHub one", () => {
+    const gitlabKey = originKeyForIssue(gitlab, "gitlab.com/group/project", 4);
+    const gitlabClaim = (overrides: Partial<FactoryClaim> = {}) =>
+      claim({ originKey: gitlabKey, origin: "gitlab-issue", ...overrides });
+    const claims = new Map([
+      [here, result(here, [gitlabClaim({ admittedBy: there })])],
+      [there, result(there, [gitlabClaim()])],
+    ]);
+    const presentation = factoryClaimRowPresentation({
+      ...base,
+      claimsByEnvironment: claims,
+      conflicts: claimConflicts(claims),
+      originKey: gitlabKey,
+      task: { threadId: ThreadId.make("thread-1") },
+    });
+    expect(presentation.conflict?.badge).toBe("Claimed in 2 environments");
+    expect(presentation.provenance).toContain("Admitted by another environment");
+  });
+
   it("shows a conflict but no provenance for an origin with no task here", () => {
     const presentation = factoryClaimRowPresentation({ ...base, task: null });
     expect(presentation.conflict).not.toBeNull();
@@ -353,7 +390,7 @@ describe("factoryClaimRowPresentation", () => {
   it("shows neither for an unclaimed origin", () => {
     const presentation = factoryClaimRowPresentation({
       ...base,
-      originKey: originKeyForIssue("github.com/example/repo", 99),
+      originKey: originKeyForIssue(github, "github.com/example/repo", 99),
       task: { threadId: ThreadId.make("thread-1") },
     });
     expect(presentation).toEqual({ conflict: null, duplicates: null, provenance: null });

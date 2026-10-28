@@ -8,8 +8,10 @@ import {
   FactoryAcceptanceError,
   type EnvironmentId,
   type FactoryIssue,
+  type FactoryIssueCapabilities,
   type FactoryIssueTask,
   type FactoryReadinessOverrideId,
+  type FactoryRepository,
   type ProjectId,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -32,11 +34,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { FactoryClaimIndicators } from "./FactoryClaimIndicators";
 import { FactoryDeliveryPanel } from "./FactoryDeliveryPanel";
 import { factoryClaimRowPresentation, originKeyForIssue } from "./factoryClaims.logic";
+import { factoryPublishUnsupportedMessage } from "./factoryDelivery.logic";
 import {
   FACTORY_OVERRIDE_ACTIONS,
   boundedIssueBody,
   buildFactoryReadinessOverrideInput,
   describeFactoryFailure,
+  factoryBlockersUnsupportedMessage,
   factoryReadinessPresentation,
   factoryTaskPresentation,
   resolveFactoryIssueAction,
@@ -65,7 +69,8 @@ type FactoryIssueWorkViewProps = {
   readonly refreshing: boolean;
   /** Null when the environment does not advertise claims, which shows no claim UI at all. */
   readonly claims: FactoryClaimsView | null;
-  readonly repositoryKey: string;
+  readonly repository: FactoryRepository;
+  readonly capabilities: FactoryIssueCapabilities;
   readonly onStart: (issue: FactoryIssue) => void;
   readonly onRestart: (issue: FactoryIssue) => void;
   readonly onResume: (issue: FactoryIssue) => void;
@@ -92,7 +97,8 @@ export function FactoryIssueWorkView(props: FactoryIssueWorkViewProps) {
       mode={props.mode}
       environmentId={props.environmentId}
       claims={props.claims}
-      repositoryKey={props.repositoryKey}
+      repository={props.repository}
+      capabilities={props.capabilities}
       readinessSupported={readinessSupported}
       acceptanceSupported={acceptanceSupported}
       deliverySupported={deliverySupported}
@@ -275,7 +281,11 @@ function FactoryIssueEntry(
           claimsByEnvironment: props.claims.claimsByEnvironment,
           conflicts: props.claims.conflicts,
           environmentId: props.environmentId,
-          originKey: originKeyForIssue(props.repositoryKey, issue.number),
+          originKey: originKeyForIssue(
+            props.repository.provider,
+            props.repository.canonicalKey,
+            issue.number,
+          ),
           task: issue.task,
           labelOf: props.claims.labelOf,
         });
@@ -292,6 +302,7 @@ function FactoryIssueEntry(
           projectId={issue.task.projectId}
           threadId={issue.task.threadId}
           deliverySupported={props.deliverySupported}
+          capabilities={props.capabilities}
           issueTitle={issue.title}
           issueUrl={issue.url}
         />
@@ -357,23 +368,34 @@ function FactoryIssueEntry(
           </pre>
           {body.truncated ? (
             <p className="mt-2 text-muted-foreground text-xs">
-              Showing the first part of the description. Open the issue on GitHub to read the rest.
+              Showing the first part of the description. Open the issue on{" "}
+              {props.capabilities.displayName} to read the rest.
             </p>
           ) : null}
         </>
       )}
       {issue.state === "open" && props.readinessSupported ? (
         <>
-          <FactoryIssueBlockers
-            environmentId={props.environmentId}
-            projectId={props.selectedProjectId}
-            issueNumber={issue.number}
-          />
-          <FactoryIssueFrontier
-            environmentId={props.environmentId}
-            projectId={props.selectedProjectId}
-            issueNumber={issue.number}
-          />
+          {props.capabilities.blockedBy === "none" ? (
+            <p className="mt-4 border-border/60 border-t pt-3 text-muted-foreground text-xs">
+              {factoryBlockersUnsupportedMessage(props.capabilities.displayName)}
+            </p>
+          ) : (
+            <FactoryIssueBlockers
+              environmentId={props.environmentId}
+              projectId={props.selectedProjectId}
+              issueNumber={issue.number}
+              displayName={props.capabilities.displayName}
+            />
+          )}
+          {props.capabilities.subIssues ? (
+            <FactoryIssueFrontier
+              environmentId={props.environmentId}
+              projectId={props.selectedProjectId}
+              issueNumber={issue.number}
+              displayName={props.capabilities.displayName}
+            />
+          ) : null}
         </>
       ) : null}
     </div>
@@ -449,6 +471,7 @@ function FactoryAcceptedCommit(props: {
   readonly projectId: ProjectId;
   readonly threadId: ThreadId;
   readonly deliverySupported: boolean;
+  readonly capabilities: FactoryIssueCapabilities;
   readonly issueTitle: string;
   readonly issueUrl: string;
 }) {
@@ -587,20 +610,30 @@ function FactoryAcceptedCommit(props: {
         ) : null}
       </div>
       {props.deliverySupported && acceptance !== null && data?.current === true ? (
-        <FactoryDeliveryPanel
-          key={acceptance.id}
-          environmentId={environmentId}
-          projectId={projectId}
-          threadId={threadId}
-          issueTitle={props.issueTitle}
-          issueUrl={props.issueUrl}
-          acceptanceCurrent={data.current && readFailure === null && !query.isPending}
-          onGranted={() => {
-            registry.refresh(
-              factoryEnvironment.readDeliveries({ environmentId, input: { projectId, threadId } }),
-            );
-          }}
-        />
+        props.capabilities.publish ? (
+          <FactoryDeliveryPanel
+            key={acceptance.id}
+            environmentId={environmentId}
+            projectId={projectId}
+            threadId={threadId}
+            issueTitle={props.issueTitle}
+            issueUrl={props.issueUrl}
+            acceptanceCurrent={data.current && readFailure === null && !query.isPending}
+            capabilities={props.capabilities}
+            onGranted={() => {
+              registry.refresh(
+                factoryEnvironment.readDeliveries({
+                  environmentId,
+                  input: { projectId, threadId },
+                }),
+              );
+            }}
+          />
+        ) : (
+          <p className="mt-3 text-muted-foreground text-xs">
+            {factoryPublishUnsupportedMessage(props.capabilities.displayName)}
+          </p>
+        )
       ) : null}
     </div>
   );
@@ -629,8 +662,9 @@ function FactoryIssueBlockers(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly issueNumber: number;
+  readonly displayName: string;
 }) {
-  const { environmentId, projectId, issueNumber } = props;
+  const { environmentId, projectId, issueNumber, displayName } = props;
   const headingId = useId();
   const nowMs = useNowSecond();
   const query = useEnvironmentQuery(
@@ -667,10 +701,11 @@ function FactoryIssueBlockers(props: {
     };
   }, []);
 
-  const failure = query.error === null ? null : describeFactoryFailure(query.failure, query.error);
+  const failure =
+    query.error === null ? null : describeFactoryFailure(query.failure, query.error, displayName);
   const presentation =
     failure === null && query.data !== null
-      ? factoryReadinessPresentation(query.data.readiness, nowMs)
+      ? factoryReadinessPresentation(query.data.readiness, nowMs, displayName)
       : null;
   const refreshing = query.isPending;
   const busy = saving || revokingId !== null || refreshing;
@@ -707,7 +742,9 @@ function FactoryIssueBlockers(props: {
     if (isAtomCommandInterrupted(result)) return;
     // The command observes the issue again, so the table behind the dialog already shows the
     // current edge while the dialog keeps the one that was reviewed.
-    setDialogFailure(describeFactoryFailure(squashAtomCommandFailure(result)));
+    setDialogFailure(
+      describeFactoryFailure(squashAtomCommandFailure(result), undefined, displayName),
+    );
   };
 
   const revoke = async (overrideId: FactoryReadinessOverrideId) => {
@@ -724,7 +761,9 @@ function FactoryIssueBlockers(props: {
     });
     if (!mounted.current) return;
     if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
-    setRevokeFailure(describeFactoryFailure(squashAtomCommandFailure(result)));
+    setRevokeFailure(
+      describeFactoryFailure(squashAtomCommandFailure(result), undefined, displayName),
+    );
   };
 
   return (
@@ -899,9 +938,9 @@ function FactoryIssueBlockers(props: {
             </div>
           ) : null}
           <p className="text-muted-foreground text-xs">
-            Observed from GitHub blocked-by links. Evidence only: it never allows or prevents
-            starting work. A dispute or waiver records your decision here and changes nothing on
-            GitHub. Refresh observes again.
+            Observed from {displayName} blocked-by links. Evidence only: it never allows or prevents
+            starting work. A dispute or waiver records your decision here and changes nothing on{" "}
+            {displayName}. Refresh observes again.
           </p>
         </>
       )}
@@ -909,6 +948,7 @@ function FactoryIssueBlockers(props: {
         <FactoryReadinessOverrideDialog
           row={dialog.row}
           action={dialog.action}
+          displayName={displayName}
           canOperate={canOverride}
           pending={saving}
           failure={dialogFailure}

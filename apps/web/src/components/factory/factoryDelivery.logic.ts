@@ -12,6 +12,7 @@ const isFactoryDeliveryError = Schema.is(FactoryDeliveryError);
 
 export function factoryDeliveryFailureMessage(
   error: unknown,
+  displayName: string,
   fallbackMessage?: string,
   kind: FactoryDeliveryIntent["kind"] = "publish-pr",
 ): string {
@@ -35,7 +36,7 @@ export function factoryDeliveryFailureMessage(
       case "already-merged":
         return "This pull request is already merged.";
       case "not-mergeable":
-        return "GitHub reports the pull request cannot be merged right now.";
+        return `${displayName} reports the pull request cannot be merged right now.`;
       case "not-accepted":
         return "Accept the current commit, then prepare again.";
       case "not-reconcilable":
@@ -48,9 +49,18 @@ export function factoryDeliveryFailureMessage(
         return "This thread is not a claimed Factory task.";
       case "worktree-unavailable":
         return "Restore the worktree, then prepare again.";
+      case "capability-unsupported":
+        return kind === "merge-pr"
+          ? `Merging from ${displayName} is not supported yet.`
+          : factoryPublishUnsupportedMessage(displayName);
     }
   }
   return describeFactoryFailure(error, fallbackMessage).message;
+}
+
+/** The whole delivery section for a host that cannot publish an exact accepted commit. */
+export function factoryPublishUnsupportedMessage(displayName: string): string {
+  return `Publishing from ${displayName} is not supported yet.`;
 }
 
 export function isLiveFactoryDelivery(intent: Pick<FactoryDeliveryIntent, "status">): boolean {
@@ -85,6 +95,7 @@ export function canGrantFactoryDelivery(conditions: GrantConditions): boolean {
 
 export function mergeGrantDisabledReason(
   conditions: GrantConditions & {
+    readonly displayName: string;
     readonly prepared: Pick<
       FactoryDeliveryPrepareResult,
       "current" | "headSha" | "pullRequest"
@@ -118,7 +129,7 @@ export function mergeGrantDisabledReason(
     return "Mark the pull request ready for review before merging.";
   }
   if (pullRequest.mergeability === "conflicting" || pullRequest.state === "closed") {
-    return "GitHub reports the pull request cannot be merged right now.";
+    return `${conditions.displayName} reports the pull request cannot be merged right now.`;
   }
   if (
     conditions.mergeMethod !== undefined &&
@@ -131,6 +142,7 @@ export function mergeGrantDisabledReason(
 
 export function describeDeliveryStatus(
   intent: Pick<FactoryDeliveryIntent, "kind" | "status" | "failure">,
+  displayName: string,
 ): string {
   switch (intent.status) {
     case "pending":
@@ -139,7 +151,7 @@ export function describeDeliveryStatus(
     case "confirmed":
       return intent.kind === "merge-pr" ? "Merged" : "Published";
     case "unknown":
-      return "The server lost the response. Reconcile to check GitHub.";
+      return `The server lost the response. Reconcile to check ${displayName}.`;
     case "failed":
       return (
         intent.failure ?? (intent.kind === "merge-pr" ? "Merge failed." : "Publication failed.")

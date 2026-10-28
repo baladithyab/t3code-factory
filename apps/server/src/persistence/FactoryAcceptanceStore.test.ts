@@ -1,8 +1,12 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CommandId,
   EnvironmentId,
   FactoryOriginKey,
+  MessageId,
   ProjectId,
+  ProviderInstanceId,
+  SourceControlProviderKind,
   ThreadId,
   type FactoryAcceptance,
 } from "@t3tools/contracts";
@@ -11,6 +15,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Store from "./FactoryAcceptanceStore.ts";
+import { type FactoryLaunchIntent } from "./FactoryIssueLaunches.ts";
 import * as Sqlite from "./Sqlite.ts";
 
 const originKey = FactoryOriginKey.make("github:github.com/owner/repo#7");
@@ -69,4 +74,58 @@ it.effect("a different origin is independent", () =>
     const other = acceptance("other", { originKey: FactoryOriginKey.make("github:x#8") });
     assert.deepEqual(yield* store.insert(other), other);
   }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "an issue claim admitted before origin keys were recorded derives its key in its provider's namespace",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* Store.FactoryAcceptanceStore;
+      for (const [provider, host, path] of [
+        ["github", "github.com", "owner/repo"],
+        ["gitlab", "gitlab.com", "group/sub/repo"],
+      ] as const) {
+        const threadId = ThreadId.make(`legacy:${provider}`);
+        const intent: FactoryLaunchIntent = {
+          repository: {
+            provider: SourceControlProviderKind.make(provider),
+            host,
+            repository: path,
+            canonicalKey: `${host}/${path}`,
+            url: `https://${host}/${path}`,
+          },
+          issue: {
+            number: 7,
+            title: "Task",
+            body: null,
+            state: "open",
+            url: `https://${host}/${path}/issues/7`,
+            labels: [],
+            updatedAt: "2026-10-27T00:00:00.000Z",
+            task: null,
+          },
+          projectId: ProjectId.make("project"),
+          workspaceRoot: "/repo",
+          requestCommandId: CommandId.make(`request:${provider}`),
+          commandId: CommandId.make(`command:${provider}`),
+          threadId,
+          messageId: MessageId.make(`message:${provider}`),
+          baseRef: "main",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          prompt: "Frozen snapshot",
+          createdBy: "user",
+          creationSource: "web",
+          createdAt: "2026-10-27T00:00:00.000Z",
+          previousThreadId: null,
+        };
+        yield* sql`INSERT INTO factory_issue_launches (thread_id, canonical_key, issue_number, request_command_id, intent_json, origin_key)
+          VALUES (${threadId}, ${intent.repository.canonicalKey}, 7, ${intent.requestCommandId}, ${JSON.stringify(intent)}, NULL)`;
+        const origin = Option.getOrThrow(yield* store.resolveOrigin(threadId));
+        assert.equal(origin.originKey, `${provider}:${host}/${path}#7`);
+        assert.deepEqual(origin.repository, intent.repository);
+      }
+    }).pipe(Effect.provide(layer)),
 );

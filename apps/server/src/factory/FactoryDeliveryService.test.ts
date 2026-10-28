@@ -37,7 +37,8 @@ import * as SourceControlProviderRegistry from "../sourceControl/SourceControlPr
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Acceptance from "./FactoryAcceptanceService.ts";
 import * as Delivery from "./FactoryDeliveryService.ts";
-import { githubIssueOriginKey } from "./FactoryOriginKey.ts";
+import { issueOriginKey } from "./FactoryOriginKey.ts";
+import { fakeIssueTracker, issueTrackersLayer } from "./IssueTrackerProviderRegistry.testkit.ts";
 
 const at = "2026-10-27T00:00:00.000Z";
 const environmentId = EnvironmentId.make("claim-holder");
@@ -56,7 +57,7 @@ const pullRequest = { number: 12, url: "https://github.com/owner/repo/pull/12" }
 
 const intent: FactoryLaunchIntent = {
   repository: {
-    provider: "github",
+    provider: SourceControlProviderKind.make("github"),
     host: "github.com",
     repository: "owner/repo",
     canonicalKey: "github.com/owner/repo",
@@ -95,7 +96,12 @@ const unsupported = (operation: string) =>
     SourceControlProviderError
   >;
 
-const harness = (options: { readonly seedSending?: boolean } = {}) => {
+const harness = (
+  options: {
+    readonly seedSending?: boolean;
+    readonly trackers?: Parameters<typeof issueTrackersLayer>[0];
+  } = {},
+) => {
   const state = {
     head: first,
     open: Option.none<typeof pullRequest>(),
@@ -121,6 +127,8 @@ const harness = (options: { readonly seedSending?: boolean } = {}) => {
     merge: "ok" as "ok" | "definite" | "ambiguous",
     mergeCalls: [] as PullRequestActionInput[],
     invalidations: 0,
+    // Every pull request read, cached or fresh: a refused delivery must not reach the host.
+    reads: 0,
   };
   const providerFailure = (cwd: string, cause: unknown) =>
     new SourceControlProviderError({
@@ -186,8 +194,9 @@ const harness = (options: { readonly seedSending?: boolean } = {}) => {
       return Effect.void;
     },
     // Only the fields the delivery service reads; the rest of a detail is not its business.
-    detail: (ref) =>
-      state.read === "fail"
+    detail: (ref) => {
+      state.reads += 1;
+      return state.read === "fail"
         ? Effect.fail(
             new PullRequestOperationError({ operation: "detail", detail: "host unreachable" }),
           )
@@ -205,7 +214,8 @@ const harness = (options: { readonly seedSending?: boolean } = {}) => {
               url: null,
             })),
             capabilities: { mergeMethods: ["merge", "squash"] },
-          } as unknown as PullRequestDetail),
+          } as unknown as PullRequestDetail);
+    },
     runAction: (input) => {
       state.mergeCalls.push(input);
       if (state.merge === "definite")
@@ -234,6 +244,7 @@ const harness = (options: { readonly seedSending?: boolean } = {}) => {
     NodeCrypto.layer,
     NodeServices.layer,
     Layer.succeed(ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(environmentId) }),
+    issueTrackersLayer(options.trackers),
     Layer.mock(GitManager.GitManager)({
       findOpenPullRequestForHead: () =>
         Effect.succeed({ headSelector: "feature", open: state.open }),
@@ -271,11 +282,11 @@ const harness = (options: { readonly seedSending?: boolean } = {}) => {
       const sql = yield* SqlClient.SqlClient;
       yield* sql`INSERT INTO factory_issue_launches (thread_id, canonical_key, issue_number, request_command_id, intent_json, origin_key)
         VALUES (${claimed}, ${intent.repository.canonicalKey}, 7, ${intent.requestCommandId}, ${JSON.stringify(intent)},
-          ${githubIssueOriginKey(intent.repository.canonicalKey, 7)})`;
+          ${issueOriginKey(intent.repository.provider, intent.repository.canonicalKey, 7)})`;
       yield* store.grant(
         {
           id: "delivery:seeded",
-          originKey: githubIssueOriginKey(intent.repository.canonicalKey, 7),
+          originKey: issueOriginKey(intent.repository.provider, intent.repository.canonicalKey, 7),
           threadId: claimed,
           projectId,
           kind: "publish-pr",
@@ -305,14 +316,18 @@ const harness = (options: { readonly seedSending?: boolean } = {}) => {
   return { state, layer };
 };
 
-const seedClaim = Effect.gen(function* () {
+const seedClaim = Effect.fn("DeliveryTest.seedClaim")(function* (
+  claim: FactoryLaunchIntent = intent,
+) {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`INSERT INTO factory_issue_launches (thread_id, canonical_key, issue_number, request_command_id, intent_json, origin_key)
-    VALUES (${claimed}, ${intent.repository.canonicalKey}, 7, ${intent.requestCommandId}, ${JSON.stringify(intent)},
-      ${githubIssueOriginKey(intent.repository.canonicalKey, 7)})`;
+    VALUES (${claimed}, ${claim.repository.canonicalKey}, 7, ${claim.requestCommandId}, ${JSON.stringify(claim)},
+      ${issueOriginKey(claim.repository.provider, claim.repository.canonicalKey, 7)})`;
 });
-const accept = Effect.gen(function* () {
-  yield* seedClaim;
+const acceptClaim = Effect.fn("DeliveryTest.acceptClaim")(function* (
+  claim: FactoryLaunchIntent = intent,
+) {
+  yield* seedClaim(claim);
   return yield* (yield* Acceptance.FactoryAcceptanceService).acceptCommit({
     projectId,
     threadId: claimed,
@@ -320,6 +335,7 @@ const accept = Effect.gen(function* () {
     evidenceRefs: [],
   });
 });
+const accept = acceptClaim();
 const prepare = (threadId: ThreadId = claimed) =>
   Effect.flatMap(Delivery.FactoryDeliveryService, (service) =>
     service.prepare({ projectId, threadId, kind: "publish-pr", payload }),
@@ -371,7 +387,7 @@ it.effect(
     return Effect.gen(function* () {
       const service = yield* Delivery.FactoryDeliveryService;
       assert.equal((yield* prepare().pipe(Effect.flip)).reason, "not-a-factory-task");
-      yield* seedClaim;
+      yield* seedClaim();
       assert.equal((yield* prepare().pipe(Effect.flip)).reason, "not-accepted");
       yield* (yield* Acceptance.FactoryAcceptanceService).acceptCommit({
         projectId,
@@ -960,3 +976,88 @@ it.effect("reconciling a merge reads the pull request and never merges again", (
     );
   }).pipe(Effect.provide(layer));
 });
+
+const gitlabIntent: FactoryLaunchIntent = {
+  ...intent,
+  repository: {
+    provider: SourceControlProviderKind.make("gitlab"),
+    host: "gitlab.com",
+    repository: "group/sub/repo",
+    canonicalKey: "gitlab.com/group/sub/repo",
+    url: "https://gitlab.com/group/sub/repo",
+  },
+};
+it.effect(
+  "a GitLab claim's accepted commit is refused publish and merge at prepare and grant before the host is touched",
+  () => {
+    const { state, layer } = harness();
+    return Effect.gen(function* () {
+      const service = yield* Delivery.FactoryDeliveryService;
+      yield* acceptClaim(gitlabIntent);
+      const refusals = [
+        yield* prepare().pipe(Effect.flip),
+        yield* prepareMerge().pipe(Effect.flip),
+        yield* service
+          .grant({
+            projectId,
+            threadId: claimed,
+            kind: "publish-pr",
+            commandId: "gitlab-publish",
+            expectedHeadSha: first,
+            expectedPayloadDigest: "d".repeat(64),
+            payload,
+          })
+          .pipe(Effect.flip),
+        yield* service
+          .grant({
+            projectId,
+            threadId: claimed,
+            kind: "merge-pr",
+            commandId: "gitlab-merge",
+            expectedHeadSha: first,
+            expectedPayloadDigest: "d".repeat(64),
+            payload: mergePayload(),
+          })
+          .pipe(Effect.flip),
+      ];
+      assert.deepEqual(
+        refusals.map((refusal) => refusal.reason),
+        Array.from({ length: 4 }, () => "capability-unsupported"),
+      );
+      assert.deepInclude(state, { reads: 0, invalidations: 0, calls: [], mergeCalls: [] });
+      assert.deepEqual(yield* deliveries, []);
+      assert.deepEqual(yield* outboxRows, []);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect(
+  "a host that publishes without a head-pinned merge is refused only the merge, before the pull request is read",
+  () => {
+    const github = fakeIssueTracker("github");
+    const { state, layer } = harness({
+      trackers: [{ ...github, capabilities: { ...github.capabilities, headPinnedMerge: false } }],
+    });
+    return Effect.gen(function* () {
+      yield* published;
+      const reads = state.reads;
+      assert.equal((yield* only).status, "confirmed");
+      assert.equal((yield* prepareMerge().pipe(Effect.flip)).reason, "capability-unsupported");
+      const refused = yield* (yield* Delivery.FactoryDeliveryService)
+        .grant({
+          projectId,
+          threadId: claimed,
+          kind: "merge-pr",
+          commandId: "unpinned-merge",
+          expectedHeadSha: first,
+          expectedPayloadDigest: "d".repeat(64),
+          payload: mergePayload(),
+        })
+        .pipe(Effect.flip);
+      assert.equal(refused.reason, "capability-unsupported");
+      assert.equal(state.reads, reads);
+      assert.equal(state.invalidations, 0);
+      assert.deepEqual(state.mergeCalls, []);
+    }).pipe(Effect.provide(layer));
+  },
+);

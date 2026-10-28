@@ -175,11 +175,19 @@ but every definition has one owning environment and project.
 
 ### Start a task from an issue
 
-Open **Factory → Issues**, choose a checkout, and check the repository shown above the list.
-Factory issue intake currently supports GitHub and uses the project's configured `origin`,
-not its `upstream`. A missing or unsupported origin is an error, not a fallback to another
-repository. Use **Open**, **Closed**, or **All**, the page controls, and **Refresh** to browse
-issues. Reading the inbox never starts work or changes an issue.
+Open **Factory → Issues**, choose a checkout, and check the repository and host shown above the
+list. Factory issue intake supports GitHub and GitLab, read through the project's configured
+`origin`, not its `upstream`. A missing or unsupported origin is an error, not a fallback to
+another repository. GitLab needs the `glab` CLI signed in to that host; nested groups
+(`group/subgroup/project`) work, and issue numbers are the project-local `#iid`. Use **Open**,
+**Closed**, or **All**, the page controls, and **Refresh** to browse issues. Reading the inbox
+never starts work or changes an issue.
+
+What the rest of the page offers depends on what the host can express. GitLab projects today get
+the inbox and **Start task** only: the Blockers block says the host does not expose blocking
+relationships and readiness stays unknown, Sub-issues is absent, and publishing or merging from
+the task is not offered. Nothing is silently assumed; a missing capability is shown, never
+treated as "ready" or "mergeable".
 
 On web and desktop, use **Table** to compare source and task state, or **Board** to group by
 local task state. The view choice stays in the URL. Each view shows only the current filtered

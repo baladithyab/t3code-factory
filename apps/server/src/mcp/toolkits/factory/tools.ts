@@ -102,7 +102,7 @@ const prepareDelivery = Tool.make("factory_prepare_delivery", {
     McpInvocationContext.McpInvocationContext,
   ],
   description:
-    "Propose a pull request for a claimed task's accepted commit. Returns the exact repository, base, head and payload digest a person must grant from the app. This never pushes, creates a pull request or changes any state; refused unless a commit is accepted and still current.",
+    "Propose a pull request for a claimed task's accepted commit. Returns the exact repository, base, head and payload digest a person must grant from the app. This never pushes, creates a pull request or changes any state; refused unless a commit is accepted and still current, and refused with capability-unsupported on a host that cannot deliver the exact accepted commit.",
   parameters: FactoryDeliveryPrepareInput,
   success: FactoryDeliveryPrepareResult,
 })
@@ -152,7 +152,7 @@ const readKnowledgeTask = Tool.make("factory_read_knowledge_task", {
 const list = Tool.make("factory_list_issues", {
   ...shared,
   description:
-    "Read one bounded page of GitHub issues from a registered project's server-resolved origin repository. Reading never starts work. Returns the actual intake repository and existing task links.",
+    "Read one bounded page of issues from a registered project's server-resolved origin repository on its issue host. Reading never starts work. Returns the actual intake repository, the host's capabilities and existing task links.",
   parameters: FactoryIssueListInput,
   success: FactoryIssueListResult,
 })
@@ -161,7 +161,7 @@ const list = Tool.make("factory_list_issues", {
 const read = Tool.make("factory_read_issue", {
   ...shared,
   description:
-    "Read one complete GitHub issue snapshot and its content revision from a registered project's server-resolved origin. Reading never starts work. Review the full title and body before explicitly authorizing a new task. Do not authorize from a truncated result; this tool has no partial-content paging. Returns existing task ownership separately from the live issue.",
+    "Read one complete issue snapshot and its content revision from a registered project's server-resolved origin. Reading never starts work. Review the full title and body before explicitly authorizing a new task. Do not authorize from a truncated result; this tool has no partial-content paging. Returns the host's capabilities and existing task ownership separately from the live issue.",
   parameters: FactoryIssueReadInput,
   success: FactoryIssueReadResult,
 })
@@ -175,7 +175,7 @@ const readiness = Tool.make("factory_read_issue_readiness", {
     McpInvocationContext.McpInvocationContext,
   ],
   description:
-    "Read observed GitHub blocker evidence and derived issue readiness. Returns observed evidence, not permission to start work. Incomplete or inaccessible evidence remains unknown. This read never starts work or changes GitHub.",
+    "Read observed blocker evidence and derived issue readiness. Returns observed evidence, not permission to start work. Incomplete or inaccessible evidence remains unknown, as does every issue on a host that cannot report blockers (reason capability-unsupported). This read never starts work or changes the issue host.",
   parameters: FactoryIssueReadinessReadInput,
   success: FactoryIssueReadinessReadResult,
 })
@@ -189,7 +189,7 @@ const frontier = Tool.make("factory_read_issue_frontier", {
     McpInvocationContext.McpInvocationContext,
   ],
   description:
-    "Read a parent's native GitHub sub-issues in source order, with assignees and per-child blocker evidence. Incomplete enumeration is reported. Readiness is evidence, not permission to start work; this tool never starts work, applies overrides, or changes GitHub.",
+    "Read a parent's native sub-issues in source order, with assignees and per-child blocker evidence. Incomplete enumeration is reported; on a host without sub-issues the parent has no children and complete:false. Readiness is evidence, not permission to start work; this tool never starts work, applies overrides, or changes the issue host.",
   parameters: FactoryIssueFrontierReadInput,
   success: FactoryIssueFrontierReadResult,
 })
@@ -198,7 +198,7 @@ const frontier = Tool.make("factory_read_issue_frontier", {
 const start = Tool.make("factory_start_issue", {
   ...shared,
   description:
-    "Explicitly start an isolated worktree task for an open GitHub issue, or return/resume its existing saved task. First read the complete issue with factory_read_issue (or an untruncated factory_list_issues entry), review its title/body, and pass repository.canonicalKey as expectedRepositoryKey and issue.revision as expectedIssueRevision. New admissions and confirmed deleted-task restarts reject changed content; refresh and review again rather than silently substituting a new revision. Existing reservations keep their original prompt, base, model and modes; live revision is not revalidated on resume, and resumed:true can return another caller's already-admitted task. Requires orchestration and worktree authority. Reuse commandId when retrying the same request. restartDeleted requires explicit user confirmation. A revision is not proof of human approval. Does not authorize publication, push, PR creation, merge, release, or secret disclosure.",
+    "Explicitly start an isolated worktree task for an open issue, or return/resume its existing saved task. First read the complete issue with factory_read_issue (or an untruncated factory_list_issues entry), review its title/body, and pass repository.canonicalKey as expectedRepositoryKey and issue.revision as expectedIssueRevision. New admissions and confirmed deleted-task restarts reject changed content; refresh and review again rather than silently substituting a new revision. Existing reservations keep their original prompt, base, model and modes; live revision is not revalidated on resume, and resumed:true can return another caller's already-admitted task. Requires orchestration and worktree authority. Reuse commandId when retrying the same request. restartDeleted requires explicit user confirmation. A revision is not proof of human approval. Does not authorize publication, push, PR creation, merge, release, or secret disclosure.",
   parameters: FactoryIssueStartInput,
   success: FactoryIssueStartResult,
 })

@@ -57,6 +57,7 @@ import * as Replay from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
 import { researchRunOriginKey } from "./FactoryOriginKey.ts";
+import { issueTrackersLayer } from "./IssueTrackerProviderRegistry.testkit.ts";
 
 const environmentId = EnvironmentId.make("research-environment");
 
@@ -108,7 +109,7 @@ const launchInput = (
   runtimeMode: "approval-required",
   interactionMode: "default",
 });
-const harness = Effect.gen(function* () {
+const makeHarness = Effect.fn("ResearchTest.harness")(function* (origin: string) {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "factory-research-test-" });
   const commits: string[] = [];
@@ -143,6 +144,7 @@ const harness = Effect.gen(function* () {
     Layer.succeed(Identities.RepositoryIdentityResolver, {
       resolve: () => Effect.succeed(identity),
     }),
+    issueTrackersLayer(),
     Layer.succeed(Favicons.ProjectFaviconResolver, {
       resolvePath: () => Effect.succeed(null),
       invalidate: () => Effect.void,
@@ -160,8 +162,7 @@ const harness = Effect.gen(function* () {
         gitCalls.push([...args]);
         const key = JSON.stringify(args);
         let stdout: string;
-        if (key === JSON.stringify(["remote", "get-url", "--", "origin"]))
-          stdout = "git@github.com:owner/factory.git";
+        if (key === JSON.stringify(["remote", "get-url", "--", "origin"])) stdout = origin;
         else if (
           key === JSON.stringify(["rev-parse", "--verify", `${B}:prepare.py`]) ||
           key === JSON.stringify(["rev-parse", "--verify", `${C1}:prepare.py`])
@@ -263,6 +264,7 @@ const harness = Effect.gen(function* () {
   );
   return { layer, commits, gitCalls, lifecycle };
 });
+const harness = makeHarness("git@github.com:owner/factory.git");
 const seed = Effect.gen(function* () {
   yield* (yield* Projects.ProjectService).create({
     commandId: CommandId.make("create"),
@@ -732,4 +734,29 @@ it.effect(
         assert.equal(stored.recordedAfterMinutes, 1);
       }).pipe(Effect.provide(test.layer));
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+it.effect("a GitLab project is refused unsupported-provider before a protocol is sealed", () =>
+  Effect.gen(function* () {
+    const test = yield* makeHarness("https://gitlab.com/group/factory.git");
+    yield* Effect.gen(function* () {
+      yield* (yield* Projects.ProjectService).create({
+        commandId: CommandId.make("create"),
+        projectId,
+        title: "Research",
+        workspaceRoot: "/repo",
+        defaultModelSelection: modelSelection,
+        scripts: [],
+      });
+      const factory = yield* Factory.FactoryResearchService;
+      const listed = yield* factory.listProtocols({ projectId }).pipe(Effect.flip);
+      assert.equal(listed.reason, "unsupported-provider");
+      const sealed = yield* factory
+        .sealProtocol({ ...sealInput, expectedRepositoryKey: "gitlab.com/group/factory" })
+        .pipe(Effect.flip);
+      assert.equal(sealed.reason, "unsupported-provider");
+      assert.deepEqual(test.commits, []);
+      assert.deepEqual(yield* (yield* Store.FactoryResearchStore).listProtocols(projectId), []);
+    }).pipe(Effect.provide(test.layer));
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );

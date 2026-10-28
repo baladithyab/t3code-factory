@@ -174,6 +174,7 @@ export class FactoryDeliveryError extends Schema.TaggedError<FactoryDeliveryErro
       "not-reconcilable",
       "worktree-unavailable",
       "persistence-failure",
+      "capability-unsupported",
     ]),
     cause: Schema.optional(Schema.Defect()),
   },
@@ -210,6 +211,8 @@ export class FactoryDeliveryError extends Schema.TaggedError<FactoryDeliveryErro
         return "The task's worktree is no longer available, so its commit cannot be read.";
       case "persistence-failure":
         return "The environment could not read or save the delivery.";
+      case "capability-unsupported":
+        return "This repository's host does not support that delivery action with the exact-commit guarantee the Factory requires.";
     }
   }
 }

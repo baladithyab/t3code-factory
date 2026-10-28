@@ -11,14 +11,16 @@ import {
   ProviderInstanceId,
   OrchestrationV2CreationSource,
   ThreadId,
+  SourceControlProviderKind,
   type FactoryIssueStartInput,
   type RepositoryIdentity,
 } from "@t3tools/contracts";
-import * as GitHubRest from "@t3tools/source-control-github/server/GitHubRest";
 import {
-  GitHubApiAuthenticationError,
-  GitHubApiRateLimitError,
-} from "@t3tools/source-control-github/server/GitHubRequestPolicy";
+  IssueTrackerProviderError,
+  type IssueTrackerProviderApi,
+  type TrackerIssue,
+} from "@t3tools/source-control-core/server/IssueTrackerProvider";
+import { fakeIssueTracker, issueTrackersLayer } from "./IssueTrackerProviderRegistry.testkit.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import * as Effect from "effect/Effect";
@@ -55,7 +57,7 @@ import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
 import * as Registry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as Recovery from "../orchestration-v2/ProviderRuntimeRecoveryService.ts";
 import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
-import { githubIssueOriginKey } from "./FactoryOriginKey.ts";
+import { issueOriginKey } from "./FactoryOriginKey.ts";
 import * as Projections from "../orchestration-v2/ProjectionStore.ts";
 import * as Outbox from "../orchestration-v2/EffectOutbox.ts";
 import * as Replay from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
@@ -68,14 +70,14 @@ const projectId = ProjectId.make("factory-project");
 const secondProjectId = ProjectId.make("factory-second-checkout");
 const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" };
 const baseRef = "a".repeat(40);
-const issue = {
+const issue: TrackerIssue = {
   number: 12,
   title: "Implement issue intake",
   body: "Untrusted issue text",
   state: "open",
-  html_url: "https://github.com/owner/factory/issues/12",
-  labels: [{ name: "feature" }],
-  updated_at: "2026-10-23T00:00:00.000Z",
+  url: "https://github.com/owner/factory/issues/12",
+  labels: ["feature"],
+  updatedAt: "2026-10-23T00:00:00.000Z",
 };
 const identity: RepositoryIdentity = {
   canonicalKey: "github.com/upstream/root",
@@ -116,24 +118,23 @@ const reviewedInput = (
       expectedIssueRevision: reviewed.issue.revision,
     } satisfies FactoryIssueStartInput;
   });
-/** Serves the remote issue as it is at request time, for list and detail reads. */
-const remoteIssue =
-  (current: () => object): GitHubRest.GitHubRest["Service"]["rest"] =>
-  (input) =>
-    Effect.sync(() => {
-      const record = current();
-      return {
-        status: 200,
-        headers: {},
-        body: JSON.stringify(input.path.includes("?") ? [record] : record),
-        truncated: false,
-        invalidUtf8: false,
-      };
-    });
+const remoteIssue = (current: () => TrackerIssue): Partial<IssueTrackerProviderApi> => ({
+  getIssue: () => Effect.sync(current),
+  listIssues: () => Effect.sync(() => ({ issues: [current()], nextPage: null })),
+});
+const fakeTracker = (
+  overrides: Partial<IssueTrackerProviderApi> = {},
+): IssueTrackerProviderApi => ({
+  ...fakeIssueTracker("github"),
+  getIssue: () => Effect.succeed(issue),
+  listIssues: () => Effect.succeed({ issues: [issue], nextPage: null }),
+  ...overrides,
+});
 
 function harness(
   options: {
-    readonly rest?: GitHubRest.GitHubRest["Service"]["rest"];
+    readonly tracker?: Partial<IssueTrackerProviderApi>;
+    readonly trackers?: ReadonlyArray<IssueTrackerProviderApi>;
     readonly resolve?: Identities.RepositoryIdentityResolver["Service"]["resolve"];
     readonly resolveCommit?: Git.GitVcsDriver["Service"]["resolveCommit"];
     readonly execute?: Git.GitVcsDriver["Service"]["execute"];
@@ -171,18 +172,7 @@ function harness(
     Layer.mock(WorkspacePaths.WorkspacePaths)({
       normalizeWorkspaceRoot: (root) => Effect.succeed(root),
     }),
-    Layer.mock(GitHubRest.GitHubRest)({
-      rest:
-        options.rest ??
-        ((input) =>
-          Effect.succeed({
-            status: 200,
-            headers: {},
-            body: JSON.stringify(input.path.includes("?") ? [issue] : issue),
-            truncated: false,
-            invalidUtf8: false,
-          })),
-    }),
+    issueTrackersLayer(options.trackers ?? [fakeTracker(options.tracker)]),
     Layer.mock(Git.GitVcsDriver)({
       resolveCommit: options.resolveCommit ?? (() => Effect.succeed({ commitSha: baseRef })),
       execute:
@@ -264,36 +254,160 @@ const seed = Effect.gen(function* () {
   }
 });
 
+it.effect("uses the fork origin and preserves the tracker's empty-page continuation", () => {
+  const requests: Array<Parameters<IssueTrackerProviderApi["listIssues"]>[0]> = [];
+  return Effect.gen(function* () {
+    yield* seed;
+    const factory = yield* Factory.FactoryIssueService;
+    const result = yield* factory.list({ projectId, page: 2, state: "all" });
+    assert.equal(result.repository.canonicalKey, "github.com/owner/factory");
+    assert.deepEqual(result.issues, []);
+    assert.equal(result.nextPage, 3);
+    assert.equal(result.capabilities.displayName, "GitHub");
+    assert.deepInclude(requests[0], {
+      cwd: "/repo",
+      repository: "owner/factory",
+      host: "github.com",
+      page: 2,
+      state: "all",
+    });
+  }).pipe(
+    Effect.provide(
+      harness({
+        tracker: {
+          listIssues: (input) => {
+            requests.push(input);
+            return Effect.succeed({ issues: [], nextPage: 3 });
+          },
+        },
+      }).layer,
+    ),
+  );
+});
+
 it.effect(
-  "uses fork origin, filters PRs, and preserves continuation on an empty issue page",
+  "lists GitLab capabilities and starts a nested GitLab issue with its own origin key",
   () => {
-    const requests: Array<GitHubRest.GitHubRestInput> = [];
+    const repository = "group/subgroup/project";
+    const canonicalKey = `gitlab.com/${repository}`;
+    const tracker = fakeIssueTracker(
+      "gitlab",
+      remoteIssue(() => ({
+        ...issue,
+        url: `https://${canonicalKey}/-/issues/12`,
+      })),
+    );
     return Effect.gen(function* () {
       yield* seed;
       const factory = yield* Factory.FactoryIssueService;
-      const result = yield* factory.list({ projectId, page: 2, state: "all" });
-      assert.equal(result.repository.canonicalKey, "github.com/owner/factory");
-      assert.deepEqual(result.issues, []);
-      assert.equal(result.nextPage, 3);
-      assert.equal(
-        requests[0]?.path,
-        "repos/owner/factory/issues?state=all&per_page=30&page=2&sort=updated&direction=desc",
+      const listed = yield* factory.list({ projectId });
+      assert.deepEqual(listed.capabilities, { provider: "gitlab", ...tracker.capabilities });
+      assert.deepInclude(listed.repository, {
+        provider: tracker.kind,
+        repository,
+        canonicalKey,
+        url: `https://${canonicalKey}`,
+      });
+      const read = yield* factory.read({ projectId, issueNumber: 12 });
+      assert.deepEqual(read.capabilities, listed.capabilities);
+      const started = yield* factory.start({
+        ...startInput("gitlab-start"),
+        expectedRepositoryKey: canonicalKey,
+        expectedIssueRevision: read.issue.revision,
+      });
+      const sql = yield* SqlClient.SqlClient;
+      const rows = yield* sql`SELECT origin_key FROM factory_issue_launches`;
+      assert.equal(rows[0]?.origin_key, `gitlab:${canonicalKey}#12`);
+      const { messages } = yield* (yield* Threads.ThreadManagementService).getThreadProjection(
+        started.threadId,
       );
+      assert.include(messages[0]?.text ?? "", "this GitLab issue");
+      assert.notInclude(messages[0]?.text ?? "", "this GitHub issue");
     }).pipe(
       Effect.provide(
         harness({
-          rest: (input) => {
-            requests.push(input);
-            return Effect.succeed({
-              status: 200,
-              headers: {
-                link: '<https://api.github.com/repos/owner/factory/issues?page=3>; rel="next"',
+          trackers: [tracker],
+          resolve: () =>
+            Effect.succeed({
+              canonicalKey,
+              provider: "gitlab",
+              rootPath: "/repo",
+              locator: {
+                source: "git-remote",
+                remoteName: "origin",
+                remoteUrl: `https://${canonicalKey}.git`,
               },
-              body: JSON.stringify([{ ...issue, pull_request: {} }]),
-              truncated: false,
-              invalidUtf8: false,
-            });
-          },
+            }),
+        }).layer,
+      ),
+    );
+  },
+);
+
+it.effect("rejects a provider without an issue tracker", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    const factory = yield* Factory.FactoryIssueService;
+    assert.equal(
+      (yield* factory.list({ projectId }).pipe(Effect.flip)).reason,
+      "unsupported-provider",
+    );
+    assert.equal(
+      (yield* factory.read({ projectId, issueNumber: 12 }).pipe(Effect.flip)).reason,
+      "unsupported-provider",
+    );
+    assert.equal(
+      (yield* factory
+        .start({ ...startInput("unsupported"), expectedIssueRevision: unreviewed })
+        .pipe(Effect.flip)).reason,
+      "unsupported-provider",
+    );
+  }).pipe(Effect.provide(harness({ trackers: [] }).layer)),
+);
+
+it.effect.each(["before-reservation", "before-resume"] as const)(
+  "rejects a provider change at %s even when the canonical key stays the same",
+  (phase) => {
+    const canonicalKey = "forge.example/owner/project";
+    let provider = "github";
+    return Effect.gen(function* () {
+      yield* seed;
+      const factory = yield* Factory.FactoryIssueService;
+      const reviewed = yield* factory.read({ projectId, issueNumber: 12 });
+      const input = {
+        ...startInput("provider-change"),
+        expectedRepositoryKey: canonicalKey,
+        expectedIssueRevision: reviewed.issue.revision,
+      };
+      const sql = yield* SqlClient.SqlClient;
+      if (phase === "before-resume") {
+        const first = yield* factory.start(input);
+        yield* sql`UPDATE factory_issue_launches SET accepted = 0 WHERE thread_id = ${first.threadId}`;
+        provider = "gitlab";
+      }
+      assert.equal((yield* factory.start(input).pipe(Effect.flip)).reason, "repository-changed");
+      const rows = yield* sql`SELECT thread_id FROM factory_issue_launches`;
+      assert.equal(rows.length, phase === "before-reservation" ? 0 : 1);
+    }).pipe(
+      Effect.provide(
+        harness({
+          trackers: [fakeTracker(), fakeIssueTracker("gitlab")],
+          resolve: () =>
+            Effect.succeed({
+              canonicalKey,
+              provider,
+              rootPath: "/repo",
+              locator: {
+                source: "git-remote",
+                remoteName: "origin",
+                remoteUrl: `https://${canonicalKey}.git`,
+              },
+            }),
+          resolveCommit: () =>
+            Effect.sync(() => {
+              if (phase === "before-reservation") provider = "gitlab";
+              return { commitSha: baseRef };
+            }),
         }).layer,
       ),
     );
@@ -339,7 +453,7 @@ it.effect(
         yield* sql`SELECT origin_key FROM factory_issue_launches WHERE thread_id = ${first.threadId}`;
       assert.equal(
         rows[0]?.origin_key,
-        githubIssueOriginKey(first.repository.canonicalKey, issue.number),
+        issueOriginKey(first.repository.provider, first.repository.canonicalKey, issue.number),
       );
       const again = yield* factory.start({
         ...startInput("third"),
@@ -361,7 +475,7 @@ it.effect.each(["reservation", "thread", "message", "response"] as const)(
       const threads = yield* Threads.ThreadManagementService;
       const intent: Launches.FactoryLaunchIntent = {
         repository: {
-          provider: "github",
+          provider: SourceControlProviderKind.make("github"),
           host: "github.com",
           repository: "owner/factory",
           canonicalKey: "github.com/owner/factory",
@@ -372,9 +486,9 @@ it.effect.each(["reservation", "thread", "message", "response"] as const)(
           title: issue.title,
           body: issue.body,
           state: "open",
-          url: issue.html_url,
+          url: issue.url,
           labels: [],
-          updatedAt: issue.updated_at,
+          updatedAt: issue.updatedAt,
           task: null,
         },
         projectId,
@@ -390,7 +504,7 @@ it.effect.each(["reservation", "thread", "message", "response"] as const)(
         prompt: "Original immutable prompt",
         createdBy: "user",
         creationSource: "web",
-        createdAt: issue.updated_at,
+        createdAt: issue.updatedAt,
         previousThreadId: null,
       };
       yield* launches.reserve(intent);
@@ -509,13 +623,13 @@ it.effect("refuses a stale reviewed revision before resolving a base or reservin
 );
 
 it.effect("starts a listed revision after metadata-only edits and links it on read", () => {
-  let remote: object = issue;
+  let remote: TrackerIssue = issue;
   return Effect.gen(function* () {
     yield* seed;
     const factory = yield* Factory.FactoryIssueService;
     const listed = (yield* factory.list({ projectId })).issues[0];
     if (listed === undefined) return yield* Effect.die("Expected the listed issue");
-    remote = { ...issue, labels: [{ name: "triaged" }], updated_at: "2026-10-24T00:00:00.000Z" };
+    remote = { ...issue, labels: ["triaged"], updatedAt: "2026-10-24T00:00:00.000Z" };
     const started = yield* factory.start({
       ...startInput("from-list"),
       expectedIssueRevision: listed.revision,
@@ -523,7 +637,7 @@ it.effect("starts a listed revision after metadata-only edits and links it on re
     assert.isFalse(started.resumed);
     const reread = yield* factory.read({ projectId, issueNumber: 12 });
     assert.equal(reread.issue.task?.threadId, started.threadId);
-  }).pipe(Effect.provide(harness({ rest: remoteIssue(() => remote) }).layer));
+  }).pipe(Effect.provide(harness({ tracker: remoteIssue(() => remote) }).layer));
 });
 
 const contentEdits: ReadonlyArray<{
@@ -560,7 +674,7 @@ const contentEdits: ReadonlyArray<{
 it.effect.each(contentEdits)(
   "refuses $change under an unchanged timestamp until the content is reviewed again",
   ({ reviewed, current }) => {
-    let remote: object = { ...issue, ...reviewed };
+    let remote: TrackerIssue = { ...issue, ...reviewed };
     return Effect.gen(function* () {
       yield* seed;
       const factory = yield* Factory.FactoryIssueService;
@@ -577,14 +691,14 @@ it.effect.each(contentEdits)(
         }),
       );
       assert.deepEqual({ title: intent.issue.title, body: intent.issue.body }, current);
-    }).pipe(Effect.provide(harness({ rest: remoteIssue(() => remote) }).layer));
+    }).pipe(Effect.provide(harness({ tracker: remoteIssue(() => remote) }).layer));
   },
 );
 
 it.effect.each(OrchestrationV2CreationSource.literals)(
   "refuses changed content from a %s caller before resolving a base",
   (creationSource) => {
-    let remote: object = issue;
+    let remote: TrackerIssue = issue;
     return Effect.gen(function* () {
       yield* seed;
       const factory = yield* Factory.FactoryIssueService;
@@ -597,7 +711,7 @@ it.effect.each(OrchestrationV2CreationSource.literals)(
     }).pipe(
       Effect.provide(
         harness({
-          rest: remoteIssue(() => remote),
+          tracker: remoteIssue(() => remote),
           resolveCommit: () => Effect.die("Changed content reached base resolution"),
         }).layer,
       ),
@@ -606,7 +720,7 @@ it.effect.each(OrchestrationV2CreationSource.literals)(
 );
 
 it.effect("a stale restart keeps the deleted task bound until content is re-reviewed", () => {
-  let remote: object = issue;
+  let remote: TrackerIssue = issue;
   return Effect.gen(function* () {
     yield* seed;
     const factory = yield* Factory.FactoryIssueService;
@@ -633,7 +747,7 @@ it.effect("a stale restart keeps the deleted task bound until content is re-revi
     });
     assert.isFalse(restarted.resumed);
     assert.notEqual(restarted.threadId, first.threadId);
-  }).pipe(Effect.provide(harness({ rest: remoteIssue(() => remote) }).layer));
+  }).pipe(Effect.provide(harness({ tracker: remoteIssue(() => remote) }).layer));
 });
 
 it.effect("a pre-revision saved intent resumes its prompt and base without reading GitHub", () =>
@@ -655,9 +769,9 @@ it.effect("a pre-revision saved intent resumes its prompt and base without readi
         title: issue.title,
         body: issue.body,
         state: "open",
-        url: issue.html_url,
+        url: issue.url,
         labels: ["feature"],
-        updatedAt: issue.updated_at,
+        updatedAt: issue.updatedAt,
         task: null,
       },
       projectId,
@@ -673,7 +787,7 @@ it.effect("a pre-revision saved intent resumes its prompt and base without readi
       prompt: "Legacy immutable prompt",
       createdBy: "user",
       creationSource: "web",
-      createdAt: issue.updated_at,
+      createdAt: issue.updatedAt,
       previousThreadId: null,
     });
     const sql = yield* SqlClient.SqlClient;
@@ -699,7 +813,9 @@ it.effect("a pre-revision saved intent resumes its prompt and base without readi
     assert.equal(preparation?.type === "worktree" ? preparation.baseRef : undefined, savedBase);
   }).pipe(
     Effect.provide(
-      harness({ rest: () => Effect.die("A saved intent must not read the live issue") }).layer,
+      harness({
+        tracker: { getIssue: () => Effect.die("A saved intent must not read the live issue") },
+      }).layer,
     ),
   ),
 );
@@ -708,7 +824,7 @@ it.effect("admits the matched snapshot when GitHub changes during base resolutio
   Effect.gen(function* () {
     const atBase = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
-    let remote: object = { ...issue, body: "Reviewed body" };
+    let remote: TrackerIssue = { ...issue, body: "Reviewed body" };
     yield* Effect.gen(function* () {
       yield* seed;
       const factory = yield* Factory.FactoryIssueService;
@@ -729,7 +845,7 @@ it.effect("admits the matched snapshot when GitHub changes during base resolutio
     }).pipe(
       Effect.provide(
         harness({
-          rest: remoteIssue(() => remote),
+          tracker: remoteIssue(() => remote),
           resolveCommit: () =>
             Deferred.succeed(atBase, undefined).pipe(
               Effect.andThen(Deferred.await(release)),
@@ -745,7 +861,7 @@ it.effect("a slower start of older reviewed content resumes the newer admitted t
   Effect.gen(function* () {
     const olderAtBase = yield* Deferred.make<void>();
     const releaseOlder = yield* Deferred.make<void>();
-    let remote: object = { ...issue, body: "Older reviewed body" };
+    let remote: TrackerIssue = { ...issue, body: "Older reviewed body" };
     let baseResolutions = 0;
     yield* Effect.gen(function* () {
       yield* seed;
@@ -770,7 +886,7 @@ it.effect("a slower start of older reviewed content resumes the newer admitted t
     }).pipe(
       Effect.provide(
         harness({
-          rest: remoteIssue(() => remote),
+          tracker: remoteIssue(() => remote),
           resolveCommit: () =>
             baseResolutions++ === 0
               ? Deferred.succeed(olderAtBase, undefined).pipe(
@@ -784,28 +900,18 @@ it.effect("a slower start of older reviewed content resumes the newer admitted t
   }),
 );
 
-it.effect.each([
-  { record: { ...issue, state: "closed" }, reason: "closed-issue" },
-  { record: { ...issue, pull_request: {} }, reason: "not-an-issue" },
-])("refuses $reason without reserving work", ({ record, reason }) =>
+it.effect("refuses a closed issue without reserving work", () =>
   Effect.gen(function* () {
     yield* seed;
     const factory = yield* Factory.FactoryIssueService;
     const rejected = { ...startInput("rejected"), expectedIssueRevision: unreviewed };
-    assert.equal((yield* factory.start(rejected).pipe(Effect.flip)).reason, reason);
+    assert.equal((yield* factory.start(rejected).pipe(Effect.flip)).reason, "closed-issue");
     const sql = yield* SqlClient.SqlClient;
     assert.equal((yield* sql`SELECT * FROM factory_issue_launches`).length, 0);
   }).pipe(
     Effect.provide(
       harness({
-        rest: () =>
-          Effect.succeed({
-            status: 200,
-            headers: {},
-            body: JSON.stringify(record),
-            truncated: false,
-            invalidUtf8: false,
-          }),
+        tracker: { getIssue: () => Effect.succeed({ ...issue, state: "closed" }) },
       }).layer,
     ),
   ),
@@ -824,22 +930,13 @@ it.effect("closed issues still open their existing task without another launch",
   }).pipe(
     Effect.provide(
       harness({
-        rest: (input) => {
-          const record = { ...issue, state: closed ? "closed" : "open" };
-          return Effect.succeed({
-            status: 200,
-            headers: {},
-            body: JSON.stringify(input.path.includes("?") ? [record] : record),
-            truncated: false,
-            invalidUtf8: false,
-          });
-        },
+        tracker: remoteIssue(() => ({ ...issue, state: closed ? "closed" : "open" })),
       }).layer,
     ),
   );
 });
 
-it.effect("rejects a non-GitHub fork rather than falling back to its GitHub upstream", () =>
+it.effect("rejects a non-trackable fork rather than falling back to its GitHub upstream", () =>
   Effect.gen(function* () {
     yield* seed;
     const factory = yield* Factory.FactoryIssueService;
@@ -854,8 +951,8 @@ it.effect("rejects a non-GitHub fork rather than falling back to its GitHub upst
           Effect.succeed({
             ...identity,
             origin: {
-              canonicalKey: "gitlab.com/owner/factory",
-              remoteUrl: "git@gitlab.com:owner/factory.git",
+              canonicalKey: "bitbucket.org/owner/factory",
+              remoteUrl: "git@bitbucket.org:owner/factory.git",
             },
           }),
       }).layer,
@@ -864,20 +961,36 @@ it.effect("rejects a non-GitHub fork rather than falling back to its GitHub upst
 );
 
 it.effect.each([
-  {
-    error: new GitHubApiAuthenticationError({ host: "github.com", operation: "test" }),
-    reason: "authentication",
-  },
-  {
-    error: new GitHubApiRateLimitError({ host: "github.com", operation: "test" }),
-    reason: "rate-limited",
-  },
-])("returns $reason instead of an empty successful inbox", ({ error, reason }) =>
+  { remoteReason: "unauthenticated", reason: "authentication" },
+  { remoteReason: "missing-tool", reason: "authentication" },
+  { remoteReason: "rate-limited", reason: "rate-limited" },
+  { remoteReason: "not-found", reason: "remote-failure" },
+  { remoteReason: "failed", reason: "remote-failure" },
+  { remoteReason: "invalid-response", reason: "invalid-response" },
+  { remoteReason: "truncated-response", reason: "invalid-response" },
+  { remoteReason: "not-an-issue", reason: "not-an-issue" },
+] as const)("maps tracker $remoteReason to $reason", ({ remoteReason, reason }) =>
   Effect.gen(function* () {
     yield* seed;
     const factory = yield* Factory.FactoryIssueService;
     assert.equal((yield* factory.list({ projectId }).pipe(Effect.flip)).reason, reason);
-  }).pipe(Effect.provide(harness({ rest: () => Effect.fail(error) }).layer)),
+  }).pipe(
+    Effect.provide(
+      harness({
+        tracker: {
+          listIssues: () =>
+            Effect.fail(
+              new IssueTrackerProviderError({
+                provider: SourceControlProviderKind.make("github"),
+                operation: "issues.list",
+                reason: remoteReason,
+                detail: "Test failure",
+              }),
+            ),
+        },
+      }).layer,
+    ),
+  ),
 );
 
 it.effect("an incomplete stored launch cannot exceed a retrying MCP caller's ceiling", () =>
@@ -1058,28 +1171,9 @@ it.effect("refuses an upstream-only project instead of importing upstream issues
             stdoutTruncated: false,
             stderrTruncated: false,
           }),
-        rest: () => Effect.die("A project without origin must not read upstream issues"),
-      }).layer,
-    ),
-  ),
-);
-
-it.effect("rejects malformed remote timestamps at the issue boundary", () =>
-  Effect.gen(function* () {
-    yield* seed;
-    const factory = yield* Factory.FactoryIssueService;
-    assert.equal((yield* factory.list({ projectId }).pipe(Effect.flip)).reason, "invalid-response");
-  }).pipe(
-    Effect.provide(
-      harness({
-        rest: () =>
-          Effect.succeed({
-            status: 200,
-            headers: {},
-            truncated: false,
-            invalidUtf8: false,
-            body: JSON.stringify([{ ...issue, updated_at: "not-a-timestamp" }]),
-          }),
+        tracker: {
+          listIssues: () => Effect.die("A project without origin must not read upstream issues"),
+        },
       }).layer,
     ),
   ),
@@ -1172,7 +1266,9 @@ it.effect(
       assert.equal((yield* sql`SELECT * FROM factory_issue_launches`).length, 0);
     }).pipe(
       Effect.provide(
-        harness({ rest: () => Effect.die("A stale repository must not fetch issues") }).layer,
+        harness({
+          tracker: { getIssue: () => Effect.die("A stale repository must not fetch issues") },
+        }).layer,
       ),
     ),
 );
@@ -1232,14 +1328,7 @@ it.effect("public command reuse cannot attach another issue to an earlier launch
   }).pipe(
     Effect.provide(
       harness({
-        rest: (input) =>
-          Effect.succeed({
-            status: 200,
-            headers: {},
-            truncated: false,
-            invalidUtf8: false,
-            body: JSON.stringify({ ...issue, number: input.path.endsWith("/13") ? 13 : 12 }),
-          }),
+        tracker: { getIssue: (input) => Effect.succeed({ ...issue, number: input.number }) },
       }).layer,
     ),
   ),
@@ -1291,7 +1380,7 @@ it.effect(
       const owner = projectId;
       const reserved = yield* store.reserve({
         repository: {
-          provider: "github",
+          provider: SourceControlProviderKind.make("github"),
           host: "github.com",
           repository: "owner/factory",
           canonicalKey: "github.com/owner/factory",
@@ -1302,9 +1391,9 @@ it.effect(
           title: issue.title,
           body: issue.body,
           state: "open",
-          url: issue.html_url,
+          url: issue.url,
           labels: [],
-          updatedAt: issue.updated_at,
+          updatedAt: issue.updatedAt,
           task: null,
         },
         projectId: owner,
@@ -1320,7 +1409,7 @@ it.effect(
         prompt: "Original orphan prompt",
         createdBy: "user",
         creationSource: "web",
-        createdAt: issue.updated_at,
+        createdAt: issue.updatedAt,
         previousThreadId: null,
       });
       const projects = yield* Projects.ProjectService;

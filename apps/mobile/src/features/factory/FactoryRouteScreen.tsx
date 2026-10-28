@@ -408,7 +408,7 @@ export function FactoryRouteScreen() {
           ) : null}
           {selection.section === "issues" ? (
             <Text className="text-sm text-foreground-muted">
-              Choose one connected, supported checkout to review its GitHub source and start issue
+              Choose one connected, supported checkout to review its issue source and start issue
               work. This is not an aggregate issue queue.
             </Text>
           ) : null}

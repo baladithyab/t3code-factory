@@ -1,7 +1,7 @@
 import {
+  FactoryClaim,
   FactoryIssueError,
   FactoryOriginKey,
-  type FactoryClaim,
   type FactoryClaimListInput,
   type FactoryClaimListResult,
 } from "@t3tools/contracts";
@@ -18,7 +18,7 @@ import { FactoryKnowledgeLaunchIntent } from "../persistence/FactoryKnowledgeSto
 import { FactoryResearchLaunchIntent } from "../persistence/FactoryResearchStore.ts";
 import {
   feedItemOriginKey,
-  githubIssueOriginKey,
+  issueOriginKey,
   knowledgeBriefOriginKey,
   researchRunOriginKey,
 } from "./FactoryOriginKey.ts";
@@ -38,7 +38,7 @@ const decodeRows = Schema.decodeUnknownEffect(
     Schema.Union([
       Schema.Struct({
         ...columns,
-        origin: Schema.Literal("github-issue"),
+        origin: Schema.Literal("issue"),
         intent: Schema.fromJsonString(FactoryLaunchIntent),
       }),
       Schema.Struct({
@@ -59,6 +59,7 @@ const decodeRows = Schema.decodeUnknownEffect(
     ]),
   ),
 );
+const isClaimOrigin = Schema.is(FactoryClaim.fields.origin);
 
 export class FactoryClaimsService extends Context.Service<
   FactoryClaimsService,
@@ -94,7 +95,7 @@ const make = Effect.gen(function* () {
   const list = Effect.fn("FactoryClaimsService.list")(function* (input: FactoryClaimListInput) {
     const { repository } = yield* resolve(input.projectId);
     const rows = yield* sql`
-      SELECT 'github-issue' AS origin, origin_key AS originKey, intent_json AS intent, accepted, 0 AS originConflict, ${acceptance("factory_issue_launches")}
+      SELECT 'issue' AS origin, origin_key AS originKey, intent_json AS intent, accepted, 0 AS originConflict, ${acceptance("factory_issue_launches")}
       FROM factory_issue_launches WHERE superseded = 0
         AND json_extract(CASE WHEN json_valid(intent_json) THEN intent_json ELSE '{}' END, '$.repository.canonicalKey') = ${repository.canonicalKey}
       UNION ALL
@@ -113,17 +114,33 @@ const make = Effect.gen(function* () {
       Effect.flatMap(decodeRows),
       Effect.mapError((cause) => new FactoryIssueError({ reason: "persistence-failure", cause })),
     );
-    const claims = yield* Effect.forEach(
+    const presented = yield* Effect.forEach(
       rows,
       Effect.fn("FactoryClaimsService.present")(function* (row): Effect.fn.Return<
-        FactoryClaim,
+        FactoryClaim | null,
         FactoryIssueError
       > {
         const { intent } = row;
+        // An issue claim's origin is the provider frozen into its intent at admission.
+        const origin =
+          row.origin === "issue" ? `${row.intent.repository.provider}-issue` : row.origin;
+        if (!isClaimOrigin(origin)) {
+          // A host the contract has no origin for is left out rather than mislabelled, and one
+          // such row does not fail the list.
+          yield* Effect.logWarning("factory claim skipped: no claim origin for its issue host", {
+            threadId: intent.threadId,
+            origin,
+          });
+          return null;
+        }
         const originKey =
           row.originKey ??
-          (row.origin === "github-issue"
-            ? githubIssueOriginKey(row.intent.repository.canonicalKey, row.intent.issue.number)
+          (row.origin === "issue"
+            ? issueOriginKey(
+                row.intent.repository.provider,
+                row.intent.repository.canonicalKey,
+                row.intent.issue.number,
+              )
             : row.origin === "feed-item"
               ? feedItemOriginKey(
                   row.intent.repository.canonicalKey,
@@ -139,7 +156,7 @@ const make = Effect.gen(function* () {
             : (yield* inspect(row)).task.status;
         return {
           originKey,
-          origin: row.origin,
+          origin,
           projectId: intent.projectId,
           workspaceRoot: intent.workspaceRoot,
           threadId: intent.threadId,
@@ -160,6 +177,7 @@ const make = Effect.gen(function* () {
         };
       }),
     );
+    const claims = presented.filter((claim) => claim !== null);
     claims.sort(
       (a, b) => a.createdAt.localeCompare(b.createdAt) || a.threadId.localeCompare(b.threadId),
     );

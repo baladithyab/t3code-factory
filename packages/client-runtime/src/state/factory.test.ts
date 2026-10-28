@@ -56,6 +56,7 @@ import {
   type ProjectCoordinator,
   type ProjectCoordinatorEnsureInput,
   type ProjectCoordinatorGetInput,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -522,7 +523,7 @@ describe("Factory feed queries", () => {
 });
 
 const readinessRepository = {
-  provider: "github",
+  provider: SourceControlProviderKind.make("github"),
   host: "github.com",
   repository: "example/repo",
   canonicalKey: "github.com/example/repo",

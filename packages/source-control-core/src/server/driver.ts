@@ -15,6 +15,7 @@ import type * as Scope from "effect/Scope";
 import type { SourceControlDefinition } from "../shared/definition.ts";
 
 import type { SourceControlProviderDiscoverySpec } from "./discovery.ts";
+import type { IssueTrackerProviderApi } from "./IssueTrackerProvider.ts";
 import type { PullRequestProviderApi } from "./PullRequestProvider.ts";
 import type * as SourceControlHost from "./SourceControlHost.ts";
 import type * as SourceControlProvider from "./SourceControlProvider.ts";
@@ -63,6 +64,8 @@ export interface SourceControlDriverInstance {
     Scope.Scope
   >;
   readonly signIn?: SourceControlSignIn;
+  /** Null for a host whose issues this build cannot read. */
+  readonly issues: IssueTrackerProviderApi | null;
 }
 
 /** What the server gives every driver. A driver builds anything else it needs itself. */

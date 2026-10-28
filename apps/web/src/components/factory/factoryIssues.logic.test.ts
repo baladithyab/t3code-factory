@@ -8,6 +8,7 @@ import {
   FactoryReadinessOverrideId,
   ProjectId,
   ProviderInstanceId,
+  SourceControlProviderKind,
   ThreadId,
   type FactoryIssue,
   type FactoryIssueFrontierReadResult,
@@ -20,12 +21,14 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  FACTORY_OVERRIDE_ACTIONS,
   boundedIssueBody,
   buildFactoryReadinessOverrideInput,
   currentFactoryPage,
   describeFactoryFailure,
-  factoryFrontierPresentation,
-  factoryReadinessPresentation,
+  factoryBlockersUnsupportedMessage,
+  factoryFrontierPresentation as presentFrontier,
+  factoryReadinessPresentation as presentReadiness,
   factoryScopeKey,
   isFactoryOverrideSubmitEnabled,
   normalizeFactoryBaseRef,
@@ -35,6 +38,18 @@ import {
   safeExternalUrl,
   FACTORY_ISSUE_BODY_PREVIEW_LIMIT,
 } from "./factoryIssues.logic";
+
+// Fixtures read as GitHub unless a test names another host.
+const factoryReadinessPresentation = (
+  value: FactoryReadiness,
+  now: number,
+  displayName = "GitHub",
+) => presentReadiness(value, now, displayName);
+const factoryFrontierPresentation = (
+  value: FactoryIssueFrontierReadResult,
+  now: number,
+  displayName = "GitHub",
+) => presentFrontier(value, now, displayName);
 
 function task(status: FactoryIssueTask["status"]): FactoryIssueTask {
   return {
@@ -126,6 +141,19 @@ describe("describeFactoryFailure", () => {
       new FactoryIssueError({ reason: "override-not-allowed" }),
     );
     expect(refused).toMatchObject({ kind: "other", title: "Override not allowed" });
+  });
+
+  it("names the issue host in sign-in and rate-limit titles only when it is known", () => {
+    const authentication = new FactoryIssueError({ reason: "authentication" });
+    expect(describeFactoryFailure(authentication).title).toBe("Sign-in required");
+    expect(describeFactoryFailure(authentication, undefined, "GitLab").title).toBe(
+      "GitLab sign-in required",
+    );
+    const rateLimited = new FactoryIssueError({ reason: "rate-limited" });
+    expect(describeFactoryFailure(rateLimited).title).toBe("Rate limit reached");
+    expect(describeFactoryFailure(rateLimited, undefined, "GitLab").title).toBe(
+      "GitLab rate limit reached",
+    );
   });
 });
 
@@ -280,34 +308,70 @@ describe("factoryReadinessPresentation", () => {
     ).toBe("Blocked: 1 unresolved blocker");
   });
 
-  it("explains an unknown verdict with its first reason in words", () => {
-    const expected: Record<FactoryReadinessReason, string> = {
-      "closed-subject": "the issue is closed",
-      "open-blocker": "a blocker is still open",
-      "unaccepted-blocker": "a blocker was closed without completion",
-      "deleted-blocker": "a blocker was deleted",
-      "inaccessible-blocker": "a blocker is not accessible",
-      "moved-blocker": "a blocker moved",
-      "unverified-blocker": "a blocker could not be verified",
-      "partial-listing": "GitHub returned only part of the blocker list",
-      "summary-missing": "GitHub did not report how many blockers exist",
-      "truncated-response": "the blocker list was truncated",
-      "invalid-response": "GitHub returned a response that could not be read",
-      authentication: "GitHub sign-in is required",
-      "rate-limited": "the GitHub rate limit was reached",
-      "remote-failure": "GitHub could not be reached",
-      cycle: "the blockers form a cycle",
-      "overridden-not-ready": "a blocker is disputed",
-    };
-    for (const [reason, words] of Object.entries(expected) as Array<
-      [FactoryReadinessReason, string]
-    >) {
-      const presentation = factoryReadinessPresentation(
-        readiness({ status: "unknown", complete: false, reasons: [reason, "cycle"] }),
+  const reasonWords = (displayName: string): Record<FactoryReadinessReason, string> => ({
+    "closed-subject": "the issue is closed",
+    "open-blocker": "a blocker is still open",
+    "unaccepted-blocker": "a blocker was closed without completion",
+    "deleted-blocker": "a blocker was deleted",
+    "inaccessible-blocker": "a blocker is not accessible",
+    "moved-blocker": "a blocker moved",
+    "unverified-blocker": "a blocker could not be verified",
+    "partial-listing": `${displayName} returned only part of the blocker list`,
+    "summary-missing": `${displayName} did not report how many blockers exist`,
+    "truncated-response": "the blocker list was truncated",
+    "invalid-response": `${displayName} returned a response that could not be read`,
+    authentication: `${displayName} sign-in is required`,
+    "rate-limited": `the ${displayName} rate limit was reached`,
+    "remote-failure": `${displayName} could not be reached`,
+    "capability-unsupported": `${displayName} does not expose blocking relationships`,
+    cycle: "the blockers form a cycle",
+    "overridden-not-ready": "a blocker is disputed",
+  });
+
+  it.each(["GitHub", "GitLab"])(
+    "explains an unknown verdict with its first reason in words, naming %s",
+    (displayName) => {
+      for (const [reason, words] of Object.entries(reasonWords(displayName)) as Array<
+        [FactoryReadinessReason, string]
+      >) {
+        const presentation = factoryReadinessPresentation(
+          readiness({ status: "unknown", complete: false, reasons: [reason, "cycle"] }),
+          observedMs,
+          displayName,
+        );
+        expect(presentation).toMatchObject({ label: `Readiness unknown: ${words}`, tone: "info" });
+      }
+    },
+  );
+
+  it("never names GitHub for a host that is not GitHub", () => {
+    for (const reason of Object.keys(reasonWords("GitLab")) as Array<FactoryReadinessReason>) {
+      const { label } = factoryReadinessPresentation(
+        readiness({ status: "unknown", reasons: [reason] }),
         observedMs,
+        "GitLab",
       );
-      expect(presentation).toMatchObject({ label: `Readiness unknown: ${words}`, tone: "info" });
+      expect(label).not.toContain("GitHub");
     }
+  });
+
+  it("reports a host without blocking relationships as unknown, not as unblocked", () => {
+    const presentation = factoryReadinessPresentation(
+      readiness({ status: "unknown", complete: false, reasons: ["capability-unsupported"] }),
+      observedMs,
+      "GitLab",
+    );
+    expect(presentation).toMatchObject({
+      label: "Readiness unknown: GitLab does not expose blocking relationships",
+      tone: "info",
+    });
+    expect(presentation.edgeRows).toEqual([]);
+    expect(factoryBlockersUnsupportedMessage("GitLab")).toBe(
+      "GitLab does not expose blocking relationships; readiness stays unknown.",
+    );
+  });
+
+  it("says no reason was reported when an unknown verdict carries none", () => {
     expect(
       factoryReadinessPresentation(readiness({ status: "unknown", reasons: [] }), observedMs).label,
     ).toBe("Readiness unknown: no reason reported");
@@ -700,7 +764,7 @@ describe("factoryFrontierPresentation", () => {
   ): FactoryIssueFrontierReadResult {
     return {
       repository: {
-        provider: "github",
+        provider: SourceControlProviderKind.make("github"),
         host: "github.com",
         repository: "owner/repo",
         canonicalKey: "github.com/owner/repo",
@@ -812,6 +876,27 @@ describe("factoryFrontierPresentation", () => {
     );
   });
 
+  it("names the host that reported the sub-issue total", () => {
+    expect(
+      factoryFrontierPresentation(
+        frontier({ complete: false, summaryTotal: 3 }),
+        observedMs,
+        "GitLab",
+      ).note,
+    ).toBe(
+      "Incomplete: GitLab reports 3 sub-issues, 0 listed here. This list may be missing some.",
+    );
+    expect(
+      factoryFrontierPresentation(
+        frontier({ complete: false, summaryTotal: null }),
+        observedMs,
+        "GitLab",
+      ).note,
+    ).toBe(
+      "Incomplete: GitLab did not report how many sub-issues exist, so this list may be missing some.",
+    );
+  });
+
   it("marks the whole observation stale once it is older than the TTL", () => {
     expect(
       factoryFrontierPresentation(frontier(), observedMs + FACTORY_READINESS_TTL_MS).stale,
@@ -835,6 +920,14 @@ describe("readiness override submission", () => {
     const atLimit = "x".repeat(FACTORY_READINESS_OVERRIDE_REASON_MAX_CHARS);
     expect(isFactoryOverrideSubmitEnabled({ ...base, reason: atLimit })).toBe(true);
     expect(isFactoryOverrideSubmitEnabled({ ...base, reason: `${atLimit}x` })).toBe(false);
+  });
+
+  it("names the issue host in the dispute and waiver explanations", () => {
+    for (const action of ["dispute", "waive"] as const) {
+      const description = FACTORY_OVERRIDE_ACTIONS[action].description("GitLab");
+      expect(description).toContain("GitLab");
+      expect(description).not.toContain("GitHub");
+    }
   });
 
   it("sends the fingerprint the reviewer saw and the kind that matches the action", () => {
