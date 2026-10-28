@@ -5,12 +5,13 @@ import type { FactoryClaimRowPresentation } from "./factoryClaims.logic";
 export function FactoryClaimIndicators(props: {
   readonly presentation: FactoryClaimRowPresentation;
 }) {
-  const { conflict, duplicates, provenance, acceptedCommit } = props.presentation;
+  const { conflict, duplicates, provenance, acceptedCommit, acceptedArtifact } = props.presentation;
   if (
     conflict === null &&
     duplicates === null &&
     provenance === null &&
-    acceptedCommit === undefined
+    acceptedCommit === undefined &&
+    acceptedArtifact === undefined
   ) {
     return null;
   }
@@ -35,6 +36,15 @@ export function FactoryClaimIndicators(props: {
           {" · "}
           <time dateTime={acceptedCommit.acceptedAt}>
             {new Date(acceptedCommit.acceptedAt).toLocaleDateString()}
+          </time>
+        </p>
+      ) : null}
+      {acceptedArtifact !== undefined ? (
+        <p className="text-muted-foreground text-xs">
+          Accepted artifact <code>{acceptedArtifact.shortSha}</code>
+          {" · "}
+          <time dateTime={acceptedArtifact.acceptedAt}>
+            {new Date(acceptedArtifact.acceptedAt).toLocaleDateString()}
           </time>
         </p>
       ) : null}

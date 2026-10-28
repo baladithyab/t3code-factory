@@ -41,6 +41,7 @@ import { Route as ChatFactorySourcesRouteImport } from './routes/_chat.factory.s
 import { Route as ChatFactoryResearchRouteImport } from './routes/_chat.factory.research'
 import { Route as ChatFactoryOrchestratorRouteImport } from './routes/_chat.factory.orchestrator'
 import { Route as ChatFactoryIssuesRouteImport } from './routes/_chat.factory.issues'
+import { Route as ChatFactoryBriefsRouteImport } from './routes/_chat.factory.briefs'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 
@@ -204,6 +205,11 @@ const ChatFactoryIssuesRoute = ChatFactoryIssuesRouteImport.update({
   path: '/issues',
   getParentRoute: () => ChatFactoryRoute,
 } as any)
+const ChatFactoryBriefsRoute = ChatFactoryBriefsRouteImport.update({
+  id: '/briefs',
+  path: '/briefs',
+  getParentRoute: () => ChatFactoryRoute,
+} as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
   path: '/draft/$draftId',
@@ -244,6 +250,7 @@ export interface FileRoutesByFullPath {
   '/settings/storage': typeof SettingsStorageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/factory/briefs': typeof ChatFactoryBriefsRoute
   '/factory/issues': typeof ChatFactoryIssuesRoute
   '/factory/orchestrator': typeof ChatFactoryOrchestratorRoute
   '/factory/research': typeof ChatFactoryResearchRoute
@@ -278,6 +285,7 @@ export interface FileRoutesByTo {
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/factory/briefs': typeof ChatFactoryBriefsRoute
   '/factory/issues': typeof ChatFactoryIssuesRoute
   '/factory/orchestrator': typeof ChatFactoryOrchestratorRoute
   '/factory/research': typeof ChatFactoryResearchRoute
@@ -315,6 +323,7 @@ export interface FileRoutesById {
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/_chat/factory/briefs': typeof ChatFactoryBriefsRoute
   '/_chat/factory/issues': typeof ChatFactoryIssuesRoute
   '/_chat/factory/orchestrator': typeof ChatFactoryOrchestratorRoute
   '/_chat/factory/research': typeof ChatFactoryResearchRoute
@@ -352,6 +361,7 @@ export interface FileRouteTypes {
     | '/settings/storage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/factory/briefs'
     | '/factory/issues'
     | '/factory/orchestrator'
     | '/factory/research'
@@ -386,6 +396,7 @@ export interface FileRouteTypes {
     | '/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/factory/briefs'
     | '/factory/issues'
     | '/factory/orchestrator'
     | '/factory/research'
@@ -422,6 +433,7 @@ export interface FileRouteTypes {
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
+    | '/_chat/factory/briefs'
     | '/_chat/factory/issues'
     | '/_chat/factory/orchestrator'
     | '/_chat/factory/research'
@@ -667,6 +679,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatFactoryIssuesRouteImport
       parentRoute: typeof ChatFactoryRoute
     }
+    '/_chat/factory/briefs': {
+      id: '/_chat/factory/briefs'
+      path: '/briefs'
+      fullPath: '/factory/briefs'
+      preLoaderRoute: typeof ChatFactoryBriefsRouteImport
+      parentRoute: typeof ChatFactoryRoute
+    }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'
       path: '/draft/$draftId'
@@ -685,6 +704,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface ChatFactoryRouteChildren {
+  ChatFactoryBriefsRoute: typeof ChatFactoryBriefsRoute
   ChatFactoryIssuesRoute: typeof ChatFactoryIssuesRoute
   ChatFactoryOrchestratorRoute: typeof ChatFactoryOrchestratorRoute
   ChatFactoryResearchRoute: typeof ChatFactoryResearchRoute
@@ -694,6 +714,7 @@ interface ChatFactoryRouteChildren {
 }
 
 const ChatFactoryRouteChildren: ChatFactoryRouteChildren = {
+  ChatFactoryBriefsRoute: ChatFactoryBriefsRoute,
   ChatFactoryIssuesRoute: ChatFactoryIssuesRoute,
   ChatFactoryOrchestratorRoute: ChatFactoryOrchestratorRoute,
   ChatFactoryResearchRoute: ChatFactoryResearchRoute,

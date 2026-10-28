@@ -52,7 +52,11 @@ export const FactoryLaunchCore = Schema.Struct({
   previousThreadId: Schema.NullOr(ThreadId),
 });
 type Core = typeof FactoryLaunchCore.Type;
-type Binding<I extends Core> = { readonly intent: I; readonly accepted: 0 | 1 };
+// The launch fields status derivation reads. Knowledge tasks have no `baseRef`, so the inspector
+// is built on this smaller shape and the issue-shaped `makeInspector` adds the task fields.
+type Launched = Pick<Core, "projectId" | "threadId" | "commandId">;
+
+type Binding<I extends Launched> = { readonly intent: I; readonly accepted: 0 | 1 };
 type LaunchReason =
   | "persistence-failure"
   | "deleted-task"
@@ -122,14 +126,14 @@ export const makeRepositoryResolver = Effect.gen(function* () {
   });
 });
 
-export const makeInspector = Effect.fn("FactoryTaskLaunch.makeInspector")(function* <E>(options: {
-  readonly span: string;
+// Untraced: each caller names the span of the inspection it wraps.
+export const makeStatusInspector = Effect.fnUntraced(function* <E>(options: {
   readonly error: (reason: LaunchReason, cause?: unknown) => E;
 }) {
   const projects = yield* Projects.ProjectService;
   const threads = yield* Threads.ThreadManagementService;
   const receipts = yield* Receipts.CommandReceiptStoreV2;
-  return Effect.fn(`${options.span}.inspect`)(function* (binding: Binding<Core>) {
+  return Effect.fnUntraced(function* (binding: Binding<Launched>) {
     const { intent } = binding;
     const shell = yield* threads
       .getThreadShell(intent.threadId)
@@ -158,6 +162,18 @@ export const makeInspector = Effect.fn("FactoryTaskLaunch.makeInspector")(functi
     else if (["running", "starting", "waiting", "queued"].includes(shell.status))
       status = "running";
     else status = binding.accepted === 0 && shell.latestRunId === null ? "launching" : "idle";
+    return { shell, status };
+  });
+});
+
+export const makeInspector = Effect.fn("FactoryTaskLaunch.makeInspector")(function* <E>(options: {
+  readonly span: string;
+  readonly error: (reason: LaunchReason, cause?: unknown) => E;
+}) {
+  const inspectStatus = yield* makeStatusInspector(options);
+  return Effect.fn(`${options.span}.inspect`)(function* (binding: Binding<Core>) {
+    const { intent } = binding;
+    const { shell, status } = yield* inspectStatus(binding);
     return {
       shell,
       task: {

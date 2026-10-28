@@ -23,6 +23,7 @@ import { useEnvironmentScope } from "../../state/session";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { SettingsSection } from "../settings/components/SettingsSection";
 import { FactoryScheduledTasksScreen } from "../settings/SettingsScheduledTasksRouteScreen";
+import { FactoryBriefsRouteScreen } from "./FactoryBriefsRouteScreen";
 import { FactoryIssuesRouteScreen } from "./FactoryIssuesRouteScreen";
 import { FactoryOrchestratorPanel } from "./FactoryOrchestratorPanel";
 import {
@@ -36,6 +37,7 @@ import {
 const SECTIONS: ReadonlyArray<{ readonly value: FactorySection; readonly label: string }> = [
   { value: "overview", label: "Overview" },
   { value: "issues", label: "Issues" },
+  { value: "briefs", label: "Briefs" },
   { value: "workflows", label: "Workflows" },
   { value: "orchestrator", label: "Orchestrator" },
 ];
@@ -91,13 +93,14 @@ function EnvironmentOverview({
   const readable = connected && config !== null && canRead;
   const coordinatorSupported = config?.environment.capabilities.projectCoordinators === true;
   const issuesSupported = config?.environment.capabilities.factoryIssues === true;
+  const knowledgeSupported = config?.environment.capabilities.factoryKnowledge === true;
   const tasks = useEnvironmentQuery(
     readable && section === "overview"
       ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} })
       : null,
   );
   const coordinators = useEnvironmentQuery(
-    readable && coordinatorSupported && section !== "issues"
+    readable && coordinatorSupported && section !== "issues" && section !== "briefs"
       ? factoryEnvironment.coordinatorsList({ environmentId, input: {} })
       : null,
   );
@@ -143,9 +146,11 @@ function EnvironmentOverview({
           const featureUnavailable =
             section === "issues" && !issuesSupported
               ? "Issue inbox unsupported by this server."
-              : section === "orchestrator" && !coordinatorSupported
-                ? "Orchestrators unsupported by this server."
-                : null;
+              : section === "briefs" && !knowledgeSupported
+                ? "Briefs unsupported by this server."
+                : section === "orchestrator" && !coordinatorSupported
+                  ? "Orchestrators unsupported by this server."
+                  : null;
           return (
             <View key={project.id} className="gap-2 border-t border-border-subtle p-4">
               <Text className="text-lg font-t3-medium text-foreground">{project.title}</Text>
@@ -174,7 +179,7 @@ function EnvironmentOverview({
                   ))}
                 </>
               ) : null}
-              {readable && section !== "issues" ? (
+              {readable && section !== "issues" && section !== "briefs" ? (
                 <Text className="text-sm text-foreground-muted">
                   {!coordinatorSupported
                     ? "Orchestrators unsupported by this server."
@@ -194,9 +199,11 @@ function EnvironmentOverview({
                 label={
                   section === "issues"
                     ? "Choose this checkout for issues"
-                    : section === "orchestrator"
-                      ? "Choose orchestrator checkout"
-                      : "Show this checkout"
+                    : section === "briefs"
+                      ? "Choose this checkout for briefs"
+                      : section === "orchestrator"
+                        ? "Choose orchestrator checkout"
+                        : "Show this checkout"
                 }
                 disabled={unavailable !== null || featureUnavailable !== null}
                 onPress={() => onChoose(environmentId, project.id)}
@@ -205,7 +212,7 @@ function EnvironmentOverview({
           );
         })
       )}
-      {readable && section !== "issues" ? (
+      {readable && section !== "issues" && section !== "briefs" ? (
         <View className="items-start p-3">
           <Button
             tone="text"
@@ -259,6 +266,8 @@ export function FactoryRouteScreen() {
     selectedEnvironment?.serverConfig?.environment.capabilities.factoryIssues === true;
   const coordinatorSupported =
     selectedEnvironment?.serverConfig?.environment.capabilities.projectCoordinators === true;
+  const knowledgeSupported =
+    selectedEnvironment?.serverConfig?.environment.capabilities.factoryKnowledge === true;
   const environmentActions: MenuAction[] = [
     {
       id: "all",
@@ -374,6 +383,15 @@ export function FactoryRouteScreen() {
           environmentId={selectedProject.environmentId}
           projectId={selectedProject.id}
         />
+      ) : selection.section === "briefs" &&
+        exactReadable &&
+        knowledgeSupported &&
+        selectedProject !== null ? (
+        <FactoryBriefsRouteScreen
+          key={sectionKey}
+          environmentId={selectedProject.environmentId}
+          projectId={selectedProject.id}
+        />
       ) : (
         <ScrollView
           className="flex-1"
@@ -392,6 +410,12 @@ export function FactoryRouteScreen() {
             <Text className="text-sm text-foreground-muted">
               Choose one connected, supported checkout to review its GitHub source and start issue
               work. This is not an aggregate issue queue.
+            </Text>
+          ) : null}
+          {selection.section === "briefs" ? (
+            <Text className="text-sm text-foreground-muted">
+              Choose one connected, supported checkout to write briefs and review their artifacts.
+              Briefs belong to one project.
             </Text>
           ) : null}
           {selection.section === "orchestrator" &&

@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  FactoryOriginKey,
   ProjectId,
   ThreadId,
   type FactoryClaim,
@@ -47,6 +48,7 @@ function claim(overrides: Partial<FactoryClaim> = {}): FactoryClaim {
     admittedBy: here,
     originConflict: false,
     acceptance: null,
+    artifactAcceptance: null,
     ...overrides,
   };
 }
@@ -272,6 +274,26 @@ describe("describeClaimConflict", () => {
 });
 
 describe("factoryClaimRowPresentation", () => {
+  it("shows artifact acceptance for knowledge work without a git base ref", () => {
+    const acceptedAt = "2026-10-27T12:00:00.000Z";
+    const knowledge = claim({
+      origin: "knowledge-brief",
+      originKey: FactoryOriginKey.make("knowledge:brief%3Aone"),
+      baseRef: null,
+      artifactAcceptance: { sha256: "abcdef0".padEnd(64, "1"), acceptedAt },
+    });
+    const presentation = factoryClaimRowPresentation({
+      claimsByEnvironment: new Map([[here, result(here, [knowledge])]]),
+      conflicts: new Map(),
+      environmentId: here,
+      originKey: knowledge.originKey,
+      task: { threadId: knowledge.threadId },
+      labelOf,
+    });
+    expect(presentation.acceptedArtifact).toEqual({ shortSha: "abcdef0", acceptedAt });
+    expect(presentation.acceptedCommit).toBeUndefined();
+  });
+
   const claimsByEnvironment = new Map([
     [here, result(here, [claim({ admittedBy: there })])],
     [there, result(there, [claim()])],

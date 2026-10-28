@@ -3,6 +3,7 @@ import { Link, useLocation } from "@tanstack/react-router";
 import {
   BotIcon,
   CalendarClockIcon,
+  FileTextIcon,
   FlaskConicalIcon,
   FolderGit2Icon,
   GlobeIcon,
@@ -16,7 +17,11 @@ import { openCommandPalette } from "../../commandPaletteBus";
 import { isElectron } from "../../env";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useEnvironments } from "../../state/environments";
-import { useFactoryFeedsSupported, useFactoryResearchSupported } from "../../state/factory";
+import {
+  useFactoryFeedsSupported,
+  useFactoryKnowledgeSupported,
+  useFactoryResearchSupported,
+} from "../../state/factory";
 import { SidebarChromeFooter, SidebarChromeHeader } from "../sidebar/SidebarChrome";
 import { resolveSettingsScope, type SettingsScopeSearch } from "../settings/settingsScope";
 import { useSettingsProjectGroups } from "../settings/useSettingsProjectGroups";
@@ -37,6 +42,7 @@ import {
 const FACTORY_SECTIONS = [
   { to: "/factory", label: "Overview", icon: LayoutDashboardIcon },
   { to: "/factory/issues", label: "Issues", icon: ListTodoIcon },
+  { to: "/factory/briefs", label: "Briefs", icon: FileTextIcon },
   { to: "/factory/sources", label: "Sources", icon: RssIcon },
   { to: "/factory/research", label: "Research", icon: FlaskConicalIcon },
   { to: "/factory/workflows", label: "Workflows", icon: CalendarClockIcon },
@@ -54,6 +60,7 @@ export function FactorySidebar() {
   const newThread = useNewThreadHandler();
   const feedsSupported = useFactoryFeedsSupported();
   const researchSupported = useFactoryResearchSupported();
+  const knowledgeSupported = useFactoryKnowledgeSupported();
   const { isMobile, setOpenMobile } = useSidebar();
   const section =
     FACTORY_SECTIONS.find(
@@ -66,7 +73,9 @@ export function FactorySidebar() {
       ? feedsSupported
       : to === "/factory/research"
         ? researchSupported
-        : true,
+        : to === "/factory/briefs"
+          ? knowledgeSupported
+          : true,
   );
   const closeMobileSidebar = () => {
     if (isMobile) setOpenMobile(false);

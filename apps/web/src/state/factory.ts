@@ -56,6 +56,24 @@ export function useFactoryResearchSupported(): boolean {
   return useAtomValue(factoryResearchSupportedAtom);
 }
 
+const factoryKnowledgeEnvironmentIdsAtom = Atom.make((get) => {
+  const next = get(environmentSummaries.environmentIdsAtom).filter(
+    (environmentId) =>
+      get(environmentPresentations.presentationAtom(environmentId))?.serverConfig?.environment
+        .capabilities.factoryKnowledge === true,
+  );
+  const previous = Option.getOrNull(get.self<ReadonlyArray<EnvironmentId>>());
+  return previous !== null && arrayElementsEqual(previous, next) ? previous : next;
+}).pipe(Atom.withLabel("web-factory-knowledge-environment-ids"));
+
+const factoryKnowledgeSupportedAtom = Atom.make(
+  (get) => get(factoryKnowledgeEnvironmentIdsAtom).length > 0,
+).pipe(Atom.withLabel("web-factory-knowledge-supported"));
+
+export function useFactoryKnowledgeSupported(): boolean {
+  return useAtomValue(factoryKnowledgeSupportedAtom);
+}
+
 /**
  * Readiness is requested from one environment at a time, so support is read per environment: an
  * older server omits `factoryReadiness`, and asking it would fail with an unknown method.

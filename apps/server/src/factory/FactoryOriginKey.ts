@@ -18,3 +18,6 @@ export const feedItemOriginKey = (
 
 export const researchRunOriginKey = (protocolId: string, role: string): FactoryOriginKey =>
   FactoryOriginKey.make(`research:${component(protocolId)}:${component(role)}`);
+
+export const knowledgeBriefOriginKey = (briefId: string): FactoryOriginKey =>
+  FactoryOriginKey.make(`knowledge:${component(briefId)}`);

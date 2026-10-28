@@ -37,6 +37,12 @@ import {
   type FactoryIssueReadinessReadInput,
   type FactoryIssueReadinessReadResult,
   type FactoryIssueTask,
+  type FactoryKnowledgeAcceptInput,
+  type FactoryKnowledgeBrief,
+  type FactoryKnowledgeBriefCreateInput,
+  type FactoryKnowledgeStartInput,
+  type FactoryKnowledgeTask,
+  type FactoryKnowledgeTaskReadResult,
   type FactoryReadinessOverrideRevokeInput,
   type FactoryReadinessOverrideSetInput,
   type FactoryResearchFinding,
@@ -636,6 +642,7 @@ const claimsResult = (environment: EnvironmentId, observedAt: string): FactoryCl
       admittedBy: environment,
       originConflict: false,
       acceptance: null,
+      artifactAcceptance: null,
     },
   ],
   fetchedAt: observedAt,
@@ -1196,6 +1203,36 @@ const researchTask: FactoryIssueTask = {
   interactionMode: "default",
 };
 
+const knowledgeBrief: FactoryKnowledgeBrief = {
+  id: "brief:one",
+  projectId,
+  title: "Survey",
+  question: "What changed?",
+  deliverablePath: "DELIVERABLE.md",
+  inputs: [],
+  acceptanceCriteria: "",
+  revision: "r".repeat(64),
+  createdAt: fetchedAt,
+  createdBy: environmentId,
+  supersededBy: null,
+};
+const knowledgeTask: FactoryKnowledgeTask = {
+  briefId: knowledgeBrief.id,
+  threadId: ThreadId.make("knowledge-thread"),
+  status: "idle",
+  folderPath: "/home/.t3/knowledge/thread",
+  createdAt: fetchedAt,
+  creationSource: "web",
+};
+const knowledgeRead: FactoryKnowledgeTaskReadResult = {
+  brief: knowledgeBrief,
+  task: knowledgeTask,
+  artifact: null,
+  artifactIssue: null,
+  acceptance: null,
+  current: false,
+};
+
 const researchReadResult = (
   input: FactoryResearchProtocolReadInput,
   observedAt: string,
@@ -1320,6 +1357,31 @@ const makeResearchHarness = Effect.fn("TestFactory.makeResearchHarness")(functio
         liveHeadSha: null,
         current: false,
       })),
+      [WS_METHODS.factoryListKnowledgeBriefs]: read(
+        id,
+        WS_METHODS.factoryListKnowledgeBriefs,
+        () => ({ briefs: [knowledgeBrief], tasks: [knowledgeTask], fetchedAt }),
+      ),
+      [WS_METHODS.factoryReadKnowledgeTask]: read(
+        id,
+        WS_METHODS.factoryReadKnowledgeTask,
+        () => knowledgeRead,
+      ),
+      [WS_METHODS.factoryCreateKnowledgeBrief]: held(
+        id,
+        WS_METHODS.factoryCreateKnowledgeBrief,
+        () => knowledgeBrief,
+      ),
+      [WS_METHODS.factoryStartKnowledgeTask]: held(
+        id,
+        WS_METHODS.factoryStartKnowledgeTask,
+        () => ({ task: knowledgeTask, resumed: false }),
+      ),
+      [WS_METHODS.factoryAcceptKnowledgeArtifact]: held(
+        id,
+        WS_METHODS.factoryAcceptKnowledgeArtifact,
+        () => knowledgeRead,
+      ),
       [WS_METHODS.factoryGrantDelivery]: held(
         id,
         WS_METHODS.factoryGrantDelivery,
@@ -1591,6 +1653,49 @@ describe("Factory research commands", () => {
           evidenceRefs: [],
         } satisfies FactoryAcceptCommitInput,
         [AuthOrchestrationOperateScope, AuthSourceControlWriteScope],
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("requires only operate to author a brief, start its task and accept its artifact", () =>
+    Effect.gen(function* () {
+      const create = yield* makeResearchHarness([AuthOrchestrationOperateScope]);
+      yield* expectGuarded(
+        create,
+        create.atoms.createKnowledgeBrief,
+        {
+          commandId: CommandId.make("brief"),
+          projectId,
+          title: "Survey",
+          question: "What changed?",
+          inputs: [],
+          acceptanceCriteria: "",
+        } satisfies FactoryKnowledgeBriefCreateInput,
+        [AuthOrchestrationOperateScope],
+      );
+      const start = yield* makeResearchHarness([AuthOrchestrationOperateScope]);
+      yield* expectGuarded(
+        start,
+        start.atoms.startKnowledgeTask,
+        {
+          commandId: CommandId.make("start-brief"),
+          projectId,
+          briefId: knowledgeBrief.id,
+          expectedRevision: knowledgeBrief.revision,
+          modelSelection: researchTask.modelSelection,
+        } satisfies FactoryKnowledgeStartInput,
+        [AuthOrchestrationOperateScope],
+      );
+      const accept = yield* makeResearchHarness([AuthOrchestrationOperateScope]);
+      yield* expectGuarded(
+        accept,
+        accept.atoms.acceptKnowledgeArtifact,
+        {
+          projectId,
+          briefId: knowledgeBrief.id,
+          expectedSha256: "d".repeat(64),
+        } satisfies FactoryKnowledgeAcceptInput,
+        [AuthOrchestrationOperateScope],
       );
     }).pipe(Effect.scoped),
   );

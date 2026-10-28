@@ -4,6 +4,7 @@ import {
   ProjectId,
   FactoryAcceptanceError,
   FactoryFeedError,
+  FactoryKnowledgeError,
   FactoryResearchError,
   FactoryResearchProtocolId,
   FactoryIssueError,
@@ -603,6 +604,78 @@ describe("feed factory authorization", () => {
         expect(yield* request.pipe(Effect.asVoid, Effect.flip)).toMatchObject({
           _tag: "FactoryFeedError",
           reason: "missing-project",
+        });
+      }).pipe(Effect.scoped),
+  );
+});
+
+describe("knowledge factory authorization", () => {
+  const cases = [
+    { method: WS_METHODS.factoryListKnowledgeBriefs, scopes: [AuthOrchestrationReadScope] },
+    { method: WS_METHODS.factoryReadKnowledgeTask, scopes: [AuthOrchestrationReadScope] },
+    { method: WS_METHODS.factoryCreateKnowledgeBrief, scopes: [AuthOrchestrationOperateScope] },
+    { method: WS_METHODS.factoryStartKnowledgeTask, scopes: [AuthOrchestrationOperateScope] },
+    { method: WS_METHODS.factoryAcceptKnowledgeArtifact, scopes: [AuthOrchestrationOperateScope] },
+  ] as const;
+  const input = {
+    commandId: CommandId.make("knowledge-auth"),
+    projectId: ProjectId.make("project"),
+    briefId: "brief:one",
+    expectedRevision: "reviewed",
+    expectedSha256: "a".repeat(64),
+    title: "Survey",
+    question: "What changed?",
+    inputs: [],
+    acceptanceCriteria: "",
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+  };
+  const tested = cases.map(({ method }) => method);
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
+        !(tested as ReadonlyArray<string>).includes(tag),
+    ),
+  );
+  const refused = () => Effect.fail(new FactoryKnowledgeError({ reason: "unknown-brief" }));
+  const handlers = group.toLayer({
+    [WS_METHODS.factoryListKnowledgeBriefs]: refused,
+    [WS_METHODS.factoryReadKnowledgeTask]: refused,
+    [WS_METHODS.factoryCreateKnowledgeBrief]: refused,
+    [WS_METHODS.factoryStartKnowledgeTask]: refused,
+    [WS_METHODS.factoryAcceptKnowledgeArtifact]: refused,
+  });
+  it.effect.each(cases)(
+    "requires every declared scope for $method before calling the service",
+    ({ method, scopes }) =>
+      Effect.gen(function* () {
+        for (const missing of scopes) {
+          const client = yield* RpcTest.makeClient(group).pipe(
+            Effect.provide(
+              Layer.merge(
+                handlers,
+                RpcAuthorization.layer(scopes.filter((scope) => scope !== missing)),
+              ),
+            ),
+          );
+          const request: Effect.Effect<
+            unknown,
+            FactoryKnowledgeError | EnvironmentAuthorizationError
+          > = client[method](input);
+          expect(yield* request.pipe(Effect.asVoid, Effect.flip)).toMatchObject({
+            _tag: "EnvironmentAuthorizationError",
+            requiredPermission: missing,
+          });
+        }
+        const client = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(Layer.merge(handlers, RpcAuthorization.layer(scopes))),
+        );
+        const request: Effect.Effect<
+          unknown,
+          FactoryKnowledgeError | EnvironmentAuthorizationError
+        > = client[method](input);
+        expect(yield* request.pipe(Effect.asVoid, Effect.flip)).toMatchObject({
+          _tag: "FactoryKnowledgeError",
+          reason: "unknown-brief",
         });
       }).pipe(Effect.scoped),
   );

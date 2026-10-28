@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import {
   feedItemOriginKey,
   githubIssueOriginKey,
+  knowledgeBriefOriginKey,
   researchRunOriginKey,
 } from "./FactoryOriginKey.ts";
 
@@ -29,6 +30,8 @@ it.effect("origin keys escape delimiters and percent sequences without component
       researchRunOriginKey("p", "explore:verify"),
     );
     assert.notEqual(githubIssueOriginKey("repo#12", 3), githubIssueOriginKey("repo%2312", 3));
+    assert.equal(knowledgeBriefOriginKey("brief:1234"), "knowledge:brief%3A1234");
+    assert.notEqual(knowledgeBriefOriginKey("a%3Ab"), knowledgeBriefOriginKey("a:b"));
     assert.equal(
       feedItemOriginKey("a%|#:", "b%|#:", "c%|#:"),
       "feed:a%25%7C%23%3A|b%25%7C%23%3A|c%25%7C%23%3A",

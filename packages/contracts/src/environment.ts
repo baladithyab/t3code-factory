@@ -85,6 +85,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   factoryAcceptance: Schema.optionalKey(Schema.Boolean),
   /** Absent on older servers; clients must not prepare, grant or read pull request deliveries without it. */
   factoryDelivery: Schema.optionalKey(Schema.Boolean),
+  /** Absent on older servers; clients must not offer knowledge briefs without it. */
+  factoryKnowledge: Schema.optionalKey(Schema.Boolean),
   /** Absent on older servers; clients must not query or start project orchestrators without it. */
   projectCoordinators: Schema.optionalKey(Schema.Boolean),
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),

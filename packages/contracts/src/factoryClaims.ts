@@ -12,7 +12,7 @@ import { OrchestrationV2CreationSource } from "./orchestrationV2.ts";
 /**
  * A comparable identity for an admitted origin across environments:
  * `github:<canonicalKey>#<n>`, `feed:<canonicalKey>|<locator>|<itemKey>`,
- * `research:<protocolId>:<role>`. Same key in two environments with different threads is
+ * `research:<protocolId>:<role>`, `knowledge:<briefId>`. Same key in two environments with different threads is
  * duplicate execution; with the same thread it is a copied database.
  */
 export const FactoryOriginKey = Schema.String.pipe(Schema.brand("FactoryOriginKey"));
@@ -20,12 +20,13 @@ export type FactoryOriginKey = typeof FactoryOriginKey.Type;
 
 export const FactoryClaim = Schema.Struct({
   originKey: FactoryOriginKey,
-  origin: Schema.Literals(["github-issue", "feed-item", "research-run"]),
+  origin: Schema.Literals(["github-issue", "feed-item", "research-run", "knowledge-brief"]),
   projectId: ProjectId,
   workspaceRoot: Schema.String,
   threadId: ThreadId,
   status: FactoryIssueTask.fields.status,
-  baseRef: TrimmedNonEmptyString,
+  // Null for knowledge briefs: they run in a non-git folder and have no base commit.
+  baseRef: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
   creationSource: OrchestrationV2CreationSource,
   // Provenance only: the environment whose guard chain wrote the row. Ownership is always the
@@ -37,6 +38,12 @@ export const FactoryClaim = Schema.Struct({
   // The live acceptance record's pin only. Whether it is still current needs a git read per
   // claim, so the detail read (`factory.readAcceptance`) derives that instead.
   acceptance: Schema.NullOr(Schema.Struct({ headSha: Schema.String, acceptedAt: IsoDateTime })),
+  // The live artifact acceptance of a knowledge brief; null for every other origin. The digest
+  // is the pin, and whether it is still current needs a file read, so `factory.readKnowledgeTask`
+  // derives that instead.
+  artifactAcceptance: Schema.NullOr(
+    Schema.Struct({ sha256: Schema.String, acceptedAt: IsoDateTime }),
+  ),
 });
 export type FactoryClaim = typeof FactoryClaim.Type;
 
