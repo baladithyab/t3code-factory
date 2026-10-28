@@ -20,6 +20,7 @@ import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
 import * as RunFinalization from "./RunFinalizationService.ts";
 import * as RuntimeRequests from "./RuntimeRequestService.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+import * as FactoryDelivery from "../factory/FactoryDeliveryService.ts";
 import * as ThreadTitles from "./ThreadTitleRegenerationService.ts";
 
 it.effect.each([
@@ -90,6 +91,7 @@ it.effect.each([
         Layer.mock(RuntimeRequests.RuntimeRequestServiceV2)({}),
         Layer.mock(ThreadTitles.ThreadTitleRegenerationService)({}),
         Layer.mock(ThreadManagement.ThreadManagementService)({}),
+        Layer.mock(FactoryDelivery.FactoryDeliveryService)({}),
         ServerSettings.layerTest(),
         Layer.mock(ProviderTurnStart.ProviderTurnStartServiceV2)({
           start: () => Effect.sync(() => calls.push("start")).pipe(Effect.asVoid),

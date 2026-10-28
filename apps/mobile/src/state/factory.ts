@@ -26,3 +26,13 @@ export const factoryAcceptanceSupportedAtom = Atom.family((environmentId: Enviro
         .capabilities.factoryAcceptance === true,
   ).pipe(Atom.withLabel(`mobile-factory-acceptance-supported:${environmentId}`)),
 );
+
+// Publishing needs the delivery RPCs; an older server must hide the section, not show "no PRs".
+export const factoryDeliverySupportedAtom = Atom.family((environmentId: EnvironmentId | null) =>
+  Atom.make(
+    (get) =>
+      environmentId !== null &&
+      get(environmentPresentations.presentationAtom(environmentId))?.serverConfig?.environment
+        .capabilities.factoryDelivery === true,
+  ).pipe(Atom.withLabel(`mobile-factory-delivery-supported:${environmentId}`)),
+);

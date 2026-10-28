@@ -87,6 +87,18 @@ export function createFactoryEnvironmentAtoms<R, E>(
     tag: WS_METHODS.factoryReadAcceptance,
     staleTimeMs: 0,
   });
+  // Deliveries are read from the server each time: a status moves on the worker's clock, and
+  // `current` for the prepared payload depends on the live head.
+  const prepareDelivery = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:factory:prepare-delivery",
+    tag: WS_METHODS.factoryPrepareDelivery,
+    staleTimeMs: 0,
+  });
+  const readDeliveries = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:factory:deliveries",
+    tag: WS_METHODS.factoryReadDeliveries,
+    staleTimeMs: 0,
+  });
   return {
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:factory:issues",
@@ -120,6 +132,64 @@ export function createFactoryEnvironmentAtoms<R, E>(
             readAcceptance({
               environmentId,
               input: { projectId: input.projectId, threadId: input.threadId },
+            }),
+          );
+        }),
+    }),
+    prepareDelivery,
+    readDeliveries,
+    // A grant is single-use over the head and digest the grantor saw, so both are part of the key:
+    // a different head or payload is a different decision and never joins an in-flight grant. A
+    // failed response can still follow a persisted intent, so every outcome reads the deliveries
+    // and the acceptance again.
+    grantDelivery: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:grant-delivery",
+      tag: WS_METHODS.factoryGrantDelivery,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([
+            environmentId,
+            input.projectId,
+            input.threadId,
+            input.kind,
+            input.expectedHeadSha,
+            input.expectedPayloadDigest,
+          ]),
+      },
+      onSettled: ({ environmentId, input }, registry) =>
+        Effect.sync(() => {
+          registry.refresh(
+            readDeliveries({
+              environmentId,
+              input: { projectId: input.projectId, threadId: input.threadId },
+            }),
+          );
+          registry.refresh(
+            readAcceptance({
+              environmentId,
+              input: { projectId: input.projectId, threadId: input.threadId },
+            }),
+          );
+        }),
+    }),
+    // Reconcile settles one intent by reading the forge. The input names the intent, not its
+    // thread, so the deliveries are refreshed from the settled intent a success returns. A refused
+    // reconcile changes nothing on the server.
+    reconcileDelivery: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:factory:reconcile-delivery",
+      tag: WS_METHODS.factoryReconcileDelivery,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.projectId, input.intentId]),
+      },
+      onSuccess: ({ environmentId }, registry, intent) =>
+        Effect.sync(() => {
+          registry.refresh(
+            readDeliveries({
+              environmentId,
+              input: { projectId: intent.projectId, threadId: intent.threadId },
             }),
           );
         }),

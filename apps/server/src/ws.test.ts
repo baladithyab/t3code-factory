@@ -48,6 +48,7 @@ import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
 import * as FactoryResearchService from "./factory/FactoryResearchService.ts";
 import * as FactoryClaimsService from "./factory/FactoryClaimsService.ts";
 import * as FactoryAcceptanceService from "./factory/FactoryAcceptanceService.ts";
+import * as FactoryDeliveryService from "./factory/FactoryDeliveryService.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
@@ -548,6 +549,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(FactoryResearchService.FactoryResearchService)({}),
   Layer.mock(FactoryClaimsService.FactoryClaimsService)({}),
   Layer.mock(FactoryAcceptanceService.FactoryAcceptanceService)({}),
+  Layer.mock(FactoryDeliveryService.FactoryDeliveryService)({}),
   Layer.mock(PullRequestSyncReactor.PullRequestSyncReactor)({}),
   Layer.mock(RelayClient.RelayClient)({}),
   Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),

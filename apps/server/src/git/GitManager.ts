@@ -151,6 +151,17 @@ export class GitManager extends Context.Service<
       input: GitRunStackedActionInput,
       options?: GitRunStackedActionOptions,
     ) => Effect.Effect<GitRunStackedActionResult, GitManagerServiceError>;
+    /**
+     * Read-only: the open change request whose head is the worktree's pushed branch, plus the
+     * head selector a create call for it must use. Never pushes or creates.
+     */
+    readonly findOpenPullRequestForHead: (cwd: string) => Effect.Effect<
+      {
+        readonly headSelector: string;
+        readonly open: Option.Option<{ readonly number: number; readonly url: string }>;
+      },
+      GitManagerServiceError
+    >;
     readonly subscribePullRequestStateChanges: Effect.Effect<
       Stream.Stream<ThreadPullRequestKey>,
       never,
@@ -2352,6 +2363,33 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  const findOpenPullRequestForHead: GitManager["Service"]["findOpenPullRequestForHead"] = Effect.fn(
+    "findOpenPullRequestForHead",
+  )(function* (cwd) {
+    const details = yield* gitCore.statusDetails(cwd);
+    if (!details.branch || !details.hasUpstream) {
+      return yield* new GitManagerError({
+        operation: "findOpenPullRequestForHead",
+        cwd,
+        detail: details.branch
+          ? "Current branch has not been pushed."
+          : "Cannot look up a pull request from detached HEAD.",
+      });
+    }
+    const headContext = yield* resolveBranchHeadContext(cwd, {
+      branch: details.branch,
+      upstreamRef: details.upstreamRef,
+    });
+    const existing = yield* findOpenPr(cwd, headContext);
+    return {
+      headSelector: headContext.preferredHeadSelector,
+      open:
+        existing === null
+          ? Option.none()
+          : Option.some({ number: existing.number, url: existing.url }),
+    };
+  });
+
   const localStatus: GitManager["Service"]["localStatus"] = Effect.fn("localStatus")(
     function* (input) {
       const cacheKey = yield* normalizeStatusCacheKey(input.cwd);
@@ -3235,6 +3273,7 @@ export const make = Effect.gen(function* () {
     resolvePullRequest,
     preparePullRequestThread,
     runStackedAction,
+    findOpenPullRequestForHead,
     subscribePullRequestStateChanges: PubSub.subscribe(pullRequestStateChanges).pipe(
       Effect.map((subscription) => Stream.fromSubscription(subscription)),
     ),

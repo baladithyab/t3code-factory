@@ -51,6 +51,16 @@ import {
   FactoryAcceptanceReadResult,
 } from "./factoryAcceptance.ts";
 import {
+  FactoryDeliveryError,
+  FactoryDeliveryGrantInput,
+  FactoryDeliveryIntent,
+  FactoryDeliveryPrepareInput,
+  FactoryDeliveryPrepareResult,
+  FactoryDeliveryReadInput,
+  FactoryDeliveryReadResult,
+  FactoryDeliveryReconcileInput,
+} from "./factoryDelivery.ts";
+import {
   ProjectCoordinatorEnsureInput,
   ProjectCoordinatorEnsureResult,
   ProjectCoordinatorError,
@@ -480,6 +490,10 @@ export const WS_METHODS = {
   factoryListClaims: "factory.listClaims",
   factoryAcceptCommit: "factory.acceptCommit",
   factoryReadAcceptance: "factory.readAcceptance",
+  factoryPrepareDelivery: "factory.prepareDelivery",
+  factoryGrantDelivery: "factory.grantDelivery",
+  factoryReadDeliveries: "factory.readDeliveries",
+  factoryReconcileDelivery: "factory.reconcileDelivery",
   projectCoordinatorsGet: "projectCoordinators.get",
   projectCoordinatorsList: "projectCoordinators.list",
   projectCoordinatorsEnsure: "projectCoordinators.ensure",
@@ -2099,6 +2113,27 @@ const WsFactoryReadAcceptanceRpc = Rpc.make(WS_METHODS.factoryReadAcceptance, {
   success: FactoryAcceptanceReadResult,
   error: factoryAcceptanceError,
 });
+const factoryDeliveryError = Schema.Union([FactoryDeliveryError, EnvironmentAuthorizationError]);
+const WsFactoryPrepareDeliveryRpc = Rpc.make(WS_METHODS.factoryPrepareDelivery, {
+  payload: FactoryDeliveryPrepareInput,
+  success: FactoryDeliveryPrepareResult,
+  error: factoryDeliveryError,
+});
+const WsFactoryGrantDeliveryRpc = Rpc.make(WS_METHODS.factoryGrantDelivery, {
+  payload: FactoryDeliveryGrantInput,
+  success: FactoryDeliveryIntent,
+  error: factoryDeliveryError,
+});
+const WsFactoryReadDeliveriesRpc = Rpc.make(WS_METHODS.factoryReadDeliveries, {
+  payload: FactoryDeliveryReadInput,
+  success: FactoryDeliveryReadResult,
+  error: factoryDeliveryError,
+});
+const WsFactoryReconcileDeliveryRpc = Rpc.make(WS_METHODS.factoryReconcileDelivery, {
+  payload: FactoryDeliveryReconcileInput,
+  success: FactoryDeliveryIntent,
+  error: factoryDeliveryError,
+});
 const factoryFeedError = Schema.Union([FactoryFeedError, EnvironmentAuthorizationError]);
 const WsFactoryListFeedSourcesRpc = Rpc.make(WS_METHODS.factoryListFeedSources, {
   payload: FactoryFeedSourceListInput,
@@ -2191,6 +2226,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsFactoryListClaimsRpc,
   WsFactoryAcceptCommitRpc,
   WsFactoryReadAcceptanceRpc,
+  WsFactoryPrepareDeliveryRpc,
+  WsFactoryGrantDeliveryRpc,
+  WsFactoryReadDeliveriesRpc,
+  WsFactoryReconcileDeliveryRpc,
   WsProjectCoordinatorsGetRpc,
   WsProjectCoordinatorsListRpc,
   WsProjectCoordinatorsEnsureRpc,

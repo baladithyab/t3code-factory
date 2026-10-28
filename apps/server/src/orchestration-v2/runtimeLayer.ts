@@ -56,6 +56,10 @@ import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as FactoryAcceptanceService from "../factory/FactoryAcceptanceService.ts";
+import * as FactoryDeliveryService from "../factory/FactoryDeliveryService.ts";
+import * as FactoryAcceptanceStore from "../persistence/FactoryAcceptanceStore.ts";
+import * as FactoryDeliveryStore from "../persistence/FactoryDeliveryStore.ts";
 
 export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationEventStore.layer,
@@ -314,6 +318,22 @@ const layerThreadTitleRegenerationProvided = ThreadTitleRegenerationService.laye
     Layer.mergeAll(layerThreadManagementProvided, ProjectStore.layer, TextGeneration.layer),
   ),
 );
+// Built here rather than in server.ts because it needs the thread management this module
+// constructs, and the executor below needs it in turn. The startup recovery runs when it is built,
+// before the effect worker can claim a delivery.
+const layerFactoryDeliveryProvided = FactoryDeliveryService.layerWithStartupRecovery.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      FactoryDeliveryStore.layer,
+      FactoryAcceptanceStore.layer,
+      FactoryAcceptanceService.layer.pipe(
+        Layer.provide(Layer.merge(FactoryAcceptanceStore.layer, layerThreadManagementProvided)),
+      ),
+      layerThreadManagementProvided,
+      EffectOutbox.layer,
+    ),
+  ),
+);
 const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -368,7 +388,12 @@ export const layer = Layer.mergeAll(
 );
 
 export const layerProduction = Layer.mergeAll(
-  layer.pipe(Layer.provide(layerProjectService)),
+  layer.pipe(
+    // Provided before the project service so the delivery layer's own project service
+    // requirement is satisfied by the same provision.
+    Layer.provide(layerFactoryDeliveryProvided),
+    Layer.provide(layerProjectService),
+  ),
   layerProjectService,
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,

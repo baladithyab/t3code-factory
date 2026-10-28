@@ -190,6 +190,8 @@ export class SourceControlProvider extends Context.Service<
       readonly headSelector: string;
       readonly title: string;
       readonly bodyFile: string;
+      /** Hosts without draft change requests ignore this. */
+      readonly draft?: boolean;
     }) => Effect.Effect<void, SourceControlProviderError>;
     readonly getRepositoryCloneUrls: (input: {
       readonly cwd: string;

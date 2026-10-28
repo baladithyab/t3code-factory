@@ -16,6 +16,7 @@ import * as ServerConfig from "../../config.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ThreadManagementService from "../ThreadManagementService.ts";
+import * as FactoryDeliveryService from "../../factory/FactoryDeliveryService.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as McpSessionRegistryTestkit from "../../mcp/McpSessionRegistry.testkit.ts";
 import * as VcsDriverRegistry from "../../vcs/VcsDriverRegistry.ts";
@@ -508,6 +509,7 @@ export function layerWithRegistry<Error>(
         layerThreadTitleRegenerationTest,
         layerServerSettings,
         layerThreadManagementProvided,
+        Layer.mock(FactoryDeliveryService.FactoryDeliveryService)({}),
       ),
     ),
   );

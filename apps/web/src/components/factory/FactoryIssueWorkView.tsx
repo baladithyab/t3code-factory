@@ -1,4 +1,4 @@
-import { useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -15,7 +15,7 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { ChevronDownIcon, CircleDotIcon } from "lucide-react";
-import { Fragment, useEffect, useId, useRef, useState } from "react";
+import { Fragment, useContext, useEffect, useId, useRef, useState } from "react";
 
 import { useNowSecond } from "../../hooks/useNowSecond";
 import { randomUUID } from "../../lib/utils";
@@ -30,6 +30,7 @@ import { Button } from "../ui/button";
 import { RefreshIcon } from "../ui/refresh-icon";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { FactoryClaimIndicators } from "./FactoryClaimIndicators";
+import { FactoryDeliveryPanel } from "./FactoryDeliveryPanel";
 import { factoryClaimRowPresentation, originKeyForIssue } from "./factoryClaims.logic";
 import {
   FACTORY_OVERRIDE_ACTIONS,
@@ -80,6 +81,10 @@ export function FactoryIssueWorkView(props: FactoryIssueWorkViewProps) {
     (presentation) =>
       presentation?.serverConfig?.environment.capabilities.factoryAcceptance === true,
   );
+  const deliverySupported = useAtomValue(
+    environmentPresentations.presentationAtom(props.environmentId),
+    (presentation) => presentation?.serverConfig?.environment.capabilities.factoryDelivery === true,
+  );
 
   const renderIssue = (issue: FactoryIssue) => (
     <FactoryIssueEntry
@@ -90,6 +95,7 @@ export function FactoryIssueWorkView(props: FactoryIssueWorkViewProps) {
       repositoryKey={props.repositoryKey}
       readinessSupported={readinessSupported}
       acceptanceSupported={acceptanceSupported}
+      deliverySupported={deliverySupported}
       issue={issue}
       canStart={props.canStart}
       busy={props.busy}
@@ -189,6 +195,7 @@ function FactoryIssueEntry(
     readonly expanded: boolean;
     readonly readinessSupported: boolean;
     readonly acceptanceSupported: boolean;
+    readonly deliverySupported: boolean;
     readonly onToggleDetails: () => void;
   },
 ) {
@@ -284,6 +291,9 @@ function FactoryIssueEntry(
           environmentId={props.environmentId}
           projectId={issue.task.projectId}
           threadId={issue.task.threadId}
+          deliverySupported={props.deliverySupported}
+          issueTitle={issue.title}
+          issueUrl={issue.url}
         />
       ) : null}
     </>
@@ -438,8 +448,12 @@ function FactoryAcceptedCommit(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly threadId: ThreadId;
+  readonly deliverySupported: boolean;
+  readonly issueTitle: string;
+  readonly issueUrl: string;
 }) {
   const { environmentId, projectId, threadId } = props;
+  const registry = useContext(RegistryContext);
   const headingId = useId();
   const disabledReasonId = useId();
   const query = useEnvironmentQuery(
@@ -572,6 +586,22 @@ function FactoryAcceptedCommit(props: {
           </p>
         ) : null}
       </div>
+      {props.deliverySupported && acceptance !== null && data?.current === true ? (
+        <FactoryDeliveryPanel
+          key={acceptance.id}
+          environmentId={environmentId}
+          projectId={projectId}
+          threadId={threadId}
+          issueTitle={props.issueTitle}
+          issueUrl={props.issueUrl}
+          acceptanceCurrent={data.current && readFailure === null && !query.isPending}
+          onGranted={() => {
+            registry.refresh(
+              factoryEnvironment.readDeliveries({ environmentId, input: { projectId, threadId } }),
+            );
+          }}
+        />
+      ) : null}
     </div>
   );
 }

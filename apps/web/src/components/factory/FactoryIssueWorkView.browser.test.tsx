@@ -5,6 +5,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  type FactoryDeliveryIntent,
   type FactoryIssue,
   type FactoryIssueFrontierReadResult,
   type FactoryIssueReadinessReadResult,
@@ -20,7 +21,11 @@ import { page, userEvent } from "vite-plus/test/browser";
 const state = vi.hoisted(() => ({
   supported: true,
   acceptanceSupported: false,
+  deliverySupported: false,
   acceptance: null as unknown,
+  deliveries: null as unknown,
+  grant: vi.fn(),
+  reconcile: vi.fn(),
   accept: vi.fn(),
   // One entry each time a query goes live or is released, so a read is attributable to an expand
   // and not to a re-render.
@@ -58,6 +63,11 @@ vi.mock(import("../../state/factory"), async () => {
         stable(`frontier:${input.parentIssueNumber}`),
       readAcceptance: ({ input }: { input: { projectId: string; threadId: string } }) =>
         stable(`acceptance:${input.projectId}:${input.threadId}`),
+      readDeliveries: ({ input }: { input: { projectId: string; threadId: string } }) =>
+        stable(`deliveries:${input.projectId}:${input.threadId}`),
+      prepareDelivery: () => stable("prepare-delivery"),
+      grantDelivery: { key: "grant", permissionAtom },
+      reconcileDelivery: { key: "reconcile", permissionAtom },
       acceptCommit: { key: "accept", permissionAtom },
       setIssueReadinessOverride: { key: "set", permissionAtom },
       revokeIssueReadinessOverride: { key: "revoke", permissionAtom },
@@ -74,9 +84,19 @@ vi.mock(import("../../state/presentation"), async () => {
   const unsupported = Atom.make({
     serverConfig: { environment: { capabilities: {} } },
   });
+  const deliverySupported = Atom.make({
+    serverConfig: {
+      environment: { capabilities: { factoryAcceptance: true, factoryDelivery: true } },
+    },
+  });
   return {
     environmentPresentations: {
-      presentationAtom: () => (state.acceptanceSupported ? supported : unsupported),
+      presentationAtom: () =>
+        state.deliverySupported
+          ? deliverySupported
+          : state.acceptanceSupported
+            ? supported
+            : unsupported,
     },
   } as never;
 });
@@ -85,26 +105,36 @@ vi.mock(import("../../state/use-atom-command"), () => ({
   useAtomCommand: ((command: { key: string }) => (value: unknown) =>
     command.key === "accept"
       ? state.accept(value)
-      : command.key === "set"
-        ? state.set(value)
-        : state.revoke(value)) as never,
+      : command.key === "grant"
+        ? state.grant(value)
+        : command.key === "reconcile"
+          ? state.reconcile(value)
+          : command.key === "set"
+            ? state.set(value)
+            : state.revoke(value)) as never,
 }));
 
 vi.mock(import("../../state/query"), async (importOriginal) => ({
   ...(await importOriginal()),
-  useEnvironmentQuery: ((atom: { key: string }) => {
+  useEnvironmentQuery: ((atom: { key: string } | null) => {
     useEffect(() => {
+      if (atom === null) return;
       state.events.push(`observe ${atom.key}`);
       return () => {
         state.events.push(`release ${atom.key}`);
       };
     }, [atom]);
     return {
-      data: atom.key.startsWith("acceptance:")
-        ? state.acceptance
-        : atom.key.startsWith("frontier:")
-          ? state.frontier
-          : state.result,
+      data:
+        atom === null
+          ? null
+          : atom.key.startsWith("acceptance:")
+            ? state.acceptance
+            : atom.key.startsWith("deliveries:")
+              ? state.deliveries
+              : atom.key.startsWith("frontier:")
+                ? state.frontier
+                : state.result,
       dataUpdatedAt: 0,
       error: null,
       failure: null,
@@ -236,7 +266,11 @@ const waiver: FactoryReadinessOverride = {
 function setup(supported = true) {
   state.supported = supported;
   state.acceptanceSupported = false;
+  state.deliverySupported = false;
   state.acceptance = null;
+  state.deliveries = null;
+  state.grant.mockReset();
+  state.reconcile.mockReset();
   state.accept.mockReset();
   state.events = [];
   state.result = blockedResult;
@@ -735,4 +769,78 @@ it("warns when the head moved and re-accepts the last observed head", async () =
     });
     expect(state.refresh).toHaveBeenCalledTimes(1);
   });
+});
+
+it("reconciles an unknown publication without granting another delivery", async () => {
+  setup();
+  state.deliverySupported = true;
+  const headSha = "a".repeat(40);
+  const acceptance = {
+    id: "acceptance:one",
+    originKey: originKeyForIssue(repository.canonicalKey, 7),
+    projectId,
+    threadId: ThreadId.make("thread:one"),
+    headSha,
+    baseRef: "main",
+    baseSha: "c".repeat(40),
+    acceptedAt: observedAt,
+    acceptedBy: environmentId,
+    evidenceRefs: [],
+  };
+  const intent: FactoryDeliveryIntent = {
+    id: "delivery:one",
+    originKey: acceptance.originKey,
+    threadId: acceptance.threadId,
+    projectId,
+    kind: "publish-pr",
+    acceptanceId: acceptance.id,
+    repository,
+    baseRef: acceptance.baseRef,
+    baseSha: acceptance.baseSha,
+    headSha,
+    payload: {
+      title: "Publish accepted change",
+      body: "Issue: https://github.com/owner/repo/issues/7",
+      draft: true,
+    },
+    payloadDigest: "d".repeat(64),
+    grantedBy: environmentId,
+    grantedAt: observedAt,
+    requestCommandId: "command:publish",
+    status: "unknown",
+    remote: null,
+    failure: "response lost",
+    updatedAt: observedAt,
+  };
+  state.acceptance = { acceptance, liveHeadSha: headSha, current: true };
+  state.deliveries = { intents: [intent] };
+  state.reconcile.mockImplementation(async () => {
+    const confirmed: FactoryDeliveryIntent = {
+      ...intent,
+      status: "confirmed",
+      remote: { number: 123, url: "https://github.com/owner/repo/pull/123" },
+      failure: null,
+    };
+    state.deliveries = { intents: [confirmed] };
+    return AsyncResult.success(confirmed);
+  });
+  await using screen = await render(claimedView(null));
+  await expect
+    .element(screen.getByText("The server lost the response. Reconcile to check GitHub."))
+    .toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Grant publish" })).toBeDisabled();
+  const reconcile = screen.getByRole("button", { name: "Reconcile", exact: true });
+  await expect.element(reconcile).toBeEnabled();
+  await reconcile.click();
+  await vi.waitFor(() => expect(state.refresh).toHaveBeenCalledTimes(1));
+  await screen.rerender(claimedView(null));
+  await expect
+    .element(screen.getByRole("link", { name: "#123", exact: true }))
+    .toHaveAttribute("href", "https://github.com/owner/repo/pull/123");
+  await expect.element(reconcile).not.toBeInTheDocument();
+  expect(state.reconcile).toHaveBeenCalledWith({
+    environmentId,
+    input: { projectId, intentId: intent.id },
+  });
+  expect(state.grant).not.toHaveBeenCalled();
 });

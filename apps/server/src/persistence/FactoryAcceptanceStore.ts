@@ -2,6 +2,7 @@ import {
   FactoryAcceptance,
   FactoryAcceptanceError,
   FactoryOriginKey,
+  type FactoryRepository,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -45,6 +46,8 @@ const persistenceError = (cause: unknown) =>
 export interface FactoryAcceptanceOrigin {
   readonly originKey: FactoryOriginKey;
   readonly baseRef: string;
+  // The repository the claim was admitted against; deliveries are pinned to it.
+  readonly repository: FactoryRepository;
 }
 
 export class FactoryAcceptanceStore extends Context.Service<
@@ -97,7 +100,11 @@ const make = Effect.gen(function* () {
             row.intent.snapshot.feed,
             row.intent.itemKey,
           ));
-    return Option.some({ originKey, baseRef: row.intent.baseRef });
+    return Option.some({
+      originKey,
+      baseRef: row.intent.baseRef,
+      repository: row.intent.repository,
+    });
   }, Effect.mapError(persistenceError));
   const columns = sql.literal(`id, origin_key AS originKey, thread_id AS threadId,
     project_id AS projectId, head_sha AS headSha, base_ref AS baseRef, base_sha AS baseSha,

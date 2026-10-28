@@ -8,7 +8,9 @@ import * as FactoryResearchService from "./factory/FactoryResearchService.ts";
 import * as FactoryResearchStore from "./persistence/FactoryResearchStore.ts";
 import * as FactoryClaimsService from "./factory/FactoryClaimsService.ts";
 import * as FactoryAcceptanceService from "./factory/FactoryAcceptanceService.ts";
+import * as FactoryDeliveryService from "./factory/FactoryDeliveryService.ts";
 import * as FactoryAcceptanceStore from "./persistence/FactoryAcceptanceStore.ts";
+import * as FactoryDeliveryStore from "./persistence/FactoryDeliveryStore.ts";
 import * as FeedFetch from "./factory/FeedFetch.ts";
 import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
 import * as ProjectCoordinators from "./persistence/ProjectCoordinators.ts";
@@ -201,6 +203,7 @@ import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsag
 import * as UsageService from "./usage/UsageService.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
+import * as EffectOutbox from "./orchestration-v2/EffectOutbox.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
@@ -769,6 +772,7 @@ const layerMakeRoutes = Layer.mergeAll(
       FactoryResearchService.layer,
       FactoryClaimsService.layer,
       FactoryAcceptanceService.layer,
+      FactoryDeliveryService.layer.pipe(Layer.provide(FactoryAcceptanceService.layer)),
       ProjectCoordinatorService.layer,
     ).pipe(
       Layer.provide(
@@ -778,6 +782,9 @@ const layerMakeRoutes = Layer.mergeAll(
           FactoryFeedStore.layer,
           FactoryResearchStore.layer,
           FactoryAcceptanceStore.layer,
+          FactoryDeliveryStore.layer,
+          // The same instance the effect worker drains, so a grant wakes it.
+          EffectOutbox.layer,
           FeedFetch.layer,
           ProjectCoordinators.layer,
           FactoryCommandReceipts.layerFromApplicationReceipts,
