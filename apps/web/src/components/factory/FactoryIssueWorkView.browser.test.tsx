@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type FactoryDeliveryIntent,
+  type FactoryDeliveryPrepareResult,
   type FactoryIssue,
   type FactoryIssueFrontierReadResult,
   type FactoryIssueReadinessReadResult,
@@ -24,6 +25,7 @@ const state = vi.hoisted(() => ({
   deliverySupported: false,
   acceptance: null as unknown,
   deliveries: null as unknown,
+  preparedDelivery: null as unknown,
   grant: vi.fn(),
   reconcile: vi.fn(),
   accept: vi.fn(),
@@ -55,6 +57,10 @@ vi.mock(import("../../state/factory"), async () => {
   const allowed = Atom.make(true);
   const denied = Atom.make(false);
   const permissionAtom = () => (state.canOperate ? allowed : denied);
+  const prepareAtoms = {
+    "publish-pr": Object.assign(Atom.make(null), { key: "prepare-delivery:publish-pr" }),
+    "merge-pr": Object.assign(Atom.make(null), { key: "prepare-delivery:merge-pr" }),
+  };
   return {
     factoryEnvironment: {
       readIssueReadiness: ({ input }: { input: { issueNumber: number } }) =>
@@ -65,7 +71,8 @@ vi.mock(import("../../state/factory"), async () => {
         stable(`acceptance:${input.projectId}:${input.threadId}`),
       readDeliveries: ({ input }: { input: { projectId: string; threadId: string } }) =>
         stable(`deliveries:${input.projectId}:${input.threadId}`),
-      prepareDelivery: () => stable("prepare-delivery"),
+      prepareDelivery: ({ input }: { input: { kind: "publish-pr" | "merge-pr" } }) =>
+        prepareAtoms[input.kind],
       grantDelivery: { key: "grant", permissionAtom },
       reconcileDelivery: { key: "reconcile", permissionAtom },
       acceptCommit: { key: "accept", permissionAtom },
@@ -132,9 +139,11 @@ vi.mock(import("../../state/query"), async (importOriginal) => ({
             ? state.acceptance
             : atom.key.startsWith("deliveries:")
               ? state.deliveries
-              : atom.key.startsWith("frontier:")
-                ? state.frontier
-                : state.result,
+              : atom.key.startsWith("prepare-delivery:")
+                ? state.preparedDelivery
+                : atom.key.startsWith("frontier:")
+                  ? state.frontier
+                  : state.result,
       dataUpdatedAt: 0,
       error: null,
       failure: null,
@@ -269,6 +278,7 @@ function setup(supported = true) {
   state.deliverySupported = false;
   state.acceptance = null;
   state.deliveries = null;
+  state.preparedDelivery = null;
   state.grant.mockReset();
   state.reconcile.mockReset();
   state.accept.mockReset();
@@ -842,5 +852,83 @@ it("reconciles an unknown publication without granting another delivery", async 
     environmentId,
     input: { projectId, intentId: intent.id },
   });
+  expect(state.grant).not.toHaveBeenCalled();
+});
+
+it("disables the merge grant when the published PR head is not the accepted commit", async () => {
+  setup();
+  state.deliverySupported = true;
+  const headSha = "a".repeat(40);
+  const acceptance = {
+    id: "acceptance:one",
+    originKey: originKeyForIssue(repository.canonicalKey, 7),
+    projectId,
+    threadId: ThreadId.make("thread:one"),
+    headSha,
+    baseRef: "main",
+    baseSha: "c".repeat(40),
+    acceptedAt: observedAt,
+    acceptedBy: environmentId,
+    evidenceRefs: [],
+  };
+  const remote = { number: 123, url: "https://github.com/owner/repo/pull/123" };
+  const published: FactoryDeliveryIntent = {
+    id: "delivery:published",
+    originKey: acceptance.originKey,
+    threadId: acceptance.threadId,
+    projectId,
+    kind: "publish-pr",
+    acceptanceId: acceptance.id,
+    repository,
+    baseRef: acceptance.baseRef,
+    baseSha: acceptance.baseSha,
+    headSha,
+    payload: { title: "Publish accepted change", body: "Fixes #7", draft: false },
+    payloadDigest: "d".repeat(64),
+    grantedBy: environmentId,
+    grantedAt: observedAt,
+    requestCommandId: "command:publish",
+    status: "confirmed",
+    remote,
+    failure: null,
+    updatedAt: observedAt,
+  };
+  state.acceptance = { acceptance, liveHeadSha: headSha, current: true };
+  state.deliveries = { intents: [published] };
+  state.preparedDelivery = {
+    acceptance,
+    current: true,
+    repository,
+    baseRef: acceptance.baseRef,
+    headSha,
+    payload: { mergeMethod: "squash" },
+    payloadDigest: "e".repeat(64),
+    existing: null,
+    pullRequest: {
+      ...remote,
+      headSha: "b".repeat(40),
+      state: "open",
+      mergeability: "mergeable",
+      isDraft: false,
+      checksSummary: "3 passed",
+      mergeMethods: ["merge", "squash", "rebase"],
+    },
+  } satisfies FactoryDeliveryPrepareResult;
+
+  await using screen = await render(claimedView(null));
+  const merge = screen.getByRole("region", { name: "Merge", exact: true });
+  await expect.element(merge).toBeVisible();
+  await merge.getByRole("button", { name: "Prepare merge" }).click();
+  await expect
+    .element(merge.getByRole("link", { name: "#123", exact: true }))
+    .toHaveAttribute("href", remote.url);
+  await expect.element(merge.getByText("Does not match the accepted commit.")).toBeVisible();
+  await expect.element(merge.getByText("3 passed")).toBeVisible();
+  await expect.element(merge.getByRole("button", { name: "Grant merge" })).toBeDisabled();
+  await expect
+    .element(
+      merge.getByText("The pull request head is not the accepted commit. Re-accept and refresh."),
+    )
+    .toBeVisible();
   expect(state.grant).not.toHaveBeenCalled();
 });

@@ -540,6 +540,10 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),
   Layer.provide(layerGitWorkflow),
+  // The delivery service merges through the same instance the routes use, so its merge
+  // invalidates the caches clients read.
+  Layer.provide(layerPullRequestService),
+  Layer.provide(RuntimeLayer.layerProjectService),
   Layer.provide(
     RunFinalizationService.layerObserver.pipe(
       Layer.provide(ProjectionStoreV2.layer),

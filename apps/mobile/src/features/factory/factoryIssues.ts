@@ -7,12 +7,16 @@ import {
   type FactoryAcceptance,
   type FactoryAcceptanceReadResult,
   type FactoryDeliveryIntent,
+  type FactoryDeliveryMergePayload,
   type FactoryDeliveryPayload,
   type FactoryDeliveryPrepareResult,
+  type FactoryDeliveryPublishPayload,
   type FactoryIssue,
   type FactoryIssueListResult,
   type FactoryIssueTask,
   type FactoryRepository,
+  type PullRequestMergeability,
+  type PullRequestMergeMethod,
   type RuntimeMode,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -328,7 +332,7 @@ export function factoryDeliveryDefaultPayload(issue: {
   readonly number: number;
   readonly title: string;
   readonly url: string;
-}): FactoryDeliveryPayload {
+}): FactoryDeliveryPublishPayload {
   const title =
     safeFactoryIssueText(issue.title, FACTORY_DELIVERY_TITLE_LIMIT - 1) || `Issue #${issue.number}`;
   const url = safeFactoryIssueUrl(issue.url);
@@ -337,8 +341,8 @@ export function factoryDeliveryDefaultPayload(issue: {
 
 /** The server trims the title when decoding, so a trailing space is not an edit. */
 export function sameFactoryDeliveryPayload(
-  previewed: FactoryDeliveryPayload,
-  draft: FactoryDeliveryPayload,
+  previewed: FactoryDeliveryPublishPayload,
+  draft: FactoryDeliveryPublishPayload,
 ): boolean {
   return (
     previewed.title === draft.title.trim() &&
@@ -347,9 +351,17 @@ export function sameFactoryDeliveryPayload(
   );
 }
 
-// Confirmed is live too: one pull request per task, and re-publishing is out of scope.
+// Confirmed is live too: one pull request and one merge per task, and redoing either is out of
+// scope.
 export function isLiveFactoryDelivery(intent: FactoryDeliveryIntent): boolean {
   return intent.status !== "failed";
+}
+
+// Stored publish payloads have no merge method, which is what tells the two shapes apart.
+export function isFactoryMergePayload(
+  payload: FactoryDeliveryPayload,
+): payload is FactoryDeliveryMergePayload {
+  return "mergeMethod" in payload;
 }
 
 /**
@@ -362,7 +374,7 @@ export function factoryDeliveryGrantBlocker(input: {
   readonly acceptanceCurrent: boolean;
   readonly liveIntent: FactoryDeliveryIntent | null;
   readonly prepared: FactoryDeliveryPrepareResult | null;
-  readonly draft: FactoryDeliveryPayload;
+  readonly draft: FactoryDeliveryPublishPayload;
 }): string | null {
   if (!input.permitted) {
     return "This connection isn't permitted to publish pull requests in this environment.";
@@ -381,39 +393,174 @@ export function factoryDeliveryGrantBlocker(input: {
   if (prepared.existing !== null && isLiveFactoryDelivery(prepared.existing)) {
     return FACTORY_DELIVERY_ALREADY_DELIVERING;
   }
-  if (!sameFactoryDeliveryPayload(prepared.payload, input.draft)) {
+  if (
+    isFactoryMergePayload(prepared.payload) ||
+    !sameFactoryDeliveryPayload(prepared.payload, input.draft)
+  ) {
     return FACTORY_DELIVERY_PAYLOAD_CHANGED;
   }
   return null;
 }
 
+export const FACTORY_MERGE_METHODS: ReadonlyArray<{
+  readonly value: PullRequestMergeMethod;
+  readonly label: string;
+  readonly accessibilityLabel: string;
+}> = [
+  { value: "merge", label: "Merge", accessibilityLabel: "Create a merge commit" },
+  { value: "squash", label: "Squash", accessibilityLabel: "Squash and merge" },
+  { value: "rebase", label: "Rebase", accessibilityLabel: "Rebase and merge" },
+];
+
+export const FACTORY_DEFAULT_MERGE_METHOD: PullRequestMergeMethod = "squash";
+
+export const FACTORY_MERGE_NOT_PUBLISHED = "Publish the pull request first.";
+export const FACTORY_MERGE_PR_HEAD_MOVED =
+  "The pull request head is not the accepted commit. Re-accept and refresh.";
+export const FACTORY_MERGE_ALREADY_MERGED = "This pull request is already merged.";
+export const FACTORY_MERGE_NOT_MERGEABLE =
+  "GitHub reports the pull request cannot be merged right now.";
+export const FACTORY_MERGE_ALREADY_MERGING = "A merge is already in progress for this task.";
+export const FACTORY_MERGE_METHOD_CHANGED =
+  "The merge method changed since the preview. Prepare again.";
+export const FACTORY_MERGE_DRAFT =
+  "The pull request is a draft. Mark it ready for review on GitHub, then prepare again.";
+
+type FactoryMergePullRequest = NonNullable<FactoryDeliveryPrepareResult["pullRequest"]>;
+
+export function factoryMergeabilityLabel(mergeability: PullRequestMergeability): string {
+  switch (mergeability) {
+    case "mergeable":
+      return "No merge conflicts";
+    case "conflicting":
+      return "Has merge conflicts";
+    case "unknown":
+      return "GitHub has not decided mergeability yet";
+  }
+}
+
+/**
+ * Compares the pull request's head with the accepted commit. An unreadable head never matches:
+ * the server refuses to merge anything it cannot pin to the accepted commit.
+ */
+export function factoryPullRequestHeadView(
+  pullRequest: FactoryMergePullRequest,
+  acceptedHeadSha: string | null,
+): { readonly matches: boolean; readonly text: string } {
+  if (pullRequest.headSha === null) {
+    return { matches: false, text: "The pull request head could not be read." };
+  }
+  const head = shortFactorySha(pullRequest.headSha);
+  if (acceptedHeadSha === null) {
+    return { matches: false, text: `Head ${head}. No accepted commit to compare.` };
+  }
+  return pullRequest.headSha === acceptedHeadSha
+    ? { matches: true, text: `Head ${head} matches the accepted commit.` }
+    : {
+        matches: false,
+        text: `Head ${head} is not the accepted commit ${shortFactorySha(acceptedHeadSha)}.`,
+      };
+}
+
+/**
+ * Why Grant merge is unavailable, or null when it may be pressed. GitHub branch protection
+ * still decides required checks and reviews; this only states what would make the server or
+ * GitHub refuse this exact grant.
+ */
+export function factoryMergeGrantBlocker(input: {
+  readonly permitted: boolean;
+  readonly acceptedHeadSha: string | null;
+  readonly acceptanceCurrent: boolean;
+  readonly liveIntent: FactoryDeliveryIntent | null;
+  readonly prepared: FactoryDeliveryPrepareResult | null;
+  readonly mergeMethod: PullRequestMergeMethod;
+}): string | null {
+  if (!input.permitted) {
+    return "This connection isn't permitted to merge pull requests in this environment.";
+  }
+  if (input.liveIntent !== null) {
+    return input.liveIntent.status === "confirmed"
+      ? FACTORY_MERGE_ALREADY_MERGED
+      : FACTORY_MERGE_ALREADY_MERGING;
+  }
+  if (!input.acceptanceCurrent) return "Merging needs a current accepted commit.";
+  const { prepared } = input;
+  if (prepared === null) return "Prepare a merge preview before granting.";
+  if (!prepared.current || prepared.headSha !== input.acceptedHeadSha) {
+    return FACTORY_DELIVERY_HEAD_MOVED;
+  }
+  const pullRequest = prepared.pullRequest ?? null;
+  if (pullRequest === null) return FACTORY_MERGE_NOT_PUBLISHED;
+  if (pullRequest.state === "merged") return FACTORY_MERGE_ALREADY_MERGED;
+  if (pullRequest.state === "closed") return "This pull request is closed.";
+  if (!factoryPullRequestHeadView(pullRequest, input.acceptedHeadSha).matches) {
+    return FACTORY_MERGE_PR_HEAD_MOVED;
+  }
+  if (pullRequest.isDraft) return FACTORY_MERGE_DRAFT;
+  if (pullRequest.mergeability === "conflicting") return FACTORY_MERGE_NOT_MERGEABLE;
+  if (prepared.existing !== null && isLiveFactoryDelivery(prepared.existing)) {
+    return prepared.existing.status === "confirmed"
+      ? FACTORY_MERGE_ALREADY_MERGED
+      : FACTORY_MERGE_ALREADY_MERGING;
+  }
+  if (
+    !isFactoryMergePayload(prepared.payload) ||
+    prepared.payload.mergeMethod !== input.mergeMethod
+  ) {
+    return FACTORY_MERGE_METHOD_CHANGED;
+  }
+  if (!pullRequest.mergeMethods.includes(input.mergeMethod)) {
+    return `The repository does not allow ${input.mergeMethod} merges. Choose another method.`;
+  }
+  return null;
+}
+
 export type FactoryDeliveryStatusView =
-  | { readonly kind: "publishing"; readonly text: string }
-  | { readonly kind: "confirmed"; readonly text: string; readonly url: string | null }
+  | { readonly kind: "in-progress"; readonly text: string }
+  | {
+      readonly kind: "confirmed";
+      readonly text: string;
+      readonly link: { readonly label: string; readonly url: string } | null;
+    }
   | { readonly kind: "failed"; readonly text: string }
   | { readonly kind: "unknown"; readonly text: string };
 
+/** Publish and merge rows share a list shape, so each says which act it records. */
 export function factoryDeliveryStatusView(
   intent: FactoryDeliveryIntent,
 ): FactoryDeliveryStatusView {
+  const merge = intent.kind === "merge-pr";
   switch (intent.status) {
     case "pending":
     case "sending":
-      return { kind: "publishing", text: "Publishing…" };
-    case "confirmed":
-      return intent.remote === null
-        ? { kind: "confirmed", text: "Pull request published", url: null }
-        : {
-            kind: "confirmed",
-            text: `Pull request #${intent.remote.number}`,
-            url: safeFactoryIssueUrl(intent.remote.url),
-          };
+      return { kind: "in-progress", text: merge ? "Merging…" : "Publishing…" };
+    case "confirmed": {
+      if (intent.remote === null) {
+        return {
+          kind: "confirmed",
+          text: merge ? "Merged" : "Pull request published",
+          link: null,
+        };
+      }
+      const { number } = intent.remote;
+      const url = safeFactoryIssueUrl(intent.remote.url);
+      return {
+        kind: "confirmed",
+        text: merge ? `Merged pull request #${number}` : `Published pull request #${number}`,
+        link: url === null ? null : { label: `Open pull request #${number}`, url },
+      };
+    }
     case "failed":
-      return { kind: "failed", text: intent.failure ?? "Publishing failed." };
+      return {
+        kind: "failed",
+        text: intent.failure ?? (merge ? "Merging failed." : "Publishing failed."),
+      };
     case "unknown":
       return {
         kind: "unknown",
-        text: "The server lost the response. Reconcile to check GitHub.",
+        text: merge
+          ? "The server lost the merge response. Reconcile to check GitHub."
+          : "The server lost the response. Reconcile to check GitHub.",
       };
   }
 }
@@ -449,4 +596,43 @@ export function describeFactoryDeliveryFailure(error: unknown): FactoryFailure {
     }
   }
   return describeFactoryFailure(error, "Couldn't publish");
+}
+
+export function describeFactoryMergeFailure(error: unknown): FactoryFailure {
+  if (isFactoryDeliveryError(error)) {
+    switch (error.reason) {
+      case "not-published":
+        return { kind: "changed", title: "Not published", detail: FACTORY_MERGE_NOT_PUBLISHED };
+      case "pull-request-head-moved":
+        return {
+          kind: "changed",
+          title: "Pull request head moved",
+          detail: FACTORY_MERGE_PR_HEAD_MOVED,
+        };
+      case "already-merged":
+        return { kind: "changed", title: "Already merged", detail: FACTORY_MERGE_ALREADY_MERGED };
+      case "not-mergeable":
+        return { kind: "retry", title: "Not mergeable", detail: FACTORY_MERGE_NOT_MERGEABLE };
+      case "head-moved":
+      case "acceptance-stale":
+        return { kind: "changed", title: "Head moved", detail: FACTORY_DELIVERY_HEAD_MOVED };
+      case "payload-changed":
+        return { kind: "changed", title: "Preview changed", detail: FACTORY_MERGE_METHOD_CHANGED };
+      case "already-delivering":
+        return {
+          kind: "changed",
+          title: "Already merging",
+          detail: FACTORY_MERGE_ALREADY_MERGING,
+        };
+      case "not-accepted":
+        return {
+          kind: "changed",
+          title: "No accepted commit",
+          detail: "Accept a commit before merging a pull request.",
+        };
+      default:
+        return { kind: "error", title: "Couldn't merge", detail: error.message };
+    }
+  }
+  return describeFactoryFailure(error, "Couldn't merge");
 }
