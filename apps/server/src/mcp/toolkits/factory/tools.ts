@@ -1,6 +1,10 @@
 import {
   FactoryAcceptanceReadInput,
   FactoryAcceptanceReadResult,
+  FactoryDeliveryPrepareInput,
+  FactoryDeliveryPrepareResult,
+  FactoryDeliveryReadInput,
+  FactoryDeliveryReadResult,
   FactoryClaimListInput,
   FactoryClaimListResult,
   FactoryIssueListInput,
@@ -40,6 +44,7 @@ import * as Feeds from "../../../factory/FactoryFeedService.ts";
 import * as Research from "../../../factory/FactoryResearchService.ts";
 import * as Claims from "../../../factory/FactoryClaimsService.ts";
 import * as Acceptance from "../../../factory/FactoryAcceptanceService.ts";
+import * as Delivery from "../../../factory/FactoryDeliveryService.ts";
 import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -79,6 +84,36 @@ const readAcceptance = Tool.make("factory_read_acceptance", {
     "Read whether a person accepted a commit of a claimed task's worktree. Returns the accepted head, the live head, and current:true only while they still match. This read never accepts, changes or re-pins anything; only a person can accept from the app.",
   parameters: FactoryAcceptanceReadInput,
   success: FactoryAcceptanceReadResult,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+// Deliberately no grant or reconcile tool: granting a delivery is a person's act over the exact
+// head and payload they reviewed. Preparing only proposes that payload and changes nothing.
+const prepareDelivery = Tool.make("factory_prepare_delivery", {
+  ...shared,
+  dependencies: [
+    Delivery.FactoryDeliveryService,
+    Threads.ThreadManagementService,
+    McpInvocationContext.McpInvocationContext,
+  ],
+  description:
+    "Propose a pull request for a claimed task's accepted commit. Returns the exact repository, base, head and payload digest a person must grant from the app. This never pushes, creates a pull request or changes any state; refused unless a commit is accepted and still current.",
+  parameters: FactoryDeliveryPrepareInput,
+  success: FactoryDeliveryPrepareResult,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+const readDeliveries = Tool.make("factory_read_deliveries", {
+  ...shared,
+  dependencies: [
+    Delivery.FactoryDeliveryService,
+    Threads.ThreadManagementService,
+    McpInvocationContext.McpInvocationContext,
+  ],
+  description:
+    "Read the pull request deliveries a person granted for a claimed task, newest first, with each one's status (pending, sending, confirmed, failed or unknown) and the pull request number and URL once confirmed.",
+  parameters: FactoryDeliveryReadInput,
+  success: FactoryDeliveryReadResult,
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
@@ -241,6 +276,8 @@ const recordResearchEvidence = Tool.make("factory_record_research_evidence", {
 export const FactoryToolkit = Toolkit.make(
   listClaims,
   readAcceptance,
+  prepareDelivery,
+  readDeliveries,
   list,
   read,
   readiness,

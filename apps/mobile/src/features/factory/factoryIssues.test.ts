@@ -2,12 +2,15 @@ import {
   EnvironmentAuthorizationError,
   EnvironmentId,
   FactoryAcceptanceError,
+  FactoryDeliveryError,
   FactoryIssueError,
   FactoryOriginKey,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
   type FactoryAcceptance,
+  type FactoryDeliveryIntent,
+  type FactoryDeliveryPrepareResult,
   type FactoryIssue,
   type FactoryIssueListResult,
   type FactoryIssueTask,
@@ -18,9 +21,16 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   applyFactoryIssuePage,
   describeFactoryAcceptanceFailure,
+  describeFactoryDeliveryFailure,
   describeFactoryFailure,
   EMPTY_FACTORY_ISSUE_PAGES,
+  FACTORY_DELIVERY_ALREADY_DELIVERING,
+  FACTORY_DELIVERY_HEAD_MOVED,
+  FACTORY_DELIVERY_PAYLOAD_CHANGED,
   factoryAcceptanceView,
+  factoryDeliveryDefaultPayload,
+  factoryDeliveryGrantBlocker,
+  factoryDeliveryStatusView,
   factoryIssueAction,
   factoryIssueStartKey,
   factoryRepositoryLabel,
@@ -315,6 +325,186 @@ describe("describeFactoryAcceptanceFailure", () => {
         new EnvironmentAuthorizationError({
           message: "nope",
           requiredScope: "orchestration:operate",
+        }),
+      ).kind,
+    ).toBe("auth");
+  });
+});
+
+describe("factory delivery", () => {
+  const headSha = "a".repeat(40);
+  const payload = {
+    title: "Fix it",
+    body: "Issue: https://github.com/owner/name/issues/1",
+    draft: true,
+  };
+  const acceptance: FactoryAcceptance = {
+    id: "acceptance-1",
+    originKey: FactoryOriginKey.make("github:github.com/owner/name#1"),
+    threadId: ThreadId.make("thread-1"),
+    projectId: ProjectId.make("project-1"),
+    headSha,
+    baseRef: "main",
+    baseSha: "b".repeat(40),
+    acceptedAt: "2026-01-01T00:00:00.000Z",
+    acceptedBy: EnvironmentId.make("environment-1"),
+    evidenceRefs: [],
+  };
+  const prepared: FactoryDeliveryPrepareResult = {
+    acceptance,
+    current: true,
+    repository,
+    baseRef: "main",
+    headSha,
+    payload,
+    payloadDigest: "d".repeat(64),
+    existing: null,
+  };
+  function intent(overrides: Partial<FactoryDeliveryIntent> = {}): FactoryDeliveryIntent {
+    return {
+      id: "intent-1",
+      originKey: acceptance.originKey,
+      threadId: acceptance.threadId,
+      projectId: acceptance.projectId,
+      kind: "publish-pr",
+      acceptanceId: acceptance.id,
+      repository,
+      baseRef: "main",
+      baseSha: acceptance.baseSha,
+      headSha,
+      payload,
+      payloadDigest: prepared.payloadDigest,
+      grantedBy: acceptance.acceptedBy,
+      grantedAt: "2026-01-01T00:00:00.000Z",
+      requestCommandId: "command-1",
+      status: "pending",
+      remote: null,
+      failure: null,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+  const grantable = {
+    permitted: true,
+    acceptedHeadSha: headSha,
+    acceptanceCurrent: true,
+    liveIntent: null,
+    prepared,
+    draft: payload,
+  };
+
+  it("prefills a draft from the issue title and a link to it", () => {
+    expect(
+      factoryDeliveryDefaultPayload({
+        number: 1,
+        title: "  Fix it‮ ",
+        url: "https://github.com/owner/name/issues/1",
+      }),
+    ).toEqual(payload);
+    expect(
+      factoryDeliveryDefaultPayload({ number: 7, title: " ", url: "javascript:alert(1)" }),
+    ).toEqual({ title: "Issue #7", body: "Issue #7", draft: true });
+  });
+
+  it("grants only the exact current preview", () => {
+    expect(factoryDeliveryGrantBlocker(grantable)).toBeNull();
+    // A trailing space is trimmed by the server, so it is not an edit.
+    expect(
+      factoryDeliveryGrantBlocker({ ...grantable, draft: { ...payload, title: "Fix it " } }),
+    ).toBeNull();
+    expect(factoryDeliveryGrantBlocker({ ...grantable, prepared: null })).toBe(
+      "Prepare a preview before granting.",
+    );
+  });
+
+  it("refuses a grant whose preview no longer matches the acceptance", () => {
+    expect(factoryDeliveryGrantBlocker({ ...grantable, acceptedHeadSha: "c".repeat(40) })).toBe(
+      FACTORY_DELIVERY_HEAD_MOVED,
+    );
+    expect(
+      factoryDeliveryGrantBlocker({ ...grantable, prepared: { ...prepared, current: false } }),
+    ).toBe(FACTORY_DELIVERY_HEAD_MOVED);
+    expect(factoryDeliveryGrantBlocker({ ...grantable, acceptanceCurrent: false })).toBe(
+      "Publishing needs a current accepted commit.",
+    );
+  });
+
+  it("refuses a grant after the title, body, or draft flag was edited", () => {
+    for (const draft of [
+      { ...payload, title: "Other" },
+      { ...payload, body: "" },
+      { ...payload, draft: false },
+    ]) {
+      expect(factoryDeliveryGrantBlocker({ ...grantable, draft })).toBe(
+        FACTORY_DELIVERY_PAYLOAD_CHANGED,
+      );
+    }
+  });
+
+  it("allows one live intent per task, but a failed one can be granted again", () => {
+    for (const status of ["pending", "sending", "unknown"] as const) {
+      expect(factoryDeliveryGrantBlocker({ ...grantable, liveIntent: intent({ status }) })).toBe(
+        FACTORY_DELIVERY_ALREADY_DELIVERING,
+      );
+    }
+    expect(
+      factoryDeliveryGrantBlocker({ ...grantable, liveIntent: intent({ status: "confirmed" }) }),
+    ).toBe("A pull request was already published for this task.");
+    expect(
+      factoryDeliveryGrantBlocker({
+        ...grantable,
+        prepared: { ...prepared, existing: intent({ status: "failed" }) },
+      }),
+    ).toBeNull();
+    expect(factoryDeliveryGrantBlocker({ ...grantable, permitted: false })).toContain(
+      "isn't permitted",
+    );
+  });
+
+  it("describes each intent status without inventing a link", () => {
+    expect(factoryDeliveryStatusView(intent({ status: "sending" })).text).toBe("Publishing…");
+    expect(
+      factoryDeliveryStatusView(
+        intent({
+          status: "confirmed",
+          remote: { number: 12, url: "https://github.com/owner/name/pull/12" },
+        }),
+      ),
+    ).toEqual({
+      kind: "confirmed",
+      text: "Pull request #12",
+      url: "https://github.com/owner/name/pull/12",
+    });
+    expect(
+      factoryDeliveryStatusView(
+        intent({ status: "confirmed", remote: { number: 12, url: "http://example.com" } }),
+      ),
+    ).toMatchObject({ url: null });
+    expect(factoryDeliveryStatusView(intent({ status: "failed", failure: "boom" })).text).toBe(
+      "boom",
+    );
+    expect(factoryDeliveryStatusView(intent({ status: "unknown" })).text).toContain("Reconcile");
+  });
+
+  it("maps refusals to the next step a person can take", () => {
+    for (const reason of ["head-moved", "acceptance-stale"] as const) {
+      expect(describeFactoryDeliveryFailure(new FactoryDeliveryError({ reason })).detail).toBe(
+        FACTORY_DELIVERY_HEAD_MOVED,
+      );
+    }
+    expect(
+      describeFactoryDeliveryFailure(new FactoryDeliveryError({ reason: "payload-changed" }))
+        .detail,
+    ).toBe(FACTORY_DELIVERY_PAYLOAD_CHANGED);
+    expect(
+      describeFactoryDeliveryFailure(new FactoryDeliveryError({ reason: "already-delivering" }))
+        .detail,
+    ).toBe(FACTORY_DELIVERY_ALREADY_DELIVERING);
+    expect(
+      describeFactoryDeliveryFailure(
+        new EnvironmentAuthorizationError({
+          message: "nope",
+          requiredScope: "source-control:write",
         }),
       ).kind,
     ).toBe("auth");

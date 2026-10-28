@@ -1,4 +1,4 @@
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import {
   StackActions,
   useNavigation,
@@ -14,6 +14,8 @@ import {
   AuthOrchestrationReadScope,
   CommandId,
   type EnvironmentId,
+  type FactoryDeliveryPayload,
+  type FactoryDeliveryPrepareResult,
   type FactoryIssue,
   type FactoryIssueStartInput,
   type FactoryRepository,
@@ -22,21 +24,30 @@ import {
   type RuntimeMode,
   type ThreadId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 
 import * as Dialog from "../../components/ui/Dialog";
 import { uuidv4 } from "../../lib/uuid";
-import { factoryAcceptanceSupportedAtom, factoryEnvironment } from "../../state/factory";
+import {
+  factoryAcceptanceSupportedAtom,
+  factoryDeliverySupportedAtom,
+  factoryEnvironment,
+} from "../../state/factory";
 import { useEnvironmentQuery } from "../../state/query";
 import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAndroidWorkspaceSelection } from "../workspace/useAndroidWorkspaceSelection";
 import {
   describeFactoryAcceptanceFailure,
+  describeFactoryDeliveryFailure,
   describeFactoryFailure,
   factoryAcceptanceView,
   factoryIssueStartKey,
+  isLiveFactoryDelivery,
+  sameFactoryDeliveryPayload,
   type FactoryIssueAction,
   type FactoryFailure,
 } from "./factoryIssues";
@@ -384,6 +395,163 @@ export function useFactoryAcceptCommit(input: {
     pending: current.pending,
     failure: current.failure,
     accept,
+    refresh,
+  };
+}
+
+const NO_DELIVERY_PREVIEW = Atom.make(
+  AsyncResult.initial<FactoryDeliveryPrepareResult, unknown>(false),
+).pipe(Atom.withLabel("mobile-factory-delivery-preview:none"));
+
+/**
+ * Publishing one task's accepted commit as a pull request. A grant is single-use over the exact
+ * preview the human last saw: it echoes that prepare's head and payload digest, never a fresh
+ * read, so a moved head or an edited payload is refused by the server instead of published.
+ * The server performs the push and the pull request; this hook only previews, grants, and
+ * reconciles a lost response.
+ */
+export function useFactoryDelivery(input: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly threadId: ThreadId;
+}) {
+  const { environmentId, projectId, threadId } = input;
+  const supported = useAtomValue(factoryDeliverySupportedAtom(environmentId));
+  const canRead = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
+  const canGrant = useAtomValue(factoryEnvironment.grantDelivery.permissionAtom(environmentId));
+  const canReconcile = useAtomValue(
+    factoryEnvironment.reconcileDelivery.permissionAtom(environmentId),
+  );
+  const readable = supported && canRead;
+  const deliveries = useEnvironmentQuery(
+    readable
+      ? factoryEnvironment.readDeliveries({ environmentId, input: { projectId, threadId } })
+      : null,
+  );
+  const runGrant = useAtomCommand(factoryEnvironment.grantDelivery, { reportFailure: false });
+  const runReconcile = useAtomCommand(factoryEnvironment.reconcileDelivery, {
+    reportFailure: false,
+  });
+  const key = JSON.stringify([environmentId, projectId, threadId]);
+  const lifetime = useRef<{ readonly key: string; active: boolean; pending: boolean } | null>(null);
+  const [state, setState] = useState<{
+    readonly key: string;
+    // The payload of the last explicit Prepare. Previewing is a read, but it runs only on request
+    // so typing never asks the server to recompute a digest per keystroke.
+    readonly previewed: FactoryDeliveryPayload | null;
+    readonly pending: boolean;
+    readonly failure: FactoryFailure | null;
+  }>({ key, previewed: null, pending: false, failure: null });
+  if (state.key !== key) setState({ key, previewed: null, pending: false, failure: null });
+  useLayoutEffect(() => {
+    const current = { key, active: true, pending: false };
+    lifetime.current = current;
+    return () => {
+      current.active = false;
+    };
+  }, [key]);
+
+  const previewed = state.key === key ? state.previewed : null;
+  const previewAtom: Atom.Atom<AsyncResult.AsyncResult<FactoryDeliveryPrepareResult, unknown>> =
+    readable && previewed !== null
+      ? factoryEnvironment.prepareDelivery({
+          environmentId,
+          input: { projectId, threadId, kind: "publish-pr", payload: previewed },
+        })
+      : NO_DELIVERY_PREVIEW;
+  const preview = useAtomValue(previewAtom);
+  const refreshPreview = useAtomRefresh(previewAtom);
+  // Only a settled success is grantable: a failed re-prepare must not leave the previous digest
+  // looking current, and a preview that is still re-reading may be about to change.
+  const prepared = preview._tag === "Success" && !preview.waiting ? preview.value : null;
+  const previewFailure =
+    preview._tag === "Failure" ? describeFactoryDeliveryFailure(Cause.squash(preview.cause)) : null;
+
+  const intents = deliveries.data?.intents ?? [];
+  const liveIntent = intents.find(isLiveFactoryDelivery) ?? null;
+
+  const prepare = useCallback(
+    (payload: FactoryDeliveryPayload) => {
+      if (lifetime.current?.pending) return;
+      const next = { ...payload, title: payload.title.trim() };
+      setState({ key, previewed: next, pending: false, failure: null });
+      // Preparing the same text again must still re-read the head and acceptance.
+      if (previewed !== null && sameFactoryDeliveryPayload(previewed, next)) refreshPreview();
+    },
+    [key, previewed, refreshPreview],
+  );
+
+  const grant = useCallback(async () => {
+    const current = lifetime.current;
+    if (current === null || !current.active || current.pending || prepared === null) return;
+    current.pending = true;
+    setState({ key: current.key, previewed, pending: true, failure: null });
+    const result = await runGrant({
+      environmentId,
+      input: {
+        projectId,
+        threadId,
+        kind: "publish-pr",
+        // A fresh id per grant: a failed intent is not live, so granting again must create a new
+        // intent rather than replay the failed one.
+        commandId: uuidv4(),
+        expectedHeadSha: prepared.headSha,
+        expectedPayloadDigest: prepared.payloadDigest,
+        payload: prepared.payload,
+      },
+    });
+    current.pending = false;
+    if (!current.active || lifetime.current !== current) return;
+    const failure =
+      result._tag === "Failure" && !isAtomCommandInterrupted(result)
+        ? describeFactoryDeliveryFailure(squashAtomCommandFailure(result))
+        : null;
+    setState({ key: current.key, previewed, pending: false, failure });
+  }, [environmentId, prepared, previewed, projectId, runGrant, threadId]);
+
+  const reconcile = useCallback(
+    async (intentId: string) => {
+      const current = lifetime.current;
+      if (current === null || !current.active || current.pending) return;
+      current.pending = true;
+      setState({ key: current.key, previewed, pending: true, failure: null });
+      const result = await runReconcile({ environmentId, input: { projectId, intentId } });
+      current.pending = false;
+      if (!current.active || lifetime.current !== current) return;
+      const failure =
+        result._tag === "Failure" && !isAtomCommandInterrupted(result)
+          ? describeFactoryDeliveryFailure(squashAtomCommandFailure(result))
+          : null;
+      setState({ key: current.key, previewed, pending: false, failure });
+    },
+    [environmentId, previewed, projectId, runReconcile],
+  );
+
+  const refreshDeliveries = deliveries.refresh;
+  const refresh = useCallback(() => {
+    if (lifetime.current?.pending) return;
+    setState({ key, previewed, pending: false, failure: null });
+    refreshDeliveries();
+    if (previewed !== null) refreshPreview();
+  }, [key, previewed, refreshDeliveries, refreshPreview]);
+
+  const current = state.key === key ? state : { pending: false, failure: null };
+  return {
+    supported: readable,
+    canGrant,
+    canReconcile,
+    intents,
+    liveIntent,
+    deliveriesLoading: deliveries.isPending,
+    deliveriesError: deliveries.error,
+    prepared,
+    preparing: previewed !== null && preview.waiting,
+    previewFailure,
+    pending: current.pending,
+    failure: current.failure,
+    prepare,
+    grant,
+    reconcile,
     refresh,
   };
 }

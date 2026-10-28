@@ -4,6 +4,7 @@ import { View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
+import { FactoryDeliverySection } from "./FactoryDeliverySection";
 import { shortFactorySha } from "./factoryIssues";
 import { useFactoryAcceptCommit } from "./useFactoryIssueActions";
 
@@ -31,6 +32,7 @@ export function FactoryAcceptedCommitSection(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly threadId: ThreadId;
+  readonly issue: { readonly number: number; readonly title: string; readonly url: string };
 }) {
   const acceptance = useFactoryAcceptCommit(props);
   if (!acceptance.supported) return null;
@@ -136,6 +138,18 @@ export function FactoryAcceptedCommitSection(props: {
         disabled={acceptance.pending || acceptance.loading}
         onPress={acceptance.refresh}
       />
+      {view !== null && view.kind !== "none" ? (
+        // Stays mounted when the head moves so a published or pending pull request stays visible;
+        // only granting needs the acceptance to be current.
+        <FactoryDeliverySection
+          environmentId={props.environmentId}
+          projectId={props.projectId}
+          threadId={props.threadId}
+          issue={props.issue}
+          acceptedHeadSha={view.acceptance.headSha}
+          acceptanceCurrent={view.kind === "current"}
+        />
+      ) : null}
     </View>
   );
 }

@@ -4,6 +4,7 @@ import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
 import * as FactoryResearchService from "./factory/FactoryResearchService.ts";
 import * as FactoryClaimsService from "./factory/FactoryClaimsService.ts";
 import * as FactoryAcceptanceService from "./factory/FactoryAcceptanceService.ts";
+import * as FactoryDeliveryService from "./factory/FactoryDeliveryService.ts";
 import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -1272,6 +1273,7 @@ export const layerWsRpc = (
       const factoryResearch = yield* FactoryResearchService.FactoryResearchService;
       const factoryClaims = yield* FactoryClaimsService.FactoryClaimsService;
       const factoryAcceptance = yield* FactoryAcceptanceService.FactoryAcceptanceService;
+      const factoryDelivery = yield* FactoryDeliveryService.FactoryDeliveryService;
       const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2525,6 +2527,10 @@ export const layerWsRpc = (
         [WS_METHODS.factoryListClaims]: (input) => factoryClaims.list(input),
         [WS_METHODS.factoryAcceptCommit]: (input) => factoryAcceptance.acceptCommit(input),
         [WS_METHODS.factoryReadAcceptance]: (input) => factoryAcceptance.read(input),
+        [WS_METHODS.factoryPrepareDelivery]: (input) => factoryDelivery.prepare(input),
+        [WS_METHODS.factoryGrantDelivery]: (input) => factoryDelivery.grant(input),
+        [WS_METHODS.factoryReadDeliveries]: (input) => factoryDelivery.read(input),
+        [WS_METHODS.factoryReconcileDelivery]: (input) => factoryDelivery.reconcile(input),
         [WS_METHODS.factoryReadIssueReadiness]: (input) => factoryRelations.read(input),
         [WS_METHODS.factorySetIssueReadinessOverride]: (input) =>
           factoryRelations.setOverride(input),
@@ -3262,6 +3268,7 @@ export const layer = Layer.unwrap(
     const factoryResearch = yield* FactoryResearchService.FactoryResearchService;
     const factoryClaims = yield* FactoryClaimsService.FactoryClaimsService;
     const factoryAcceptance = yield* FactoryAcceptanceService.FactoryAcceptanceService;
+    const factoryDelivery = yield* FactoryDeliveryService.FactoryDeliveryService;
     const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const sql = yield* SqlClient.SqlClient;
@@ -3361,6 +3368,9 @@ export const layer = Layer.unwrap(
               ),
               Layer.provide(
                 Layer.succeed(FactoryAcceptanceService.FactoryAcceptanceService, factoryAcceptance),
+              ),
+              Layer.provide(
+                Layer.succeed(FactoryDeliveryService.FactoryDeliveryService, factoryDelivery),
               ),
               Layer.provide(
                 Layer.succeed(

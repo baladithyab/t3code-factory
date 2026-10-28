@@ -2,6 +2,7 @@ import {
   OrchestratorMcpFailure,
   FactoryResearchError,
   type FactoryAcceptanceError,
+  type FactoryDeliveryError,
   type FactoryIssueError,
   type FactoryFeedError,
   type ProjectCoordinatorError,
@@ -13,6 +14,7 @@ import * as Feeds from "../../../factory/FactoryFeedService.ts";
 import * as Research from "../../../factory/FactoryResearchService.ts";
 import * as Claims from "../../../factory/FactoryClaimsService.ts";
 import * as Acceptance from "../../../factory/FactoryAcceptanceService.ts";
+import * as Delivery from "../../../factory/FactoryDeliveryService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { DispatchModeLimit } from "../../../orchestration-v2/DispatchModeLimit.ts";
 import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
@@ -26,6 +28,7 @@ const failure = (
     | FactoryFeedError
     | FactoryResearchError
     | FactoryAcceptanceError
+    | FactoryDeliveryError
     | ProjectCoordinatorError,
 ) =>
   new OrchestratorMcpFailure({
@@ -126,6 +129,22 @@ export const layer = McpToolAccess.toLayer(FactoryToolkit, {
     Effect.gen(function* () {
       yield* readCaller();
       return yield* (yield* Acceptance.FactoryAcceptanceService)
+        .read(input)
+        .pipe(Effect.mapError(failure));
+    }),
+  ),
+  factory_prepare_delivery: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      yield* readCaller();
+      return yield* (yield* Delivery.FactoryDeliveryService)
+        .prepare(input)
+        .pipe(Effect.mapError(failure));
+    }),
+  ),
+  factory_read_deliveries: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      yield* readCaller();
+      return yield* (yield* Delivery.FactoryDeliveryService)
         .read(input)
         .pipe(Effect.mapError(failure));
     }),

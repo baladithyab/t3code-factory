@@ -131,6 +131,7 @@ export function FactoryIssueRow(props: {
               environmentId={props.environmentId}
               projectId={action.task.projectId}
               threadId={action.task.threadId}
+              issue={issue}
             />
           ) : null}
           {action.kind === "unavailable" ? (

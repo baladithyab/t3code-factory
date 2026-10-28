@@ -20,6 +20,9 @@ import {
   type AuthEnvironmentScope,
   type AuthSessionState,
   type FactoryAcceptCommitInput,
+  type FactoryDeliveryGrantInput,
+  type FactoryDeliveryIntent,
+  type FactoryDeliveryReconcileInput,
   type FactoryClaimListInput,
   type FactoryClaimListResult,
   type FactoryFeedCandidate,
@@ -1317,6 +1320,16 @@ const makeResearchHarness = Effect.fn("TestFactory.makeResearchHarness")(functio
         liveHeadSha: null,
         current: false,
       })),
+      [WS_METHODS.factoryGrantDelivery]: held(
+        id,
+        WS_METHODS.factoryGrantDelivery,
+        () => deliveryIntent,
+      ),
+      [WS_METHODS.factoryReconcileDelivery]: held(
+        id,
+        WS_METHODS.factoryReconcileDelivery,
+        () => deliveryIntent,
+      ),
       [WS_METHODS.factoryAdmitResearchImplementation]: held(
         id,
         WS_METHODS.factoryAdmitResearchImplementation,
@@ -1334,6 +1347,28 @@ const makeResearchHarness = Effect.fn("TestFactory.makeResearchHarness")(functio
   );
   return { ...h, entered, release, calls };
 });
+
+const deliveryIntent: FactoryDeliveryIntent = {
+  id: "delivery:1",
+  originKey: FactoryOriginKey.make("github:github.com/owner/repo#7"),
+  threadId: researchTask.threadId,
+  projectId,
+  kind: "publish-pr",
+  acceptanceId: "acceptance:1",
+  repository: readinessRepository,
+  baseRef: "main",
+  baseSha: "b".repeat(40),
+  headSha: "c".repeat(40),
+  payload: { title: "Title", body: "Body", draft: false },
+  payloadDigest: "d".repeat(64),
+  grantedBy: environmentId,
+  grantedAt: fetchedAt,
+  requestCommandId: "grant",
+  status: "pending",
+  remote: null,
+  failure: null,
+  updatedAt: fetchedAt,
+};
 
 const researchReads = (calls: ReadonlyArray<FeedCall>, method: string) =>
   calls.filter((call) => call.method === method).length;
@@ -1555,6 +1590,38 @@ describe("Factory research commands", () => {
           expectedHeadSha: "c".repeat(40),
           evidenceRefs: [],
         } satisfies FactoryAcceptCommitInput,
+        [AuthOrchestrationOperateScope, AuthSourceControlWriteScope],
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("requires both operate and source-control write to grant a delivery", () =>
+    Effect.gen(function* () {
+      const h = yield* makeResearchHarness();
+      yield* expectGuarded(
+        h,
+        h.atoms.grantDelivery,
+        {
+          projectId,
+          threadId: researchTask.threadId,
+          kind: "publish-pr",
+          commandId: "grant",
+          expectedHeadSha: "c".repeat(40),
+          expectedPayloadDigest: "d".repeat(64),
+          payload: { title: "Title", body: "Body", draft: false },
+        } satisfies FactoryDeliveryGrantInput,
+        [AuthOrchestrationOperateScope, AuthSourceControlWriteScope],
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("requires both operate and source-control write to reconcile a delivery", () =>
+    Effect.gen(function* () {
+      const h = yield* makeResearchHarness();
+      yield* expectGuarded(
+        h,
+        h.atoms.reconcileDelivery,
+        { projectId, intentId: "delivery:1" } satisfies FactoryDeliveryReconcileInput,
         [AuthOrchestrationOperateScope, AuthSourceControlWriteScope],
       );
     }).pipe(Effect.scoped),
