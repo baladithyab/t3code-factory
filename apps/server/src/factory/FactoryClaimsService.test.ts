@@ -205,6 +205,14 @@ it.effect(
       const researchKey = researchRunOriginKey(protocol.id, research.role);
       yield* sql`INSERT INTO factory_research_launches (thread_id, protocol_id, role, request_command_id, intent_json, origin_key, created_at)
       VALUES (${research.threadId}, ${protocol.id}, ${research.role}, ${research.requestCommandId}, ${JSON.stringify(research)}, NULL, ${at})`;
+      // One live acceptance for the issue claim; a superseded row for the same thread must not show.
+      for (const [id, superseded, head] of [
+        ["accepted-old", 1, "d".repeat(40)],
+        ["accepted-live", 0, "c".repeat(40)],
+      ] as const) {
+        yield* sql`INSERT INTO factory_acceptances (id, origin_key, thread_id, project_id, head_sha, base_ref, base_sha, accepted_at, accepted_by, evidence_json, superseded)
+        VALUES (${id}, ${issueKey}, ${issue.threadId}, ${owner}, ${head}, 'main', ${"b".repeat(40)}, ${at}, ${environmentId}, '[]', ${superseded})`;
+      }
       yield* sql`INSERT INTO factory_feed_launches (thread_id, source_id, item_key, request_command_id, intent_json)
       VALUES ('unreadable', 'unreadable', 'unreadable', 'unreadable', 'not json')`;
       const result = yield* (yield* Claims.FactoryClaimsService).list({ projectId: caller });
@@ -223,6 +231,7 @@ it.effect(
         creationSource: "web",
         admittedBy: environmentId,
         originConflict: false,
+        acceptance: { headSha: "c".repeat(40), acceptedAt: at },
       });
       assert.deepInclude(result.claims, {
         originKey: feedKey,
@@ -236,6 +245,7 @@ it.effect(
         creationSource: "web",
         admittedBy: copiedFrom,
         originConflict: true,
+        acceptance: null,
       });
       assert.deepInclude(result.claims, {
         originKey: researchKey,
@@ -249,6 +259,7 @@ it.effect(
         creationSource: "web",
         admittedBy: null,
         originConflict: false,
+        acceptance: null,
       });
       assert.isString(result.fetchedAt);
     }).pipe(Effect.provide(layer)),

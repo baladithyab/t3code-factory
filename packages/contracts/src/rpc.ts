@@ -45,6 +45,12 @@ import {
 } from "./factoryResearch.ts";
 import { FactoryClaimListInput, FactoryClaimListResult } from "./factoryClaims.ts";
 import {
+  FactoryAcceptCommitInput,
+  FactoryAcceptanceError,
+  FactoryAcceptanceReadInput,
+  FactoryAcceptanceReadResult,
+} from "./factoryAcceptance.ts";
+import {
   ProjectCoordinatorEnsureInput,
   ProjectCoordinatorEnsureResult,
   ProjectCoordinatorError,
@@ -454,6 +460,8 @@ export const WS_METHODS = {
   factoryLaunchResearchRun: "factory.launchResearchRun",
   factoryAdmitResearchImplementation: "factory.admitResearchImplementation",
   factoryListClaims: "factory.listClaims",
+  factoryAcceptCommit: "factory.acceptCommit",
+  factoryReadAcceptance: "factory.readAcceptance",
   projectCoordinatorsGet: "projectCoordinators.get",
   projectCoordinatorsList: "projectCoordinators.list",
   projectCoordinatorsEnsure: "projectCoordinators.ensure",
@@ -2030,6 +2038,20 @@ const WsFactoryListClaimsRpc = Rpc.make(WS_METHODS.factoryListClaims, {
   success: FactoryClaimListResult,
   error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
 });
+const factoryAcceptanceError = Schema.Union([
+  FactoryAcceptanceError,
+  EnvironmentAuthorizationError,
+]);
+const WsFactoryAcceptCommitRpc = Rpc.make(WS_METHODS.factoryAcceptCommit, {
+  payload: FactoryAcceptCommitInput,
+  success: FactoryAcceptanceReadResult,
+  error: factoryAcceptanceError,
+});
+const WsFactoryReadAcceptanceRpc = Rpc.make(WS_METHODS.factoryReadAcceptance, {
+  payload: FactoryAcceptanceReadInput,
+  success: FactoryAcceptanceReadResult,
+  error: factoryAcceptanceError,
+});
 const factoryFeedError = Schema.Union([FactoryFeedError, EnvironmentAuthorizationError]);
 const WsFactoryListFeedSourcesRpc = Rpc.make(WS_METHODS.factoryListFeedSources, {
   payload: FactoryFeedSourceListInput,
@@ -2119,6 +2141,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsFactoryLaunchResearchRunRpc,
   WsFactoryAdmitResearchImplementationRpc,
   WsFactoryListClaimsRpc,
+  WsFactoryAcceptCommitRpc,
+  WsFactoryReadAcceptanceRpc,
   WsProjectCoordinatorsGetRpc,
   WsProjectCoordinatorsListRpc,
   WsProjectCoordinatorsEnsureRpc,

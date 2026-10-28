@@ -1,9 +1,13 @@
 import {
   EnvironmentAuthorizationError,
+  EnvironmentId,
+  FactoryAcceptanceError,
   FactoryIssueError,
+  FactoryOriginKey,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  type FactoryAcceptance,
   type FactoryIssue,
   type FactoryIssueListResult,
   type FactoryIssueTask,
@@ -13,8 +17,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   applyFactoryIssuePage,
+  describeFactoryAcceptanceFailure,
   describeFactoryFailure,
   EMPTY_FACTORY_ISSUE_PAGES,
+  factoryAcceptanceView,
   factoryIssueAction,
   factoryIssueStartKey,
   factoryRepositoryLabel,
@@ -250,5 +256,67 @@ describe("factoryRepositoryLabel", () => {
     expect(factoryRepositoryLabel({ ...repository, host: "ghe.example.com" })).toBe(
       "ghe.example.com/owner/name",
     );
+  });
+});
+
+describe("factoryAcceptanceView", () => {
+  const acceptance: FactoryAcceptance = {
+    id: "acceptance-1",
+    originKey: FactoryOriginKey.make("github:github.com/owner/name#1"),
+    threadId: ThreadId.make("thread-1"),
+    projectId: ProjectId.make("project-1"),
+    headSha: "a".repeat(40),
+    baseRef: "main",
+    baseSha: "b".repeat(40),
+    acceptedAt: "2026-01-01T00:00:00.000Z",
+    acceptedBy: EnvironmentId.make("environment-1"),
+    evidenceRefs: [],
+  };
+
+  it("offers the live head when nothing is accepted", () => {
+    expect(
+      factoryAcceptanceView({ acceptance: null, liveHeadSha: "c".repeat(40), current: false }),
+    ).toEqual({ kind: "none", liveHeadSha: "c".repeat(40) });
+  });
+
+  it("reports a moved head only when the live head was observed", () => {
+    expect(
+      factoryAcceptanceView({ acceptance, liveHeadSha: "c".repeat(40), current: false }).kind,
+    ).toBe("moved");
+    expect(factoryAcceptanceView({ acceptance, liveHeadSha: null, current: false }).kind).toBe(
+      "unverifiable",
+    );
+    expect(
+      factoryAcceptanceView({ acceptance, liveHeadSha: acceptance.headSha, current: true }).kind,
+    ).toBe("current");
+  });
+});
+
+describe("describeFactoryAcceptanceFailure", () => {
+  it("asks the reviewer to look again when the head moved", () => {
+    expect(
+      describeFactoryAcceptanceFailure(new FactoryAcceptanceError({ reason: "head-moved" })),
+    ).toMatchObject({
+      kind: "changed",
+      detail: "The head moved while you were reviewing. Refresh and review again.",
+    });
+  });
+
+  it("points a write-once conflict at Re-accept", () => {
+    expect(
+      describeFactoryAcceptanceFailure(new FactoryAcceptanceError({ reason: "already-accepted" }))
+        .detail,
+    ).toContain("Re-accept at current head");
+  });
+
+  it("reports authorization failures as not permitted", () => {
+    expect(
+      describeFactoryAcceptanceFailure(
+        new EnvironmentAuthorizationError({
+          message: "nope",
+          requiredScope: "orchestration:operate",
+        }),
+      ).kind,
+    ).toBe("auth");
   });
 });

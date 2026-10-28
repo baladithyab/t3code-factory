@@ -2,12 +2,18 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import type { FactoryClaimRowPresentation } from "./factoryClaims.logic";
 
-/** The conflict badges and provenance line for one issue or feed item. Renders nothing otherwise. */
 export function FactoryClaimIndicators(props: {
   readonly presentation: FactoryClaimRowPresentation;
 }) {
-  const { conflict, duplicates, provenance } = props.presentation;
-  if (conflict === null && duplicates === null && provenance === null) return null;
+  const { conflict, duplicates, provenance, acceptedCommit } = props.presentation;
+  if (
+    conflict === null &&
+    duplicates === null &&
+    provenance === null &&
+    acceptedCommit === undefined
+  ) {
+    return null;
+  }
   return (
     <div className="min-w-0 space-y-1">
       {[conflict, duplicates].map((entry) =>
@@ -22,6 +28,15 @@ export function FactoryClaimIndicators(props: {
       )}
       {provenance !== null ? (
         <p className="text-muted-foreground text-xs [overflow-wrap:anywhere]">{provenance}</p>
+      ) : null}
+      {acceptedCommit !== undefined ? (
+        <p className="text-muted-foreground text-xs">
+          Accepted commit <code>{acceptedCommit.shortSha}</code>
+          {" · "}
+          <time dateTime={acceptedCommit.acceptedAt}>
+            {new Date(acceptedCommit.acceptedAt).toLocaleDateString()}
+          </time>
+        </p>
       ) : null}
     </div>
   );

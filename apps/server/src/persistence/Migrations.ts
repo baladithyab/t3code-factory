@@ -78,6 +78,7 @@ import Migration0072 from "./Migrations/072_FactoryIssueRelations.ts";
 import Migration0073 from "./Migrations/073_FactoryReadinessOverrides.ts";
 import Migration0074 from "./Migrations/074_FactoryResearch.ts";
 import Migration0075 from "./Migrations/075_FactoryClaims.ts";
+import Migration0200 from "./Migrations/200_FactoryAcceptances.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -156,6 +157,9 @@ const migrationEntries = [
   [73, "FactoryReadinessOverrides", Migration0073],
   [74, "FactoryResearch", Migration0074],
   [75, "FactoryClaims", Migration0075],
+  // Factory migrations from here on use a high range (200+) so the sync-time renumber of
+  // 069–075 to 100–106 and upstream's own ids never land on them.
+  [200, "FactoryAcceptances", Migration0200],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

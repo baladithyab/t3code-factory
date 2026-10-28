@@ -81,6 +81,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   factoryResearch: Schema.optionalKey(Schema.Boolean),
   /** Absent on older servers; clients must not request claim lists without it. */
   factoryClaims: Schema.optionalKey(Schema.Boolean),
+  /** Absent on older servers; clients must not read or record commit acceptance without it. */
+  factoryAcceptance: Schema.optionalKey(Schema.Boolean),
   /** Absent on older servers; clients must not query or start project orchestrators without it. */
   projectCoordinators: Schema.optionalKey(Schema.Boolean),
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),

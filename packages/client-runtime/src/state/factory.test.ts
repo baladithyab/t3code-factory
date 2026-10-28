@@ -19,6 +19,7 @@ import {
   WS_METHODS,
   type AuthEnvironmentScope,
   type AuthSessionState,
+  type FactoryAcceptCommitInput,
   type FactoryClaimListInput,
   type FactoryClaimListResult,
   type FactoryFeedCandidate,
@@ -631,6 +632,7 @@ const claimsResult = (environment: EnvironmentId, observedAt: string): FactoryCl
       creationSource: "web",
       admittedBy: environment,
       originConflict: false,
+      acceptance: null,
     },
   ],
   fetchedAt: observedAt,
@@ -1310,6 +1312,11 @@ const makeResearchHarness = Effect.fn("TestFactory.makeResearchHarness")(functio
           resumed: false,
         }),
       ),
+      [WS_METHODS.factoryAcceptCommit]: held(id, WS_METHODS.factoryAcceptCommit, () => ({
+        acceptance: null,
+        liveHeadSha: null,
+        current: false,
+      })),
       [WS_METHODS.factoryAdmitResearchImplementation]: held(
         id,
         WS_METHODS.factoryAdmitResearchImplementation,
@@ -1533,6 +1540,23 @@ describe("Factory research commands", () => {
         AuthOrchestrationOperateScope,
         AuthSourceControlWriteScope,
       ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("requires both operate and source-control write to accept a commit", () =>
+    Effect.gen(function* () {
+      const h = yield* makeResearchHarness();
+      yield* expectGuarded(
+        h,
+        h.atoms.acceptCommit,
+        {
+          projectId,
+          threadId: researchTask.threadId,
+          expectedHeadSha: "c".repeat(40),
+          evidenceRefs: [],
+        } satisfies FactoryAcceptCommitInput,
+        [AuthOrchestrationOperateScope, AuthSourceControlWriteScope],
+      );
     }).pipe(Effect.scoped),
   );
 

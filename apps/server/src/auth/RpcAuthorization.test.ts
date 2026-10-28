@@ -2,6 +2,7 @@ import {
   CommandId,
   EnvironmentId,
   ProjectId,
+  FactoryAcceptanceError,
   FactoryFeedError,
   FactoryResearchError,
   FactoryResearchProtocolId,
@@ -948,6 +949,67 @@ describe("factory claims authorization", () => {
           requiredPermission: AuthOrchestrationReadScope,
         });
       expect(called).toBe(allowed);
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("factory acceptance authorization", () => {
+  const cases = [
+    { method: WS_METHODS.factoryReadAcceptance, scopes: [AuthOrchestrationReadScope] },
+    {
+      method: WS_METHODS.factoryAcceptCommit,
+      scopes: [AuthOrchestrationOperateScope, AuthSourceControlWriteScope],
+    },
+  ] as const;
+  const input = {
+    projectId: ProjectId.make("project"),
+    threadId: ThreadId.make("thread"),
+    expectedHeadSha: "c".repeat(40),
+    evidenceRefs: [],
+  };
+  const tested = cases.map(({ method }) => method);
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
+        !(tested as ReadonlyArray<string>).includes(tag),
+    ),
+  );
+  const fail = () => Effect.fail(new FactoryAcceptanceError({ reason: "unknown-thread" }));
+  const handlers = group.toLayer({
+    [WS_METHODS.factoryReadAcceptance]: fail,
+    [WS_METHODS.factoryAcceptCommit]: fail,
+  });
+  it.effect.each(cases)("requires every acceptance scope for $method", ({ method, scopes }) =>
+    Effect.gen(function* () {
+      for (const missing of scopes) {
+        const client = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.merge(
+              handlers,
+              RpcAuthorization.layer(scopes.filter((scope) => scope !== missing)),
+            ),
+          ),
+        );
+        const request: Effect.Effect<
+          unknown,
+          FactoryAcceptanceError | EnvironmentAuthorizationError
+        > = client[method](input);
+        expect(yield* request.pipe(Effect.asVoid, Effect.flip)).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: missing,
+        });
+      }
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(Layer.merge(handlers, RpcAuthorization.layer(scopes))),
+      );
+      const request: Effect.Effect<
+        unknown,
+        FactoryAcceptanceError | EnvironmentAuthorizationError
+      > = client[method](input);
+      expect(yield* request.pipe(Effect.asVoid, Effect.flip)).toMatchObject({
+        _tag: "FactoryAcceptanceError",
+        reason: "unknown-thread",
+      });
     }).pipe(Effect.scoped),
   );
 });

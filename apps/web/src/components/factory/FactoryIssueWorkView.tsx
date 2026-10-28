@@ -5,18 +5,22 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   CommandId,
+  FactoryAcceptanceError,
   type EnvironmentId,
   type FactoryIssue,
   type FactoryIssueTask,
   type FactoryReadinessOverrideId,
   type ProjectId,
+  type ThreadId,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { ChevronDownIcon, CircleDotIcon } from "lucide-react";
 import { Fragment, useEffect, useId, useRef, useState } from "react";
 
 import { useNowSecond } from "../../hooks/useNowSecond";
 import { randomUUID } from "../../lib/utils";
 import { factoryEnvironment, useFactoryReadinessSupported } from "../../state/factory";
+import { environmentPresentations } from "../../state/presentation";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { RelativeTime } from "../RelativeTime";
@@ -71,6 +75,11 @@ export function FactoryIssueWorkView(props: FactoryIssueWorkViewProps) {
   // The parent keys this component by repository and page, but not presentation mode.
   const [expandedIssues, setExpandedIssues] = useState<ReadonlySet<number>>(() => new Set());
   const readinessSupported = useFactoryReadinessSupported(props.environmentId);
+  const acceptanceSupported = useAtomValue(
+    environmentPresentations.presentationAtom(props.environmentId),
+    (presentation) =>
+      presentation?.serverConfig?.environment.capabilities.factoryAcceptance === true,
+  );
 
   const renderIssue = (issue: FactoryIssue) => (
     <FactoryIssueEntry
@@ -80,6 +89,7 @@ export function FactoryIssueWorkView(props: FactoryIssueWorkViewProps) {
       claims={props.claims}
       repositoryKey={props.repositoryKey}
       readinessSupported={readinessSupported}
+      acceptanceSupported={acceptanceSupported}
       issue={issue}
       canStart={props.canStart}
       busy={props.busy}
@@ -178,6 +188,7 @@ function FactoryIssueEntry(
     readonly issue: FactoryIssue;
     readonly expanded: boolean;
     readonly readinessSupported: boolean;
+    readonly acceptanceSupported: boolean;
     readonly onToggleDetails: () => void;
   },
 ) {
@@ -266,6 +277,14 @@ function FactoryIssueEntry(
       {taskState}
       {claimPresentation !== null ? (
         <FactoryClaimIndicators presentation={claimPresentation} />
+      ) : null}
+      {issue.task?.threadId && props.acceptanceSupported ? (
+        <FactoryAcceptedCommit
+          key={`${props.environmentId}:${issue.task.projectId}:${issue.task.threadId}`}
+          environmentId={props.environmentId}
+          projectId={issue.task.projectId}
+          threadId={issue.task.threadId}
+        />
       ) : null}
     </>
   );
@@ -392,6 +411,168 @@ function FactoryIssueEntry(
       </div>
       {details ? <div className="mt-3">{details}</div> : null}
     </li>
+  );
+}
+
+const isFactoryAcceptanceError = Schema.is(FactoryAcceptanceError);
+
+function acceptanceFailureMessage(error: unknown, fallbackMessage?: string): string {
+  if (isFactoryAcceptanceError(error)) {
+    switch (error.reason) {
+      case "head-moved":
+        return "The head moved while you were reviewing. Refresh and review again.";
+      case "already-accepted":
+        return "This task already has an accepted commit. Refresh and use Re-accept at current head if it has changed.";
+      case "worktree-unavailable":
+        return "The worktree or live head is unavailable. Restore the worktree and refresh to accept a commit.";
+      case "unknown-thread":
+        return "This thread is no longer available.";
+      case "not-a-factory-task":
+        return "This thread is not a claimed Factory task.";
+    }
+  }
+  return describeFactoryFailure(error, fallbackMessage).message;
+}
+
+function FactoryAcceptedCommit(props: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly threadId: ThreadId;
+}) {
+  const { environmentId, projectId, threadId } = props;
+  const headingId = useId();
+  const disabledReasonId = useId();
+  const query = useEnvironmentQuery(
+    factoryEnvironment.readAcceptance({ environmentId, input: { projectId, threadId } }),
+  );
+  const canAccept = useAtomValue(factoryEnvironment.acceptCommit.permissionAtom(environmentId));
+  const runAccept = useAtomCommand(factoryEnvironment.acceptCommit, {
+    label: "factory accept commit",
+    reportFailure: false,
+  });
+  const [saving, setSaving] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const inFlight = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const data = query.data;
+  const acceptance = data?.acceptance ?? null;
+  const liveHeadSha = data?.liveHeadSha ?? null;
+  const moved = acceptance !== null && data?.current === false;
+  const readFailure =
+    query.error === null ? null : acceptanceFailureMessage(query.failure, query.error);
+  const disabledReason = !canAccept
+    ? "Accepting a commit needs operate permission on this environment."
+    : readFailure !== null
+      ? readFailure
+      : query.isPending || data === null
+        ? "Reading the current head…"
+        : liveHeadSha === null
+          ? "The worktree or live head is unavailable. Restore the worktree and refresh to accept a commit."
+          : failure !== null
+            ? "Refresh and review the current head before accepting again."
+            : null;
+
+  const accept = async () => {
+    if (inFlight.current || disabledReason !== null || liveHeadSha === null) return;
+    inFlight.current = true;
+    setSaving(true);
+    setFailure(null);
+    const result = await runAccept({
+      environmentId,
+      input: {
+        projectId,
+        threadId,
+        // Only the observed head is eligible; the server rejects a concurrent head change.
+        expectedHeadSha: liveHeadSha,
+        evidenceRefs: [],
+        ...(moved ? { supersede: true } : {}),
+      },
+    }).finally(() => {
+      inFlight.current = false;
+      if (mounted.current) setSaving(false);
+    });
+    if (!mounted.current) return;
+    if (result._tag === "Success") {
+      query.refresh();
+    } else if (!isAtomCommandInterrupted(result)) {
+      setFailure(acceptanceFailureMessage(squashAtomCommandFailure(result)));
+    }
+  };
+
+  return (
+    <div role="group" aria-labelledby={headingId} aria-busy={saving || query.isPending}>
+      <div className="mt-2 space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p id={headingId} className="font-medium text-sm">
+            Accepted commit
+          </p>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={saving || query.isPending}
+            aria-label="Refresh accepted commit"
+            onClick={() => {
+              setFailure(null);
+              query.refresh();
+            }}
+          >
+            Refresh
+          </Button>
+        </div>
+        {acceptance !== null ? (
+          <p className="text-muted-foreground text-xs">
+            <code>{acceptance.headSha.slice(0, 7)}</code>
+            {" · "}
+            <time dateTime={acceptance.acceptedAt}>
+              {new Date(acceptance.acceptedAt).toLocaleString()}
+            </time>
+            {" · "}
+            {acceptance.evidenceRefs.length} evidence references
+          </p>
+        ) : data !== null ? (
+          <p className="text-muted-foreground text-xs">No commit accepted yet.</p>
+        ) : null}
+        {moved ? (
+          <Alert variant="warning">
+            <AlertDescription>Head moved since acceptance</AlertDescription>
+          </Alert>
+        ) : null}
+        {(acceptance === null || moved) && liveHeadSha !== null ? (
+          <p className="text-muted-foreground text-xs">
+            Current head <code>{liveHeadSha.slice(0, 7)}</code>
+          </p>
+        ) : null}
+        {failure !== null ? (
+          <Alert variant="error">
+            <AlertDescription>{failure}</AlertDescription>
+          </Alert>
+        ) : null}
+        {acceptance === null || moved ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={saving || disabledReason !== null}
+            aria-busy={saving}
+            aria-describedby={disabledReason !== null ? disabledReasonId : undefined}
+            onClick={() => void accept()}
+          >
+            {saving ? "Accepting…" : moved ? "Re-accept at current head" : "Accept this commit"}
+          </Button>
+        ) : null}
+        {disabledReason !== null ? (
+          <p id={disabledReasonId} className="text-muted-foreground text-xs" role="status">
+            {disabledReason}
+          </p>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
