@@ -51,7 +51,7 @@ import * as SourceControlProviderRegistry from "../sourceControl/SourceControlPr
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Acceptance from "./FactoryAcceptanceService.ts";
 import * as Knowledge from "./FactoryKnowledgeService.ts";
-import { renderArtifactComment, sameCommentBody } from "./FactoryArtifactDeliveryBody.ts";
+import { carriesDeliveryMarker, renderArtifactComment } from "./FactoryArtifactDeliveryBody.ts";
 import { issueOriginKey, knowledgeBriefOriginKey } from "./FactoryOriginKey.ts";
 import { makeRepositoryResolver } from "./FactoryTaskLaunch.ts";
 import { IssueTrackerProviderRegistry } from "./IssueTrackerProviderRegistry.ts";
@@ -985,10 +985,8 @@ const makeService = Effect.gen(function* () {
         }),
       );
       if (listed._tag === "Failure") return intent;
-      // The whole body, never a substring: the attempt token is in it, so a copy of another
-      // delivery's comment, or of a quoted marker, cannot stand in for this one.
       const match = listed.success.comments.find((comment) =>
-        sameCommentBody(comment.body, intent.body),
+        carriesDeliveryMarker(comment.body, intent.body),
       );
       if (remote === null && match !== undefined) remote = { commentId: match.id, url: match.url };
       if (listed.success.nextPage === null) break;

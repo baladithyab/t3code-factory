@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import {
   artifactDeliveryMarker,
   renderArtifactComment,
-  sameCommentBody,
+  carriesDeliveryMarker,
 } from "./FactoryArtifactDeliveryBody.ts";
 
 const input = {
@@ -49,18 +49,22 @@ it.effect("an artifact ending in an open HTML comment cannot hide the footer", (
   }),
 );
 
-it.effect("sameCommentBody ignores line-ending and trailing-whitespace normalization only", () =>
+it.effect("carriesDeliveryMarker matches the marker line and tolerates edits around it", () =>
   Effect.sync(() => {
     const body = renderArtifactComment(input)!;
-    assert.isTrue(sameCommentBody(body, body.replaceAll("\n", "\r\n")));
-    assert.isTrue(sameCommentBody(body, body.replaceAll("\n", "  \n")));
-    assert.isTrue(sameCommentBody(body, `${body}\n\n  `));
-    assert.isFalse(sameCommentBody(body, body.replace("Findings", "Findingz")));
-    assert.isFalse(sameCommentBody(body, body.slice(0, -1)));
-    assert.isFalse(sameCommentBody(body, `quoted\n${artifactDeliveryMarker(input.attempt)}`));
+    const marker = artifactDeliveryMarker(input.attempt);
+    assert.isTrue(carriesDeliveryMarker(body, body));
+    assert.isTrue(carriesDeliveryMarker(body.replaceAll("\n", "\r\n"), body));
+    assert.isTrue(carriesDeliveryMarker(`${body}\n\nEdited by a maintainer.`, body));
+    assert.isTrue(carriesDeliveryMarker(body.replace("Findings", "Findingz"), body));
+    assert.isTrue(carriesDeliveryMarker(`  ${marker}  `, body));
+    assert.isFalse(carriesDeliveryMarker(`quoting: ${marker}`, body));
+    assert.isFalse(carriesDeliveryMarker(body.replace(marker, "<!-- removed -->"), body));
+    assert.isFalse(
+      carriesDeliveryMarker(body, renderArtifactComment({ ...input, attempt: "other" })!),
+    );
   }),
 );
-
 it.effect(
   "accepts exactly 65536 characters and refuses a body one character larger without truncating",
   () =>

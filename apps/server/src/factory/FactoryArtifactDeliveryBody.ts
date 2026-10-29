@@ -23,16 +23,14 @@ export const renderArtifactComment = (input: {
 };
 
 /**
- * Hosts normalize line endings and strip trailing whitespace when they store a comment, so the
- * body read back is compared on those terms, never by substring.
+ * A comment is this delivery's when one of its lines is exactly the marker. The attempt token
+ * makes the marker unguessable until the comment exists, so a copied token proves a comment with
+ * these bytes was posted; matching only the line lets a person edit the rest of the comment
+ * without turning the delivery into a lost one that a re-grant would post twice.
  */
-export const sameCommentBody = (left: string, right: string) =>
-  normalizeCommentBody(left) === normalizeCommentBody(right);
-
-const normalizeCommentBody = (body: string) =>
-  body
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .join("\n")
-    .trimEnd();
+export const carriesDeliveryMarker = (commentBody: string, deliveryBody: string) => {
+  const marker = deliveryBody
+    .split(/\r?\n/)
+    .find((line) => /^<!-- t3-factory-delivery attempt=\S+ -->$/.test(line.trimEnd()));
+  return marker !== undefined && commentBody.split(/\r?\n/).some((line) => line.trim() === marker);
+};

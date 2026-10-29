@@ -1706,7 +1706,7 @@ it.effect(
 );
 
 it.effect(
-  "artifact reconciliation never confirms a comment that merely contains or quotes the marker",
+  "artifact reconciliation adopts an edited comment by its marker line but not a quoted marker",
   () =>
     withArtifact((h) =>
       Effect.gen(function* () {
@@ -1719,31 +1719,35 @@ it.effect(
         const service = yield* Delivery.FactoryDeliveryService;
         const marker = artifactDeliveryMarker(granted.body.match(/attempt=(\S+) -->/)![1]!);
         assert.include(granted.body, marker);
+        const quoted = {
+          id: 5,
+          body: `> quoting someone: ${marker}`,
+          url: "https://github.com/owner/repo/issues/7#issuecomment-5",
+        };
+        h.host.listings = [{ comments: [quoted], nextPage: null }];
+        const unmatched = yield* service.reconcile({ projectId, intentId: granted.id });
+        assert.equal(unmatched.status, "failed");
+        assert.isNull(unmatched.remote);
+        // A maintainer appended a note to the real comment; the delivery is still that comment.
         h.host.listings = [
           {
             comments: [
-              {
-                id: 5,
-                body: `> quoting someone\n${marker}`,
-                url: "https://github.com/owner/repo/issues/7#issuecomment-5",
-              },
+              quoted,
               {
                 id: 6,
-                body: `${granted.body}\n\nand more text`,
+                body: `${granted.body}\n\nEdited by a maintainer.`,
                 url: "https://github.com/owner/repo/issues/7#issuecomment-6",
-              },
-              {
-                id: 7,
-                body: `prefix\n${granted.body}`,
-                url: "https://github.com/owner/repo/issues/7#issuecomment-7",
               },
             ],
             nextPage: null,
           },
         ];
-        const settled = yield* service.reconcile({ projectId, intentId: granted.id });
-        assert.equal(settled.status, "failed");
-        assert.isNull(settled.remote);
+        const adopted = yield* service.reconcile({ projectId, intentId: granted.id });
+        assert.equal(adopted.status, "confirmed");
+        assert.deepEqual(adopted.remote, {
+          commentId: 6,
+          url: "https://github.com/owner/repo/issues/7#issuecomment-6",
+        });
         assert.lengthOf(h.host.posts, 1);
       }),
     ),
