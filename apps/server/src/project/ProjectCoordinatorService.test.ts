@@ -105,7 +105,7 @@ function harness(
     }),
   ).pipe(Layer.provide(SetupTracker.layer));
   const external = Layer.mergeAll(
-    Layer.succeed(Identities.RepositoryIdentityResolver, { resolve: () => Effect.succeed(null) }),
+    Layer.mock(Identities.RepositoryIdentityResolver)({ resolve: () => Effect.succeed(null) }),
     Layer.succeed(Favicons.ProjectFaviconResolver, {
       resolvePath: () => Effect.succeed(null),
       invalidate: () => Effect.void,

@@ -16,10 +16,6 @@ import {
   type FactoryIssueTask,
   type RepositoryIdentity,
 } from "@t3tools/contracts";
-import {
-  detectSourceControlProviderFromGitRemoteUrl,
-  normalizeGitRemoteUrl,
-} from "@t3tools/shared/git";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -68,20 +64,20 @@ type LaunchReason =
 
 function repositoryTarget(
   identity: RepositoryIdentity,
-  remote: string,
   trackers: IssueTrackers.IssueTrackerProviderRegistry["Service"],
 ) {
-  const canonicalKey = normalizeGitRemoteUrl(remote);
-  const detected = detectSourceControlProviderFromGitRemoteUrl(remote)?.kind;
-  const provider =
-    detected === "unknown" && canonicalKey === identity.canonicalKey ? identity.provider : detected;
+  const { canonicalKey, provider } = identity;
   const tracker =
     provider === undefined ? null : trackers.get(SourceControlProviderKind.make(provider));
   if (tracker === null) return null;
   const match = /^([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)\/(.+)$/.exec(canonicalKey);
   if (match === null) return null;
-  const [, host, path] = match;
-  if (!host || !path) return null;
+  const [, hostname, path] = match;
+  if (!hostname || !path) return null;
+  const remoteUrl = URL.parse(identity.locator.remoteUrl);
+  // SSH transport ports do not identify the forge's HTTPS endpoint.
+  const host =
+    remoteUrl?.protocol === "https:" || remoteUrl?.protocol === "http:" ? remoteUrl.host : hostname;
   const repository = tracker.repositoryPath(path);
   if (repository === null) return null;
   return {
@@ -129,7 +125,12 @@ export const makeRepositoryResolver = Effect.gen(function* () {
       origin.stdout.trim().length === 0
     )
       return yield* new FactoryIssueError({ reason: "missing-repository" });
-    const target = repositoryTarget(identity, origin.stdout.trim(), trackers);
+    const originIdentity = yield* identities.resolveRemote({
+      rootPath: identity.rootPath ?? project.value.workspaceRoot,
+      remoteName: "origin",
+      remoteUrl: origin.stdout.trim(),
+    });
+    const target = originIdentity === null ? null : repositoryTarget(originIdentity, trackers);
     if (target === null) return yield* new FactoryIssueError({ reason: "unsupported-provider" });
     return { project: project.value, ...target };
   });

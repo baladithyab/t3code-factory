@@ -180,10 +180,10 @@ list. Factory issue intake supports GitHub and GitLab, read through the project'
 `origin`, not its `upstream`. A missing or unsupported origin is an error, not a fallback to
 another repository. GitLab needs the `glab` CLI signed in to that host; nested groups
 (`group/subgroup/project`) work, and issue numbers are the project-local `#iid`. A self-managed
-host is recognized when `gitlab` or `github` is one of its DNS labels (`gitlab.example.com`); a
-host on another domain, or one served on a non-default port, is reported as unsupported for now. Use **Open**,
-**Closed**, or **All**, the page controls, and **Refresh** to browse issues. Reading the inbox
-never starts work or changes an issue.
+host is recognized when `gitlab` or `github` is one of its DNS labels (`gitlab.example.com`),
+or the matching CLI (`glab` or `gh`) is signed in to that host. GitLab hosts on non-default
+ports use the checkout's own CLI login. Use **Open**, **Closed**, or **All**, the page controls,
+and **Refresh** to browse issues. Reading the inbox never starts work or changes an issue.
 
 What the rest of the page offers depends on what the host can express. GitLab projects today get
 the inbox and **Start task** only: the Blockers block says the host does not expose blocking

@@ -15,6 +15,7 @@ import { SourceControlProviderKind } from "./sourceControl.ts";
 
 export const FactoryRepository = Schema.Struct({
   provider: SourceControlProviderKind,
+  /** Request authority, including any HTTP(S) port; canonical keys omit the port. */
   host: TrimmedNonEmptyString,
   // Host path below the origin: `owner/name`, or `group/subgroup/project` on GitLab.
   repository: TrimmedNonEmptyString,

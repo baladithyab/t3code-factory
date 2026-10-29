@@ -52,7 +52,7 @@ it.effect("publishes repository completion while favicon enrichment is still pen
   Effect.gen(function* () {
     const releaseFavicon = yield* Deferred.make<void>();
     const layerMetadata = Layer.merge(
-      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+      Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
         resolve: (workspaceRoot) => Effect.succeed(identity(workspaceRoot)),
       }),
       Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
@@ -81,7 +81,7 @@ it.effect("keeps repository workers available when every favicon worker is hung"
     const faviconWorkersStarted = yield* Deferred.make<void>();
     const faviconStarts = yield* Ref.make(0);
     const layerMetadata = Layer.merge(
-      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+      Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
         resolve: (workspaceRoot) => Effect.succeed(identity(workspaceRoot)),
       }),
       Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
@@ -131,7 +131,7 @@ it.effect(
       const repositoryStarted = yield* Deferred.make<void>();
       const releaseRepository = yield* Deferred.make<void>();
       const layerMetadata = Layer.merge(
-        Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
           resolve: (workspaceRoot) => {
             if (workspaceRoot === "/no-remote") {
               return Effect.succeed(null);
@@ -194,7 +194,7 @@ it.effect("deduplicates requests, bounds pending work, and reloads invalidated r
     const repositoryCalls = yield* Ref.make<ReadonlyArray<string>>([]);
     const version = yield* Ref.make(1);
     const layerMetadata = Layer.merge(
-      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+      Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
         resolve: (workspaceRoot) =>
           Effect.gen(function* () {
             yield* Ref.update(repositoryCalls, (calls) => [...calls, workspaceRoot]);

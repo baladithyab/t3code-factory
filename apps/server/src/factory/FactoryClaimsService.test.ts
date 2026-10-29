@@ -27,7 +27,7 @@ import { type FactoryKnowledgeLaunchIntent } from "../persistence/FactoryKnowled
 import { type FactoryResearchLaunchIntent } from "../persistence/FactoryResearchStore.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Projects from "../project/ProjectService.ts";
-import * as Identities from "../project/RepositoryIdentityResolver.ts";
+import { repositoryIdentitiesLayer } from "../project/RepositoryIdentityResolver.testkit.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Claims from "./FactoryClaimsService.ts";
 import {
@@ -101,19 +101,18 @@ const dependencies = (origin: string) =>
           }),
         ),
     }),
-    Layer.succeed(Identities.RepositoryIdentityResolver, {
-      resolve: () =>
-        Effect.succeed({
-          canonicalKey: repository.canonicalKey,
-          provider: "github",
-          rootPath: "/second-repo",
-          locator: {
-            source: "git-remote",
-            remoteName: "origin",
-            remoteUrl: "git@github.com:owner/repo.git",
-          },
-        }),
-    }),
+    repositoryIdentitiesLayer(() =>
+      Effect.succeed({
+        canonicalKey: repository.canonicalKey,
+        provider: "github",
+        rootPath: "/second-repo",
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "git@github.com:owner/repo.git",
+        },
+      }),
+    ),
     // The resolver takes the provider and canonical key from the origin remote.
     Layer.mock(Git.GitVcsDriver)({
       execute: () =>
