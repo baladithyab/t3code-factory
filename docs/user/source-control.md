@@ -179,7 +179,9 @@ Open **Factory → Issues**, choose a checkout, and check the repository and hos
 list. Factory issue intake supports GitHub and GitLab, read through the project's configured
 `origin`, not its `upstream`. A missing or unsupported origin is an error, not a fallback to
 another repository. GitLab needs the `glab` CLI signed in to that host; nested groups
-(`group/subgroup/project`) work, and issue numbers are the project-local `#iid`. Use **Open**,
+(`group/subgroup/project`) work, and issue numbers are the project-local `#iid`. A self-managed
+host is recognized when `gitlab` or `github` is one of its DNS labels (`gitlab.example.com`); a
+host on another domain, or one served on a non-default port, is reported as unsupported for now. Use **Open**,
 **Closed**, or **All**, the page controls, and **Refresh** to browse issues. Reading the inbox
 never starts work or changes an issue.
 
