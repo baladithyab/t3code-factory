@@ -58,7 +58,9 @@ export const make = Effect.gen(function* () {
           "--include",
           `projects/${encodeURIComponent(repository.repository)}/issues${path}`,
         ],
-        maxOutputBytes: 8 * 1024 * 1024,
+        // GitLab descriptions run to 1 MiB each (GitHub's stop at 64 KiB), and a page holds 30,
+        // so a cap sized for GitHub would fail the whole page on a few large, busy issues.
+        maxOutputBytes: 48 * 1024 * 1024,
       })
       .pipe(
         Effect.mapError(

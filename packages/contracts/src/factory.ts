@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
   CommandId,
@@ -37,6 +38,21 @@ export const FactoryIssueCapabilities = Schema.Struct({
   headPinnedMerge: Schema.Boolean,
 });
 export type FactoryIssueCapabilities = typeof FactoryIssueCapabilities.Type;
+
+// Servers older than the issue-tracker port only ever served GitHub and sent no capabilities; a
+// newer client must keep decoding their results, so an absent field means that GitHub ceiling.
+const LegacyGitHubCapabilities: FactoryIssueCapabilities = {
+  provider: SourceControlProviderKind.make("github"),
+  displayName: "GitHub",
+  blockedBy: "listing-with-total",
+  subIssues: true,
+  closeAcceptance: "close-reason",
+  publish: true,
+  headPinnedMerge: true,
+};
+const CapabilitiesOrLegacyGitHub = FactoryIssueCapabilities.pipe(
+  Schema.withDecodingDefault(Effect.succeed(LegacyGitHubCapabilities)),
+);
 
 export const FactoryIssueTask = Schema.Struct({
   projectId: ProjectId,
@@ -81,7 +97,7 @@ export const FactoryIssueListInput = Schema.Struct({
 export type FactoryIssueListInput = typeof FactoryIssueListInput.Type;
 export const FactoryIssueListResult = Schema.Struct({
   repository: FactoryRepository,
-  capabilities: FactoryIssueCapabilities,
+  capabilities: CapabilitiesOrLegacyGitHub,
   issues: Schema.Array(FactoryIssue),
   nextPage: Schema.NullOr(PositiveInt),
   fetchedAt: IsoDateTime,
@@ -94,7 +110,7 @@ export const FactoryIssueReadInput = Schema.Struct({
 export type FactoryIssueReadInput = typeof FactoryIssueReadInput.Type;
 export const FactoryIssueReadResult = Schema.Struct({
   repository: FactoryRepository,
-  capabilities: FactoryIssueCapabilities,
+  capabilities: CapabilitiesOrLegacyGitHub,
   issue: FactoryIssue,
   fetchedAt: IsoDateTime,
 });
