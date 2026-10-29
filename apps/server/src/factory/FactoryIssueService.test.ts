@@ -35,6 +35,7 @@ import * as Launches from "../persistence/FactoryIssueLaunches.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Projects from "../project/ProjectService.ts";
 import * as Identities from "../project/RepositoryIdentityResolver.ts";
+import { repositoryIdentitiesLayer } from "../project/RepositoryIdentityResolver.testkit.ts";
 import * as Enrichment from "../project/ProjectEnrichmentService.ts";
 import * as Favicons from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -136,6 +137,7 @@ function harness(
     readonly tracker?: Partial<IssueTrackerProviderApi>;
     readonly trackers?: ReadonlyArray<IssueTrackerProviderApi>;
     readonly resolve?: Identities.RepositoryIdentityResolver["Service"]["resolve"];
+    readonly refine?: Identities.RepositoryIdentityResolverOptions["refine"];
     readonly resolveCommit?: Git.GitVcsDriver["Service"]["resolveCommit"];
     readonly execute?: Git.GitVcsDriver["Service"]["execute"];
     readonly runForThread?: SetupRunner.ProjectSetupScriptRunner["Service"]["runForThread"];
@@ -162,8 +164,8 @@ function harness(
   );
   const external = Layer.mergeAll(
     Layer.succeed(ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(environmentId) }),
-    Layer.succeed(Identities.RepositoryIdentityResolver, {
-      resolve: options.resolve ?? (() => Effect.succeed(identity)),
+    repositoryIdentitiesLayer(options.resolve ?? (() => Effect.succeed(identity)), {
+      ...(options.refine ? { refine: options.refine } : {}),
     }),
     Layer.succeed(Favicons.ProjectFaviconResolver, {
       resolvePath: () => Effect.succeed(null),
@@ -392,6 +394,7 @@ it.effect.each(["before-reservation", "before-resume"] as const)(
       Effect.provide(
         harness({
           trackers: [fakeTracker(), fakeIssueTracker("gitlab")],
+          refine: (remote) => Effect.succeed({ ...remote, provider }),
           resolve: () =>
             Effect.succeed({
               canonicalKey,
@@ -750,74 +753,85 @@ it.effect("a stale restart keeps the deleted task bound until content is re-revi
   }).pipe(Effect.provide(harness({ tracker: remoteIssue(() => remote) }).layer));
 });
 
-it.effect("a pre-revision saved intent resumes its prompt and base without reading GitHub", () =>
-  Effect.gen(function* () {
-    yield* seed;
-    const savedBase = "b".repeat(40);
-    const threadId = ThreadId.make("legacy-thread");
-    // The row exactly as written before issue revisions existed.
-    const legacyIntent = JSON.stringify({
-      repository: {
-        provider: "github",
-        host: "github.com",
-        repository: "owner/factory",
-        canonicalKey: "github.com/owner/factory",
-        url: "https://github.com/owner/factory",
-      },
-      issue: {
-        number: 12,
-        title: issue.title,
-        body: issue.body,
-        state: "open",
-        url: issue.url,
-        labels: ["feature"],
-        updatedAt: issue.updatedAt,
-        task: null,
-      },
-      projectId,
-      workspaceRoot: "/repo",
-      requestCommandId: "legacy-request",
-      commandId: "legacy-launch",
-      threadId,
-      messageId: "legacy-message",
-      baseRef: savedBase,
-      modelSelection,
-      runtimeMode: "approval-required",
-      interactionMode: "default",
-      prompt: "Legacy immutable prompt",
-      createdBy: "user",
-      creationSource: "web",
-      createdAt: issue.updatedAt,
-      previousThreadId: null,
-    });
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`INSERT INTO factory_issue_launches
+it.effect.each(["github.com", "github.com:8443"])(
+  "a pre-revision saved intent resumes against %s without changing its prompt or base",
+  (host) =>
+    Effect.gen(function* () {
+      yield* seed;
+      const savedBase = "b".repeat(40);
+      const threadId = ThreadId.make("legacy-thread");
+      // The row exactly as written before issue revisions existed.
+      const legacyIntent = JSON.stringify({
+        repository: {
+          provider: "github",
+          host: "github.com",
+          repository: "owner/factory",
+          canonicalKey: "github.com/owner/factory",
+          url: "https://github.com/owner/factory",
+        },
+        issue: {
+          number: 12,
+          title: issue.title,
+          body: issue.body,
+          state: "open",
+          url: issue.url,
+          labels: ["feature"],
+          updatedAt: issue.updatedAt,
+          task: null,
+        },
+        projectId,
+        workspaceRoot: "/repo",
+        requestCommandId: "legacy-request",
+        commandId: "legacy-launch",
+        threadId,
+        messageId: "legacy-message",
+        baseRef: savedBase,
+        modelSelection,
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        prompt: "Legacy immutable prompt",
+        createdBy: "user",
+        creationSource: "web",
+        createdAt: issue.updatedAt,
+        previousThreadId: null,
+      });
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO factory_issue_launches
       (thread_id, canonical_key, issue_number, request_command_id, intent_json)
       VALUES (${threadId}, ${"github.com/owner/factory"}, 12, 'legacy-request', ${legacyIntent})`;
-    const factory = yield* Factory.FactoryIssueService;
-    const result = yield* factory.start({
-      ...startInput("after-upgrade"),
-      expectedIssueRevision: unreviewed,
-      baseRef: "changed",
-    });
-    assert.equal(result.threadId, threadId);
-    assert.isTrue(result.resumed);
-    const projection = yield* (yield* Threads.ThreadManagementService).getThreadProjection(
-      threadId,
-    );
-    assert.deepEqual(
-      projection.messages.map((message) => message.text),
-      ["Legacy immutable prompt"],
-    );
-    const preparation = projection.runs[0]?.workspacePreparation;
-    assert.equal(preparation?.type === "worktree" ? preparation.baseRef : undefined, savedBase);
-  }).pipe(
-    Effect.provide(
-      harness({
-        tracker: { getIssue: () => Effect.die("A saved intent must not read the live issue") },
-      }).layer,
+      const factory = yield* Factory.FactoryIssueService;
+      assert.equal((yield* factory.list({ projectId })).repository.host, host);
+      const result = yield* factory.start({
+        ...startInput("after-upgrade"),
+        expectedIssueRevision: unreviewed,
+        baseRef: "changed",
+      });
+      assert.equal(result.threadId, threadId);
+      assert.isTrue(result.resumed);
+      const projection = yield* (yield* Threads.ThreadManagementService).getThreadProjection(
+        threadId,
+      );
+      assert.deepEqual(
+        projection.messages.map((message) => message.text),
+        ["Legacy immutable prompt"],
+      );
+      const preparation = projection.runs[0]?.workspacePreparation;
+      assert.equal(preparation?.type === "worktree" ? preparation.baseRef : undefined, savedBase);
+    }).pipe(
+      Effect.provide(
+        harness({
+          execute: () =>
+            Effect.succeed({
+              exitCode: ChildProcessSpawner.ExitCode(0),
+              stdout: `https://${host}/owner/factory.git`,
+              stderr: "",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+            }),
+          tracker: { getIssue: () => Effect.die("A saved intent must not read the live issue") },
+        }).layer,
+      ),
     ),
-  ),
 );
 
 it.effect("admits the matched snapshot when GitHub changes during base resolution", () =>

@@ -80,6 +80,30 @@ it.effect("maps iid and opened state, filters non-issues, and encodes the nested
   }),
 );
 
+it.effect.each(["gitlab.example.com", "gitlab.example.com:8443"])(
+  "routes issue requests for %s through the checkout",
+  (host) =>
+    Effect.gen(function* () {
+      const requests: Array<Parameters<GitLabCli.GitLabCli["Service"]["execute"]>[0]> = [];
+      const tracker = yield* make((input) => {
+        requests.push(input);
+        return response(input.args.at(-1)?.endsWith("/12") ? issue : [issue]);
+      });
+      yield* tracker.listIssues({ ...repository, host, state: "open", page: 1 });
+      yield* tracker.getIssue({ ...repository, host, number: 12 });
+      assert.equal(requests.length, 2);
+      for (const request of requests) {
+        assert.equal(request.cwd, repository.cwd);
+        assert.deepEqual(
+          request.args.slice(0, -1),
+          host === "gitlab.example.com"
+            ? ["api", "--hostname", "gitlab.example.com", "--include"]
+            : ["api", "--include"],
+        );
+      }
+    }),
+);
+
 it.effect.each(["closed", "all"] as const)("passes %s state and decodes a final page", (state) =>
   Effect.gen(function* () {
     const tracker = yield* make(({ args }) => {

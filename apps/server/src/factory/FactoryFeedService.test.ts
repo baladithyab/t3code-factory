@@ -23,7 +23,7 @@ import * as FeedFetch from "./FeedFetch.ts";
 import * as Store from "../persistence/FactoryFeedStore.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Projects from "../project/ProjectService.ts";
-import * as Identities from "../project/RepositoryIdentityResolver.ts";
+import { repositoryIdentitiesLayer } from "../project/RepositoryIdentityResolver.testkit.ts";
 import * as Enrichment from "../project/ProjectEnrichmentService.ts";
 import * as Favicons from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -116,9 +116,7 @@ function harness(
   );
   const external = Layer.mergeAll(
     Layer.succeed(ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(environmentId) }),
-    Layer.succeed(Identities.RepositoryIdentityResolver, {
-      resolve: () => Effect.succeed(identity),
-    }),
+    repositoryIdentitiesLayer(() => Effect.succeed(identity)),
     issueTrackersLayer(),
     Layer.succeed(Favicons.ProjectFaviconResolver, {
       resolvePath: () => Effect.succeed(null),

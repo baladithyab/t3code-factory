@@ -24,6 +24,7 @@ import * as Store from "../persistence/FactoryIssueRelationStore.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Projects from "../project/ProjectService.ts";
 import * as Identities from "../project/RepositoryIdentityResolver.ts";
+import { repositoryIdentitiesLayer } from "../project/RepositoryIdentityResolver.testkit.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
 import { fakeIssueTracker, issueTrackersLayer } from "./IssueTrackerProviderRegistry.testkit.ts";
 
@@ -90,7 +91,7 @@ function harness(
     NodeCrypto.layer,
     Store.layer.pipe(Layer.provideMerge(Sqlite.layerMemory)),
     Layer.mock(GitHubRest.GitHubRest)({ rest }),
-    Layer.succeed(Identities.RepositoryIdentityResolver, { resolve }),
+    repositoryIdentitiesLayer(resolve),
     issueTrackersLayer(options.trackers),
     Layer.mock(Projects.ProjectService)({
       getById: () =>

@@ -39,6 +39,11 @@ export class RepositoryIdentityResolver extends Context.Service<
       cwd: string,
       options?: { readonly refresh?: boolean },
     ) => Effect.Effect<RepositoryIdentity | null>;
+    readonly resolveRemote: (input: {
+      readonly rootPath: string;
+      readonly remoteName: string;
+      readonly remoteUrl: string;
+    }) => Effect.Effect<RepositoryIdentity | null>;
   }
 >()("t3/project/RepositoryIdentityResolver") {}
 
@@ -234,7 +239,11 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
 ) {
   const processRunner = yield* ProcessRunner.ProcessRunner;
   const cacheCapacity = options.cacheCapacity ?? DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY;
-  const refine = options.refine ?? Effect.succeed;
+  const refine = Effect.fn("RepositoryIdentityResolver.refine")((identity: RepositoryIdentity) =>
+    (options.refine?.(identity) ?? Effect.succeed(identity)).pipe(
+      Effect.orElseSucceed(() => identity),
+    ),
+  );
   const timeToLive = (exit: Exit.Exit<unknown>) =>
     Exit.match(exit, {
       onSuccess: (value) =>
@@ -261,7 +270,7 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
         Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
         Effect.filterOrElse(
           (identity): identity is null => identity === null,
-          (identity) => refine(identity).pipe(Effect.orElseSucceed(() => identity)),
+          (identity) => refine(identity),
         ),
       ),
     { capacity: cacheCapacity, timeToLive },
@@ -277,7 +286,14 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
     },
   );
 
-  return RepositoryIdentityResolver.of({ resolve });
+  const resolveRemote: RepositoryIdentityResolver["Service"]["resolveRemote"] = Effect.fn(
+    "RepositoryIdentityResolver.resolveRemote",
+  )(function* (input) {
+    if (isLocalRemoteUrl(input.remoteUrl)) return null;
+    return yield* refine(buildRepositoryIdentity({ ...input, originUrl: undefined }));
+  });
+
+  return RepositoryIdentityResolver.of({ resolve, resolveRemote });
 });
 
 export const layer = Layer.effect(RepositoryIdentityResolver, make()).pipe(

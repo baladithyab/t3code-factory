@@ -53,8 +53,8 @@ export const make = Effect.gen(function* () {
         cwd: repository.cwd,
         args: [
           "api",
-          "--hostname",
-          repository.host,
+          // glab rejects ports in --hostname; cwd selects the checkout's authenticated host.
+          ...(repository.host.includes(":") ? [] : ["--hostname", repository.host]),
           "--include",
           `projects/${encodeURIComponent(repository.repository)}/issues${path}`,
         ],

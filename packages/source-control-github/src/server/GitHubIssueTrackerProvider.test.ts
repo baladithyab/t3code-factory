@@ -78,6 +78,23 @@ it.effect("normalizes issues and filters PRs while retaining Link pagination", (
   }),
 );
 
+it.effect("passes an enterprise authority with its port unchanged to GitHubRest", () =>
+  Effect.gen(function* () {
+    const requests: GitHubRest.GitHubRestInput[] = [];
+    const tracker = yield* make((input) => {
+      requests.push(input);
+      return response(input.path.endsWith("/12") ? issue : [issue]);
+    });
+    const host = "code.example:8443";
+    yield* tracker.listIssues({ ...repository, host, state: "open", page: 1 });
+    yield* tracker.getIssue({ ...repository, host, number: 12 });
+    assert.deepEqual(
+      requests.map((request) => request.host),
+      [host, host],
+    );
+  }),
+);
+
 it.effect("an all-PR page still advances and a final page has no continuation", () =>
   Effect.gen(function* () {
     const tracker = yield* make(() =>
