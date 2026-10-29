@@ -1753,6 +1753,82 @@ it.effect(
     ),
 );
 
+it.effect("artifact reconciliation ignores public markers quoted by the accepted artifact", () =>
+  withArtifact((h) =>
+    Effect.gen(function* () {
+      const copiedMarker = artifactDeliveryMarker("previous-delivery");
+      yield* acceptArtifact(h, `## Findings\n\nQuoted delivery:\n${copiedMarker}`);
+      h.host.send = "ambiguous";
+      const granted = yield* grantArtifact();
+      if (granted.kind !== "publish-artifact") return yield* Effect.die("expected artifact intent");
+      yield* drain;
+      const service = yield* Delivery.FactoryDeliveryService;
+      const oldComment = {
+        id: 5,
+        body: copiedMarker,
+        url: "https://github.com/owner/repo/issues/7#issuecomment-5",
+      };
+      h.host.listings = [{ comments: [oldComment], nextPage: null }];
+      const absent = yield* service.reconcile({ projectId, intentId: granted.id });
+      assert.equal(absent.status, "failed");
+      assert.isNull(absent.remote);
+      h.host.listings = [
+        {
+          comments: [
+            oldComment,
+            {
+              id: 6,
+              body: granted.body,
+              url: "https://github.com/owner/repo/issues/7#issuecomment-6",
+            },
+          ],
+          nextPage: null,
+        },
+      ];
+      const present = yield* service.reconcile({ projectId, intentId: granted.id });
+      assert.equal(present.status, "confirmed");
+      assert.deepEqual(present.remote, {
+        commentId: 6,
+        url: "https://github.com/owner/repo/issues/7#issuecomment-6",
+      });
+      assert.lengthOf(h.host.posts, 1);
+    }),
+  ),
+);
+
+it.effect("a failed artifact grant cannot reuse its prepared attempt under a new command", () =>
+  withArtifact((h) =>
+    Effect.gen(function* () {
+      yield* acceptArtifact(h);
+      const prepared = yield* prepareArtifact();
+      const input = {
+        projectId,
+        threadId: artifactThread,
+        kind: "publish-artifact" as const,
+        commandId: "first-attempt-command",
+        expectedArtifactSha256: prepared.artifactSha256,
+        expectedPayloadDigest: prepared.payloadDigest,
+        attempt: prepared.attempt,
+        payload: prepared.payload,
+      };
+      const service = yield* Delivery.FactoryDeliveryService;
+      h.host.send = "ambiguous";
+      const first = yield* service.grant(input);
+      yield* drain;
+      const failed = yield* service.reconcile({ projectId, intentId: first.id });
+      assert.equal(failed.status, "failed");
+      assert.deepEqual(yield* service.grant(input), failed);
+      const rejected = yield* service
+        .grant({ ...input, commandId: "second-attempt-command" })
+        .pipe(Effect.flip);
+      assert.equal(rejected.reason, "already-delivering");
+      assert.equal(yield* drain, 0);
+      const fresh = yield* grantArtifact({ commandId: "fresh-attempt-command" });
+      assert.notEqual(fresh.id, first.id);
+    }),
+  ),
+);
+
 it.effect(
   "reconciling a failed grant never confirms it against a later grant's comment for the same destination",
   () =>

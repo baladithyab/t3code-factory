@@ -355,8 +355,10 @@ and T3 Code shows that issue and the exact comment it will post, the accepted fi
 line naming the brief and the file's digest. You review that text but never edit it, and nothing
 is posted until you grant it, which needs `source-control:write`; a deliverable that changed since
 you accepted it must be accepted again first. If GitHub's answer is lost, the delivery shows as
-unknown and is never posted again on its own; **Reconcile** looks for the comment on the issue and
-settles it. GitLab issues cannot receive deliveries yet.
+unknown and is never posted again on its own; **Reconcile** looks for that delivery's hidden marker
+in the issue's comments. If you edit a posted comment on GitHub, keep its `t3-factory-delivery`
+marker line intact so reconciliation can still recognize it. If a delivery fails, prepare and
+review a new preview before granting again. GitLab issues cannot receive deliveries yet.
 
 ### Start a task from a feed item
 

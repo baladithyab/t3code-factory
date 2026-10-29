@@ -20,6 +20,7 @@ import {
 export const FACTORY_DELIVERY_TITLE_MAX_CHARS = 256;
 export const FACTORY_DELIVERY_BODY_MAX_CHARS = 65536;
 
+const ArtifactDeliveryAttempt = Schema.String.check(Schema.isUUID(4));
 /** Kinds whose subject is an accepted commit in a worktree. */
 export const FactoryDeliveryCommitKind = Schema.Literals(["publish-pr", "merge-pr"]);
 export type FactoryDeliveryCommitKind = typeof FactoryDeliveryCommitKind.Type;
@@ -198,7 +199,7 @@ export type FactoryDeliveryDestinationIssue = typeof FactoryDeliveryDestinationI
  * another's with the same bytes to the same issue, and from a copy someone else pasted.
  */
 export const FactoryArtifactDeliveryPrepareResult = Schema.Struct({
-  attempt: TrimmedNonEmptyString,
+  attempt: ArtifactDeliveryAttempt,
   acceptance: FactoryKnowledgeAcceptance,
   current: Schema.Boolean,
   repository: FactoryRepository,
@@ -242,7 +243,7 @@ export const FactoryArtifactDeliveryGrantInput = Schema.Struct({
   expectedArtifactSha256: TrimmedNonEmptyString,
   expectedPayloadDigest: TrimmedNonEmptyString,
   // Echoed from the prepare result so the server re-renders the very body the grantor read.
-  attempt: TrimmedNonEmptyString,
+  attempt: ArtifactDeliveryAttempt,
   payload: FactoryDeliveryArtifactPayload,
 });
 export type FactoryArtifactDeliveryGrantInput = typeof FactoryArtifactDeliveryGrantInput.Type;

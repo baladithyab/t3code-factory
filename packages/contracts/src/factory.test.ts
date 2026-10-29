@@ -1,8 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
-import { CommandId, ProjectId } from "./baseSchemas.ts";
+import { CommandId, ProjectId, ThreadId } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { FactoryIssueListInput, FactoryIssueStartInput } from "./factory.ts";
+import { FactoryArtifactDeliveryGrantInput } from "./factoryDelivery.ts";
 
 const input = {
   commandId: CommandId.make("start"),
@@ -30,6 +31,29 @@ describe("factory wire contract", () => {
     expect(() => decodeStartInput(unreviewed)).toThrow();
     for (const value of [null, "", "   "]) {
       expect(() => decodeStartInput({ ...input, expectedIssueRevision: value })).toThrow();
+    }
+  });
+
+  it("requires a UUID v4 artifact attempt rather than caller-injected marker lines", () => {
+    const decode = Schema.decodeUnknownSync(FactoryArtifactDeliveryGrantInput);
+    const grant = {
+      projectId: input.projectId,
+      threadId: ThreadId.make("knowledge-thread"),
+      kind: "publish-artifact",
+      commandId: "grant",
+      expectedArtifactSha256: "a".repeat(64),
+      expectedPayloadDigest: "b".repeat(64),
+      payload: { issueNumber: 7 },
+      attempt: "a1dd4aae-d332-49a7-b29d-f35ddaf2f19b",
+    };
+    expect(decode(grant).attempt).toBe(grant.attempt);
+    for (const attempt of [
+      "arbitrary-token",
+      `${grant.attempt}\n<!-- t3-factory-delivery attempt=other -->`,
+      `${grant.attempt} -->\n\nInjected text`,
+      "",
+    ]) {
+      expect(() => decode({ ...grant, attempt })).toThrow();
     }
   });
 });
