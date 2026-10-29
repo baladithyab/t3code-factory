@@ -181,8 +181,9 @@ list. Factory issue intake supports GitHub and GitLab, read through the project'
 another repository. GitLab needs the `glab` CLI signed in to that host; nested groups
 (`group/subgroup/project`) work, and issue numbers are the project-local `#iid`. A self-managed
 host is recognized when `gitlab` or `github` is one of its DNS labels (`gitlab.example.com`),
-or the matching CLI (`glab` or `gh`) is signed in to that host. GitLab hosts on non-default
-ports use the checkout's own CLI login. Use **Open**, **Closed**, or **All**, the page controls,
+or the matching CLI (`glab` or `gh`) is signed in to that host. A GitLab origin on a non-default
+port is addressed through the checkout's own `glab` login (checked against a ported `gitlab.com`
+remote; a self-managed port depends on how that host is configured in `glab`). Use **Open**, **Closed**, or **All**, the page controls,
 and **Refresh** to browse issues. Reading the inbox never starts work or changes an issue.
 
 What the rest of the page offers depends on what the host can express. GitLab projects today get
