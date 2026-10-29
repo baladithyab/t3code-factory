@@ -1,4 +1,4 @@
-import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -14,7 +14,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useContext, useLayoutEffect, useRef, useState } from "react";
 
 import { uuidv4 } from "../../lib/uuid";
 import { factoryDeliverySupportedAtom, factoryEnvironment } from "../../state/factory";
@@ -69,6 +69,7 @@ export function useFactoryArtifactDelivery(input: {
   readonly threadId: ThreadId;
 }) {
   const { environmentId, projectId, threadId } = input;
+  const registry = useContext(RegistryContext);
   const supported = useAtomValue(factoryDeliverySupportedAtom(environmentId));
   const canRead = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
   const canGrant = useAtomValue(factoryEnvironment.grantDelivery.permissionAtom(environmentId));
@@ -133,11 +134,20 @@ export function useFactoryArtifactDelivery(input: {
   const prepare = useCallback(
     (issueNumber: number) => {
       if (lifetime.current?.pending) return;
+      registry.refresh(
+        factoryEnvironment.prepareDelivery({
+          environmentId,
+          input: {
+            projectId,
+            threadId,
+            kind: "publish-artifact",
+            payload: { issueNumber },
+          },
+        }),
+      );
       update(key, { previewedIssue: issueNumber, failure: null });
-      // Preparing the same issue again must still re-read the file and the issue.
-      if (previewedIssue === issueNumber) refreshPreview();
     },
-    [key, previewedIssue, refreshPreview, update],
+    [environmentId, key, projectId, registry, threadId, update],
   );
 
   const grant = useCallback(async () => {
@@ -151,8 +161,6 @@ export function useFactoryArtifactDelivery(input: {
         projectId,
         threadId,
         kind: "publish-artifact",
-        // A fresh id per grant: a failed intent is not live, so granting again must create a
-        // new intent rather than replay the failed one.
         commandId: uuidv4(),
         expectedArtifactSha256: prepared.artifactSha256,
         expectedPayloadDigest: prepared.payloadDigest,
@@ -166,7 +174,11 @@ export function useFactoryArtifactDelivery(input: {
       result._tag === "Failure" && !isAtomCommandInterrupted(result)
         ? describeFactoryArtifactDeliveryFailure(squashAtomCommandFailure(result), null)
         : null;
-    update(current.key, { pending: false, failure });
+    update(current.key, {
+      pending: false,
+      failure,
+      ...(result._tag === "Success" ? { previewedIssue: null } : {}),
+    });
   }, [environmentId, prepared, projectId, runGrant, threadId, update]);
 
   const reconcile = useCallback(

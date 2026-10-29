@@ -37,7 +37,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
 import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
@@ -480,7 +479,8 @@ const makeService = Effect.gen(function* () {
     const seen = yield* validate;
     const at = yield* nowIso;
     const intent: FactoryArtifactDeliveryIntent = {
-      id: `delivery:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`,
+      // The primary key consumes a prepared attempt even when its delivery later fails.
+      id: `delivery:artifact:${input.attempt}`,
       originKey: seen.originKey,
       threadId: input.threadId,
       projectId: input.projectId,

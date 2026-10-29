@@ -16,21 +16,21 @@ export const renderArtifactComment = (input: {
   readonly acceptanceId: string;
   readonly attempt: string;
 }): string | null => {
-  // A title may contain newlines, but must not create additional heading or footer lines.
+  // Keep user-controlled metadata on one line so only the appended marker can end the body.
   const title = input.briefTitle.replace(/[\r\n]+/g, " ");
-  const body = `# ${title}\n\n${input.text}\n\n${artifactDeliveryMarker(input.attempt)}\n\n---\n_Delivered by T3 Factory from brief “${title}” · ${input.deliverablePath} · sha256 ${input.artifactSha256} · acceptance ${input.acceptanceId}_`;
+  const path = input.deliverablePath.replace(/[\r\n]+/g, " ");
+  const body = `# ${title}\n\n${input.text}\n\n${artifactDeliveryMarker(input.attempt)}\n\n---\n_Delivered by T3 Factory from brief “${title}” · ${path} · sha256 ${input.artifactSha256} · acceptance ${input.acceptanceId}_`;
   return body.length > FACTORY_DELIVERY_BODY_MAX_CHARS ? null : body;
 };
 
 /**
- * A comment is this delivery's when one of its lines is exactly the marker. The attempt token
- * makes the marker unguessable until the comment exists, so a copied token proves a comment with
- * these bytes was posted; matching only the line lets a person edit the rest of the comment
- * without turning the delivery into a lost one that a re-grant would post twice.
+ * Match this attempt's marker without requiring the original body: a maintainer's edit must not
+ * turn a posted delivery into a lost one that a new grant would post twice.
  */
 export const carriesDeliveryMarker = (commentBody: string, deliveryBody: string) => {
+  // Artifact text may quote older public markers; the server appends this attempt's marker last.
   const marker = deliveryBody
     .split(/\r?\n/)
-    .find((line) => /^<!-- t3-factory-delivery attempt=\S+ -->$/.test(line.trimEnd()));
+    .findLast((line) => /^<!-- t3-factory-delivery attempt=\S+ -->$/.test(line.trimEnd()));
   return marker !== undefined && commentBody.split(/\r?\n/).some((line) => line.trim() === marker);
 };

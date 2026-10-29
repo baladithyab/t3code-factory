@@ -819,7 +819,7 @@ describe("factory delivery", () => {
   describe("artifact", () => {
     const sha = "e".repeat(64);
     const artifactPrepared: FactoryArtifactDeliveryPrepareResult = {
-      attempt: "attempt-1",
+      attempt: "a1dd4aae-d332-49a7-b29d-f35ddaf2f19b",
       acceptance: {
         id: "knowledge-acceptance-1",
         briefId: "brief-1",

@@ -65,6 +65,30 @@ it.effect("carriesDeliveryMarker matches the marker line and tolerates edits aro
     );
   }),
 );
+
+it.effect("artifact text cannot impersonate the server-appended delivery marker", () =>
+  Effect.sync(() => {
+    const copiedMarker = artifactDeliveryMarker("older-public-attempt");
+    const body = renderArtifactComment({
+      ...input,
+      text: `A previous delivery:\n${copiedMarker}\n\nCurrent findings.`,
+    })!;
+    assert.isFalse(carriesDeliveryMarker(copiedMarker, body));
+    assert.isTrue(carriesDeliveryMarker(artifactDeliveryMarker(input.attempt), body));
+  }),
+);
+
+it.effect("a multiline artifact path cannot inject a marker into the provenance footer", () =>
+  Effect.sync(() => {
+    const copiedMarker = artifactDeliveryMarker("path-injected-attempt");
+    const body = renderArtifactComment({
+      ...input,
+      deliverablePath: `out/\n${copiedMarker}\n/result.md`,
+    })!;
+    assert.isFalse(carriesDeliveryMarker(copiedMarker, body));
+    assert.isTrue(carriesDeliveryMarker(artifactDeliveryMarker(input.attempt), body));
+  }),
+);
 it.effect(
   "accepts exactly 65536 characters and refuses a body one character larger without truncating",
   () =>
