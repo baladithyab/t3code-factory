@@ -1,6 +1,11 @@
 import {
   CommandId,
   FactoryDeliveryError,
+  FACTORY_KNOWLEDGE_ARTIFACT_PREVIEW_MAX_BYTES,
+  type FactoryArtifactDeliveryGrantInput,
+  type FactoryArtifactDeliveryIntent,
+  type FactoryArtifactDeliveryRemote,
+  type FactoryCommitDeliveryIntent,
   type FactoryAcceptanceError,
   type FactoryDeliveryGrantInput,
   type FactoryDeliveryIntent,
@@ -32,16 +37,23 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as AcceptanceStore from "../persistence/FactoryAcceptanceStore.ts";
 import * as Store from "../persistence/FactoryDeliveryStore.ts";
+import * as KnowledgeStore from "../persistence/FactoryKnowledgeStore.ts";
+import * as Projects from "../project/ProjectService.ts";
 import * as PullRequests from "../pullRequest/PullRequestService.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Acceptance from "./FactoryAcceptanceService.ts";
+import * as Knowledge from "./FactoryKnowledgeService.ts";
+import { artifactDeliveryMarker, renderArtifactComment } from "./FactoryArtifactDeliveryBody.ts";
+import { issueOriginKey, knowledgeBriefOriginKey } from "./FactoryOriginKey.ts";
+import { makeRepositoryResolver } from "./FactoryTaskLaunch.ts";
 import { IssueTrackerProviderRegistry } from "./IssueTrackerProviderRegistry.ts";
 
 const FAILURE_MAX_CHARS = 1000;
@@ -130,7 +142,9 @@ const targetOf = (input: {
 }): DeliveryTarget | null => {
   if (input.kind === "merge-pr")
     return isMergePayload(input.payload) ? { kind: input.kind, payload: input.payload } : null;
-  return isMergePayload(input.payload) ? null : { kind: input.kind, payload: input.payload };
+  return input.kind === "publish-pr" && "title" in input.payload
+    ? { kind: input.kind, payload: input.payload }
+    : null;
 };
 
 /** The digest a grant echoes back; computed only here so a client cannot choose what it signs. */
@@ -248,6 +262,10 @@ const makeService = Effect.gen(function* () {
   const store = yield* Store.FactoryDeliveryStore;
   const acceptanceStore = yield* AcceptanceStore.FactoryAcceptanceStore;
   const acceptance = yield* Acceptance.FactoryAcceptanceService;
+  const knowledgeStore = yield* KnowledgeStore.FactoryKnowledgeStore;
+  const knowledge = yield* Knowledge.FactoryKnowledgeService;
+  const projects = yield* Projects.ProjectService;
+  const resolveRepository = yield* makeRepositoryResolver;
   const environment = yield* ServerEnvironmentIdentity;
   const threads = yield* Threads.ThreadManagementService;
   const git = yield* Git.GitVcsDriver;
@@ -333,10 +351,195 @@ const makeService = Effect.gen(function* () {
       .detail(options.fresh ? { ...ref, allowStale: false } : ref)
       .pipe(Effect.mapError(persistenceFailure));
   });
+  const observeArtifact = Effect.fn("FactoryDeliveryService.observeArtifact")(function* (
+    input: FactoryDeliveryReadInput,
+  ) {
+    const launch = yield* knowledgeStore
+      .getLaunchByThread(input.threadId)
+      .pipe(Effect.mapError(persistenceFailure));
+    if (Option.isNone(launch) || launch.value.intent.projectId !== input.projectId)
+      return yield* new FactoryDeliveryError({ reason: "not-a-factory-task" });
+    // Knowledge owns the realpath confinement and UTF-8 decoding. Delivery never reads the file
+    // through a second path that could disagree with what was accepted.
+    const seen = yield* knowledge
+      .read({
+        projectId: input.projectId,
+        briefId: launch.value.intent.briefId,
+      })
+      .pipe(Effect.mapError(persistenceFailure));
+    if (seen.acceptance === null || seen.acceptance.threadId !== input.threadId)
+      return yield* new FactoryDeliveryError({ reason: "not-accepted" });
+    if (seen.artifactIssue === "too-large")
+      return yield* new FactoryDeliveryError({ reason: "artifact-too-large" });
+    if (seen.artifact === null)
+      return yield* new FactoryDeliveryError({ reason: "artifact-changed" });
+    if (!seen.current) return yield* new FactoryDeliveryError({ reason: "artifact-changed" });
+    if (seen.artifact.bytes > FACTORY_KNOWLEDGE_ARTIFACT_PREVIEW_MAX_BYTES)
+      return yield* new FactoryDeliveryError({ reason: "artifact-too-large" });
+    if (seen.artifact.preview === null)
+      return yield* new FactoryDeliveryError({ reason: "artifact-not-text" });
+    const rendered = {
+      briefTitle: seen.brief.title,
+      deliverablePath: seen.artifact.path,
+      text: seen.artifact.preview,
+      artifactSha256: seen.artifact.sha256,
+      acceptanceId: seen.acceptance.id,
+    };
+    const body = renderArtifactComment(rendered);
+    if (body === null) return yield* new FactoryDeliveryError({ reason: "artifact-too-large" });
+    return {
+      acceptance: seen.acceptance,
+      originKey: knowledgeBriefOriginKey(seen.brief.id),
+      briefId: seen.brief.id,
+      artifact: seen.artifact,
+      body,
+    };
+  });
+
+  const artifactDestination = Effect.fn("FactoryDeliveryService.artifactDestination")(function* (
+    input: FactoryDeliveryReadInput,
+    issueNumber: number,
+  ) {
+    const resolved = yield* resolveRepository(input.projectId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new FactoryDeliveryError({
+            reason:
+              cause.reason === "unsupported-provider"
+                ? "capability-unsupported"
+                : "persistence-failure",
+            cause,
+          }),
+      ),
+    );
+    const { tracker, repository, project } = resolved;
+    if (
+      !tracker.capabilities.issueComment ||
+      tracker.commentOnIssue === undefined ||
+      tracker.listIssueComments === undefined
+    )
+      return yield* new FactoryDeliveryError({ reason: "capability-unsupported" });
+    const issue = yield* tracker
+      .getIssue({
+        cwd: project.workspaceRoot,
+        host: repository.host,
+        repository: repository.repository,
+        number: issueNumber,
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new FactoryDeliveryError({
+              reason:
+                cause.reason === "not-found" || cause.reason === "not-an-issue"
+                  ? "destination-not-found"
+                  : "persistence-failure",
+              cause,
+            }),
+        ),
+      );
+    return {
+      repository,
+      destination: { number: issue.number, title: issue.title, state: issue.state, url: issue.url },
+      destinationKey: `comment:${issueOriginKey(repository.provider, repository.canonicalKey, issueNumber)}`,
+    };
+  });
+
+  const artifactDigest = (
+    destinationKey: string,
+    seen: Effect.Success<ReturnType<typeof observeArtifact>>,
+  ) =>
+    NodeCrypto.createHash("sha256")
+      .update(
+        JSON.stringify([
+          "publish-artifact",
+          destinationKey,
+          seen.acceptance.id,
+          seen.artifact.sha256,
+          seen.body,
+        ]),
+        "utf8",
+      )
+      .digest("hex");
+
+  const grantArtifact = Effect.fn("FactoryDeliveryService.grantArtifact")(function* (
+    input: FactoryArtifactDeliveryGrantInput,
+  ) {
+    const destination = yield* artifactDestination(input, input.payload.issueNumber);
+    const validate = Effect.gen(function* () {
+      const seen = yield* observeArtifact(input);
+      if (seen.artifact.sha256 !== input.expectedArtifactSha256)
+        return yield* new FactoryDeliveryError({ reason: "artifact-changed" });
+      const payloadDigest = artifactDigest(destination.destinationKey, seen);
+      if (payloadDigest !== input.expectedPayloadDigest)
+        return yield* new FactoryDeliveryError({ reason: "payload-changed" });
+      return { ...seen, payloadDigest };
+    });
+    const seen = yield* validate;
+    const at = yield* nowIso;
+    const intent: FactoryArtifactDeliveryIntent = {
+      id: `delivery:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`,
+      originKey: seen.originKey,
+      threadId: input.threadId,
+      projectId: input.projectId,
+      kind: "publish-artifact",
+      acceptanceId: seen.acceptance.id,
+      briefId: seen.briefId,
+      artifactPath: seen.artifact.path,
+      artifactSha256: seen.artifact.sha256,
+      artifactBytes: seen.artifact.bytes,
+      repository: destination.repository,
+      destinationKey: destination.destinationKey,
+      payload: input.payload,
+      body: seen.body,
+      payloadDigest: seen.payloadDigest,
+      grantedBy: yield* environment.getEnvironmentId,
+      grantedAt: at,
+      requestCommandId: input.commandId,
+      status: "pending",
+      remote: null,
+      failure: null,
+      updatedAt: at,
+    };
+    const granted = yield* store.grant(intent, {
+      recheck: Effect.asVoid(validate),
+      enqueue: outbox
+        .enqueue([
+          {
+            id: `${intent.id}:execute`,
+            commandId: CommandId.make(input.commandId),
+            threadId: input.threadId,
+            request: { type: "factory.delivery.execute", intentId: intent.id },
+          },
+        ])
+        .pipe(Effect.mapError(persistenceFailure)),
+    });
+    if (granted.created) yield* outbox.notifyAvailable(1);
+    return granted.intent;
+  });
 
   const prepare = Effect.fn("FactoryDeliveryService.prepare")(function* (
     input: FactoryDeliveryPrepareInput,
   ) {
+    if (input.kind === "publish-artifact") {
+      if (!("issueNumber" in input.payload))
+        return yield* new FactoryDeliveryError({ reason: "payload-changed" });
+      const seen = yield* observeArtifact(input);
+      const destination = yield* artifactDestination(input, input.payload.issueNumber);
+      return {
+        acceptance: seen.acceptance,
+        current: true,
+        ...destination,
+        artifactSha256: seen.artifact.sha256,
+        artifactBytes: seen.artifact.bytes,
+        body: seen.body,
+        payload: input.payload,
+        payloadDigest: artifactDigest(destination.destinationKey, seen),
+        existing: Option.getOrNull(
+          yield* store.getLiveArtifact(seen.originKey, destination.destinationKey),
+        ),
+      };
+    }
     const target = targetOf(input);
     if (target === null) return yield* new FactoryDeliveryError({ reason: "payload-changed" });
     const seen = yield* observe(input);
@@ -399,6 +602,7 @@ const makeService = Effect.gen(function* () {
         return yield* new FactoryDeliveryError({ reason: "payload-changed" });
       return replay.value;
     }
+    if (input.kind === "publish-artifact") return yield* grantArtifact(input);
     const target = targetOf(input);
     if (target === null) return yield* new FactoryDeliveryError({ reason: "payload-changed" });
     // The host is read once, before the transaction: a network call must not hold the database
@@ -510,10 +714,11 @@ const makeService = Effect.gen(function* () {
   const read = Effect.fn("FactoryDeliveryService.read")(function* (
     input: FactoryDeliveryReadInput,
   ) {
-    // The acceptance read refuses a thread outside the project, which is the same gate here.
-    yield* acceptance
-      .read({ projectId: input.projectId, threadId: input.threadId })
-      .pipe(Effect.mapError(fromAcceptance));
+    const shell = yield* threads
+      .getThreadShell(input.threadId)
+      .pipe(Effect.mapError(persistenceFailure));
+    if (shell === null || shell.projectId !== input.projectId)
+      return yield* new FactoryDeliveryError({ reason: "unknown-thread" });
     const intents = yield* store.listByThread(input.threadId);
     return { intents: intents.filter((intent) => intent.projectId === input.projectId) };
   });
@@ -533,7 +738,7 @@ const makeService = Effect.gen(function* () {
   // The forge call already succeeded, so a link that cannot be made is logged and dropped. The
   // command id is derived from the intent, so a retried link replays instead of duplicating.
   const linkPullRequest = Effect.fn("FactoryDeliveryService.linkPullRequest")(
-    function* (intent: FactoryDeliveryIntent, remote: { readonly url: string }) {
+    function* (intent: FactoryCommitDeliveryIntent, remote: { readonly url: string }) {
       const key = parseChangeRequestUrl(remote.url);
       if (key === null) return;
       yield* threads
@@ -560,7 +765,7 @@ const makeService = Effect.gen(function* () {
   );
 
   const confirm = Effect.fn("FactoryDeliveryService.confirm")(function* (
-    intent: FactoryDeliveryIntent,
+    intent: FactoryCommitDeliveryIntent,
     remote: { readonly number: number; readonly url: string },
   ) {
     const settled = yield* store.settle(intent.id, {
@@ -579,7 +784,9 @@ const makeService = Effect.gen(function* () {
   }) => (shell.deletedAt === null ? shell.worktreePath : null);
 
   // Business outcomes settle the intent and return normally; only infrastructure errors escape.
-  const send = Effect.fn("FactoryDeliveryService.send")(function* (intent: FactoryDeliveryIntent) {
+  const send = Effect.fn("FactoryDeliveryService.send")(function* (
+    intent: FactoryCommitDeliveryIntent,
+  ) {
     const fail = (failure: string) => settle(intent, "failed", failure);
     const { payload } = intent;
     if (isMergePayload(payload)) return yield* fail("payload does not match the delivery kind");
@@ -649,7 +856,7 @@ const makeService = Effect.gen(function* () {
 
   // The pull request is already linked to the thread by its publish, so a merge only settles.
   const confirmMerged = Effect.fn("FactoryDeliveryService.confirmMerged")(function* (
-    intent: FactoryDeliveryIntent,
+    intent: FactoryCommitDeliveryIntent,
     remote: { readonly number: number; readonly url: string },
   ) {
     const settled = yield* store.settle(intent.id, {
@@ -664,7 +871,7 @@ const makeService = Effect.gen(function* () {
   // A merge touches neither the worktree nor git: the host merges the pull request, pinned to the
   // head the grantor accepted, so a push since then is refused instead of merged.
   const sendMerge = Effect.fn("FactoryDeliveryService.sendMerge")(function* (
-    intent: FactoryDeliveryIntent,
+    intent: FactoryCommitDeliveryIntent,
   ) {
     const { remote, payload } = intent;
     if (remote === null || !isMergePayload(payload))
@@ -685,7 +892,7 @@ const makeService = Effect.gen(function* () {
   });
 
   const reconcileMerge = Effect.fn("FactoryDeliveryService.reconcileMerge")(function* (
-    intent: FactoryDeliveryIntent,
+    intent: FactoryCommitDeliveryIntent,
   ) {
     if (intent.remote === null)
       return yield* new FactoryDeliveryError({ reason: "not-reconcilable" });
@@ -708,6 +915,88 @@ const makeService = Effect.gen(function* () {
     });
     return Option.getOrElse(refreshed, () => intent);
   });
+  const confirmArtifact = Effect.fn("FactoryDeliveryService.confirmArtifact")(function* (
+    intent: FactoryArtifactDeliveryIntent,
+    remote: FactoryArtifactDeliveryRemote,
+  ) {
+    const settled = yield* store.settle(intent.id, {
+      status: "confirmed",
+      remote,
+      failure: null,
+      updatedAt: yield* nowIso,
+    });
+    return Option.getOrElse(settled, () => intent);
+  });
+
+  const sendArtifact = Effect.fn("FactoryDeliveryService.sendArtifact")(function* (
+    intent: FactoryArtifactDeliveryIntent,
+  ) {
+    const tracker = trackers.get(intent.repository.provider);
+    if (!tracker?.capabilities.issueComment || tracker.commentOnIssue === undefined)
+      return yield* settle(intent, "failed", "capability-unsupported");
+    const project = yield* projects
+      .getById(intent.projectId)
+      .pipe(Effect.mapError(persistenceFailure));
+    if (Option.isNone(project)) return yield* settle(intent, "failed", "project-unavailable");
+    // The grant froze the bytes and destination. Neither a changed file nor a changed origin
+    // may redirect an already-authorized send.
+    const sent = yield* Effect.result(
+      tracker.commentOnIssue({
+        cwd: project.value.workspaceRoot,
+        host: intent.repository.host,
+        repository: intent.repository.repository,
+        number: intent.payload.issueNumber,
+        body: intent.body,
+      }),
+    );
+    if (sent._tag === "Failure")
+      return yield* settle(
+        intent,
+        isDefiniteRejection(sent.failure) ? "failed" : "unknown",
+        describe("comment response", sent.failure),
+      );
+    yield* confirmArtifact(intent, { commentId: sent.success.id, url: sent.success.url });
+  });
+
+  const reconcileArtifact = Effect.fn("FactoryDeliveryService.reconcileArtifact")(function* (
+    intent: FactoryArtifactDeliveryIntent,
+  ) {
+    const tracker = trackers.get(intent.repository.provider);
+    if (!tracker?.capabilities.issueComment || tracker.listIssueComments === undefined)
+      return intent;
+    const project = yield* projects
+      .getById(intent.projectId)
+      .pipe(Effect.mapError(persistenceFailure));
+    if (Option.isNone(project)) return intent;
+    const marker = artifactDeliveryMarker(intent.acceptanceId, intent.artifactSha256);
+    let page = 1;
+    let remote: FactoryArtifactDeliveryRemote | null = null;
+    while (true) {
+      const listed = yield* Effect.result(
+        tracker.listIssueComments({
+          cwd: project.value.workspaceRoot,
+          host: intent.repository.host,
+          repository: intent.repository.repository,
+          number: intent.payload.issueNumber,
+          page,
+        }),
+      );
+      if (listed._tag === "Failure") return intent;
+      const match = listed.success.comments.find((comment) => comment.body.includes(marker));
+      if (remote === null && match !== undefined) remote = { commentId: match.id, url: match.url };
+      if (listed.success.nextPage === null) break;
+      // A non-advancing cursor cannot prove absence; it is an incomplete listing.
+      if (listed.success.nextPage <= page) return intent;
+      page = listed.success.nextPage;
+    }
+    if (remote !== null) return yield* confirmArtifact(intent, remote);
+    const settled = yield* store.settle(intent.id, {
+      status: "failed",
+      failure: "no matching artifact comment found",
+      updatedAt: yield* nowIso,
+    });
+    return Option.getOrElse(settled, () => intent);
+  });
 
   const execute = Effect.fn("FactoryDeliveryService.execute")(function* (intentId: string) {
     const found = yield* store.get(intentId);
@@ -719,7 +1008,11 @@ const makeService = Effect.gen(function* () {
     }
     if (intent.status !== "pending") return;
     if (!(yield* store.markSending(intent.id, yield* nowIso))) return;
-    yield* intent.kind === "merge-pr" ? sendMerge(intent) : send(intent);
+    yield* intent.kind === "publish-artifact"
+      ? sendArtifact(intent)
+      : intent.kind === "merge-pr"
+        ? sendMerge(intent)
+        : send(intent);
   });
 
   const reconcile = Effect.fn("FactoryDeliveryService.reconcile")(function* (
@@ -731,6 +1024,7 @@ const makeService = Effect.gen(function* () {
     const intent = found.value;
     if (intent.status !== "unknown" && intent.status !== "failed")
       return yield* new FactoryDeliveryError({ reason: "not-reconcilable" });
+    if (intent.kind === "publish-artifact") return yield* reconcileArtifact(intent);
     if (intent.kind === "merge-pr") return yield* reconcileMerge(intent);
     const shell = yield* threads
       .getThreadShell(intent.threadId)
@@ -760,7 +1054,7 @@ const makeService = Effect.gen(function* () {
   const recoverInterrupted = Effect.gen(function* () {
     const recovered = yield* store.recoverInterrupted(yield* nowIso);
     if (recovered > 0)
-      yield* Effect.logWarning("settled interrupted pull request deliveries as unknown", {
+      yield* Effect.logWarning("settled interrupted Factory deliveries as unknown", {
         recovered,
       });
   });

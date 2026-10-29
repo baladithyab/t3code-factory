@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import {
   CommandId,
   EnvironmentId,
+  FactoryDeliveryError,
   FactoryFeedError,
   FactoryIssueError,
   FactoryResearchError,
@@ -10,6 +11,7 @@ import {
   FactoryFeedSourceId,
   MessageId,
   ProjectId,
+  FactoryOriginKey,
   ProjectCoordinatorError,
   ProviderInstanceId,
   SourceControlProviderKind,
@@ -28,6 +30,7 @@ import * as Relations from "../../../factory/FactoryIssueRelations.ts";
 import * as Feeds from "../../../factory/FactoryFeedService.ts";
 import * as Research from "../../../factory/FactoryResearchService.ts";
 import * as Claims from "../../../factory/FactoryClaimsService.ts";
+import * as Delivery from "../../../factory/FactoryDeliveryService.ts";
 import { DispatchModeLimit } from "../../../orchestration-v2/DispatchModeLimit.ts";
 import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Coordinators from "../../../project/ProjectCoordinatorService.ts";
@@ -945,5 +948,149 @@ it.effect.each([true, false])(
           .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
         assert.deepInclude(failure.at(-1)?.result, { code: "invalid_request" });
       } else assert.deepInclude(outputs.at(-1)?.result, { code: "capability_denied" });
+    }),
+);
+
+it.effect(
+  "artifact delivery is proposed and read for a read-only client, and no tool can grant it",
+  () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const projectId = ProjectId.make("project");
+      const threadId = ThreadId.make("brief-thread");
+      const repository = {
+        provider: SourceControlProviderKind.make("github"),
+        host: "github.com",
+        repository: "owner/repo",
+        canonicalKey: "github.com/owner/repo",
+        url: "https://github.com/owner/repo",
+      };
+      const body = "# Findings\n<!-- t3-factory-delivery acceptance=acceptance sha256=abc -->";
+      const core = {
+        threadId,
+        projectId,
+        acceptanceId: "acceptance",
+        payloadDigest: "digest",
+        grantedBy: EnvironmentId.make("person"),
+        grantedAt: "2026-10-28T00:00:00.000Z",
+        failure: null,
+        updatedAt: "2026-10-28T00:00:01.000Z",
+      };
+      const artifactIntent = {
+        ...core,
+        id: "artifact-intent",
+        originKey: FactoryOriginKey.make("knowledge:brief"),
+        kind: "publish-artifact" as const,
+        requestCommandId: "grant-artifact",
+        status: "confirmed" as const,
+        briefId: "brief",
+        artifactPath: "deliverable.md",
+        artifactSha256: "abc",
+        artifactBytes: 10,
+        repository,
+        destinationKey: "comment:github:github.com/owner/repo#7",
+        payload: { issueNumber: 7 },
+        body,
+        remote: { commentId: 6489487402, url: "https://github.com/owner/repo/issues/7#c" },
+      };
+      const commitIntent = {
+        ...core,
+        id: "commit-intent",
+        originKey: FactoryOriginKey.make("github:github.com/owner/repo#3"),
+        kind: "publish-pr" as const,
+        requestCommandId: "grant-pr",
+        status: "unknown" as const,
+        repository,
+        baseRef: "main",
+        baseSha: "base",
+        headSha: "head",
+        payload: { title: "Fix", body: "", draft: false },
+        remote: null,
+      };
+      const prepared = {
+        acceptance: {
+          id: "acceptance",
+          briefId: "brief",
+          threadId,
+          projectId,
+          artifactPath: "deliverable.md",
+          sha256: "abc",
+          bytes: 10,
+          acceptedAt: "2026-10-27T00:00:00.000Z",
+          acceptedBy: EnvironmentId.make("person"),
+        },
+        current: true,
+        repository,
+        destination: {
+          number: 7,
+          title: "Research question",
+          state: "open" as const,
+          url: "https://github.com/owner/repo/issues/7",
+        },
+        destinationKey: artifactIntent.destinationKey,
+        artifactSha256: "abc",
+        artifactBytes: 10,
+        body,
+        payload: artifactIntent.payload,
+        payloadDigest: "digest",
+        existing: null,
+      };
+      const prepareInput = {
+        projectId,
+        threadId,
+        kind: "publish-artifact" as const,
+        payload: artifactIntent.payload,
+      };
+      let refusal: FactoryDeliveryError | null = null;
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(Context.McpInvocationContext, {
+          environmentId: EnvironmentId.make("test"),
+          requestNamespace: "delivery-test",
+          issuedAt: 0,
+          thread: undefined,
+          client: { sessionId: "test", label: "test", access: "read-only" },
+          capabilities: new Set<Context.McpCapability>(["orchestration"]),
+        }),
+        Layer.mock(Threads.ThreadManagementService)({}),
+        // `grant` and `reconcile` are left unimplemented: reaching either from MCP dies the test.
+        Layer.mock(Delivery.FactoryDeliveryService)({
+          prepare: (received) => {
+            calls.push("prepare");
+            assert.deepEqual(received, prepareInput);
+            return refusal === null ? Effect.succeed(prepared) : Effect.fail(refusal);
+          },
+          read: (received) => {
+            calls.push("read");
+            assert.deepEqual(received, { projectId, threadId });
+            return Effect.succeed({ intents: [artifactIntent, commitIntent] });
+          },
+        }),
+      );
+      const toolkit = yield* FactoryToolkit.pipe(
+        Effect.provide(
+          Access.HandlersLayer.layer(Handlers.layer).pipe(Layer.provide(dependencies)),
+        ),
+      );
+      const proposed = yield* toolkit
+        .handle("factory_prepare_delivery", prepareInput)
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      assert.deepEqual(proposed.at(-1)?.result, prepared);
+      const read = yield* toolkit
+        .handle("factory_read_deliveries", { projectId, threadId })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      assert.deepEqual(read.at(-1)?.result, { intents: [artifactIntent, commitIntent] });
+      refusal = new FactoryDeliveryError({ reason: "destination-not-found" });
+      const refused = yield* toolkit
+        .handle("factory_prepare_delivery", prepareInput)
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      assert.deepInclude(refused.at(-1)?.result, {
+        code: "invalid_request",
+        message: refusal.message,
+      });
+      assert.deepEqual(calls, ["prepare", "read", "prepare"]);
+      assert.deepEqual(
+        Object.keys(FactoryToolkit.tools).filter((name) => /grant|reconcile/.test(name)),
+        [],
+      );
     }),
 );

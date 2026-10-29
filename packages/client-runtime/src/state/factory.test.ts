@@ -1393,6 +1393,14 @@ const makeResearchHarness = Effect.fn("TestFactory.makeResearchHarness")(functio
         WS_METHODS.factoryReconcileDelivery,
         () => deliveryIntent,
       ),
+      [WS_METHODS.factoryReadDeliveries]: read(id, WS_METHODS.factoryReadDeliveries, () => ({
+        intents: [],
+      })),
+      [WS_METHODS.factoryReadAcceptance]: read(id, WS_METHODS.factoryReadAcceptance, () => ({
+        acceptance: null,
+        liveHeadSha: null,
+        current: false,
+      })),
       [WS_METHODS.factoryAdmitResearchImplementation]: held(
         id,
         WS_METHODS.factoryAdmitResearchImplementation,
@@ -1432,6 +1440,28 @@ const deliveryIntent: FactoryDeliveryIntent = {
   failure: null,
   updatedAt: fetchedAt,
 };
+
+const artifactGrantInput = (commandId: string) =>
+  ({
+    projectId,
+    threadId: researchTask.threadId,
+    kind: "publish-artifact",
+    commandId,
+    expectedArtifactSha256: "a".repeat(64),
+    expectedPayloadDigest: "d".repeat(64),
+    payload: { issueNumber: 53 },
+  }) satisfies FactoryDeliveryGrantInput;
+
+const commitGrantInput = (commandId: string) =>
+  ({
+    projectId,
+    threadId: researchTask.threadId,
+    kind: "publish-pr",
+    commandId,
+    expectedHeadSha: "c".repeat(40),
+    expectedPayloadDigest: "d".repeat(64),
+    payload: { title: "Title", body: "Body", draft: false },
+  }) satisfies FactoryDeliveryGrantInput;
 
 const researchReads = (calls: ReadonlyArray<FeedCall>, method: string) =>
   calls.filter((call) => call.method === method).length;
@@ -1721,6 +1751,16 @@ describe("Factory research commands", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("requires both operate and source-control write to grant an artifact delivery", () =>
+    Effect.gen(function* () {
+      const h = yield* makeResearchHarness();
+      yield* expectGuarded(h, h.atoms.grantDelivery, artifactGrantInput("grant-artifact"), [
+        AuthOrchestrationOperateScope,
+        AuthSourceControlWriteScope,
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("requires both operate and source-control write to reconcile a delivery", () =>
     Effect.gen(function* () {
       const h = yield* makeResearchHarness();
@@ -1803,6 +1843,50 @@ describe("Factory research commands", () => {
         expect(AsyncResult.isFailure(sealed)).toBe(failCommands);
         yield* AtomRegistry.getResult(h.registry, list, { suspendOnWaiting: true });
         expect(researchReads(h.calls, WS_METHODS.factoryListResearchProtocols)).toBe(2);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([false, true])(
+    "reads a thread's deliveries again after any grant, and its commit acceptance only after a commit grant: %s",
+    (failCommands) =>
+      Effect.gen(function* () {
+        const h = yield* makeResearchHarness(undefined, failCommands);
+        const target = { environmentId, input: { projectId, threadId: researchTask.threadId } };
+        const deliveries = h.atoms.readDeliveries(target);
+        const acceptance = h.atoms.readAcceptance(target);
+        yield* AtomRegistry.mount(h.registry, deliveries);
+        yield* AtomRegistry.mount(h.registry, acceptance);
+        const settle = Effect.fn("TestFactory.settleDeliveryReads")(function* () {
+          yield* AtomRegistry.getResult(h.registry, deliveries, { suspendOnWaiting: true });
+          yield* AtomRegistry.getResult(h.registry, acceptance, { suspendOnWaiting: true });
+        });
+        yield* settle();
+        const reads = () => [
+          researchReads(h.calls, WS_METHODS.factoryReadDeliveries),
+          researchReads(h.calls, WS_METHODS.factoryReadAcceptance),
+        ];
+        expect(reads()).toEqual([1, 1]);
+
+        const grantingArtifact = h.atoms.grantDelivery.run(h.registry, {
+          environmentId,
+          input: artifactGrantInput("grant-artifact"),
+        });
+        yield* Queue.take(h.entered);
+        yield* Deferred.succeed(h.release, undefined);
+        const artifactGranted = yield* Effect.promise(() => grantingArtifact);
+        expect(AsyncResult.isFailure(artifactGranted)).toBe(failCommands);
+        yield* settle();
+        expect(reads()).toEqual([2, 1]);
+
+        const grantingCommit = h.atoms.grantDelivery.run(h.registry, {
+          environmentId,
+          input: commitGrantInput("grant-commit"),
+        });
+        yield* Queue.take(h.entered);
+        const commitGranted = yield* Effect.promise(() => grantingCommit);
+        expect(AsyncResult.isFailure(commitGranted)).toBe(failCommands);
+        yield* settle();
+        expect(reads()).toEqual([3, 2]);
       }).pipe(Effect.scoped),
   );
 });

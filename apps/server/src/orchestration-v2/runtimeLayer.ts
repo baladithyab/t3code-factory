@@ -58,6 +58,8 @@ import * as FactoryAcceptanceService from "../factory/FactoryAcceptanceService.t
 import * as FactoryDeliveryService from "../factory/FactoryDeliveryService.ts";
 import * as FactoryAcceptanceStore from "../persistence/FactoryAcceptanceStore.ts";
 import * as FactoryDeliveryStore from "../persistence/FactoryDeliveryStore.ts";
+import * as FactoryKnowledgeService from "../factory/FactoryKnowledgeService.ts";
+import * as FactoryKnowledgeStore from "../persistence/FactoryKnowledgeStore.ts";
 
 export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationEventStore.layer,
@@ -320,6 +322,20 @@ const layerFactoryDeliveryProvided = FactoryDeliveryService.layerWithStartupReco
     Layer.mergeAll(
       FactoryDeliveryStore.layer,
       FactoryAcceptanceStore.layer,
+      FactoryKnowledgeStore.layer,
+      FactoryKnowledgeService.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            FactoryKnowledgeStore.layer,
+            layerProjectService,
+            layerThreadManagementProvided,
+            layerThreadLaunchProvided,
+            layerCommandReceiptStoreProvided,
+            layerManagedProjectFoldersProvided,
+          ),
+        ),
+      ),
+      layerProjectService,
       FactoryAcceptanceService.layer.pipe(
         Layer.provide(Layer.merge(FactoryAcceptanceStore.layer, layerThreadManagementProvided)),
       ),

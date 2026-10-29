@@ -12,6 +12,7 @@ import { StatusPill, type StatusTone } from "../../components/StatusPill";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
+import { FactoryArtifactDeliverySection } from "./FactoryArtifactDeliverySection";
 import {
   factoryTaskStatusLabel,
   factoryTaskStatusTone,
@@ -169,27 +170,37 @@ function FactoryKnowledgeTaskSection(props: {
   }
 
   return (
-    <View className="gap-2">
-      <Text accessibilityRole="header" className="text-sm font-t3-semibold text-foreground">
-        Artifact
-      </Text>
-      {content}
-      {failure ? (
-        <View accessibilityRole="alert" accessibilityLiveRegion="polite" className="gap-1">
-          <Text className="text-sm font-t3-semibold text-danger-foreground">{failure.title}</Text>
-          <Text selectable className="text-sm text-foreground">
-            {failure.detail}
-          </Text>
-        </View>
+    <>
+      <View className="gap-2">
+        <Text accessibilityRole="header" className="text-sm font-t3-semibold text-foreground">
+          Artifact
+        </Text>
+        {content}
+        {failure ? (
+          <View accessibilityRole="alert" accessibilityLiveRegion="polite" className="gap-1">
+            <Text className="text-sm font-t3-semibold text-danger-foreground">{failure.title}</Text>
+            <Text selectable className="text-sm text-foreground">
+              {failure.detail}
+            </Text>
+          </View>
+        ) : null}
+        <Button
+          tone="text"
+          label="Refresh"
+          accessibilityLabel="Refresh artifact"
+          disabled={task.pending || task.loading}
+          onPress={task.refresh}
+        />
+      </View>
+      {view !== null && view.kind === "current" ? (
+        // Only the exact bytes a person accepted may be posted; any other state offers nothing.
+        <FactoryArtifactDeliverySection
+          environmentId={props.environmentId}
+          projectId={props.projectId}
+          acceptance={view.acceptance}
+        />
       ) : null}
-      <Button
-        tone="text"
-        label="Refresh"
-        accessibilityLabel="Refresh artifact"
-        disabled={task.pending || task.loading}
-        onPress={task.refresh}
-      />
-    </View>
+    </>
   );
 }
 

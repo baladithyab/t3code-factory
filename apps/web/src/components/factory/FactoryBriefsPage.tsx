@@ -42,6 +42,7 @@ import {
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Textarea } from "../ui/textarea";
+import { FactoryArtifactDeliveryPanel } from "./FactoryArtifactDeliveryPanel";
 import { FactoryCheckoutChooser } from "./FactoryCheckoutChooser";
 import { FactoryEmptyState } from "./FactoryEmptyState";
 import { factoryTaskPresentation } from "./factoryIssues.logic";
@@ -142,6 +143,9 @@ export function FactoryBriefsPage() {
           key={`${environment.environmentId}:${project.id}`}
           environmentId={environment.environmentId}
           project={project}
+          deliverySupported={
+            environment.serverConfig?.environment.capabilities.factoryDelivery === true
+          }
         />
       ) : null}
     </section>
@@ -159,6 +163,8 @@ function KnowledgeFailure(props: { readonly message: string | null }) {
 function FactoryBriefsWorkspace(props: {
   readonly environmentId: EnvironmentId;
   readonly project: EnvironmentProject;
+  /** Older servers cannot prepare or read an artifact delivery; asking would fail. */
+  readonly deliverySupported: boolean;
 }) {
   const { environmentId, project } = props;
   const query = useEnvironmentQuery(
@@ -219,6 +225,7 @@ function FactoryBriefsWorkspace(props: {
             environmentId={environmentId}
             projectId={project.id}
             brief={brief}
+            deliverySupported={props.deliverySupported}
             task={tasks.get(brief.id) ?? null}
             canStart={canStart && query.error === null && !query.isPending}
             onReview={(restart) => setReview({ brief, restart })}
@@ -571,6 +578,7 @@ function KnowledgeBriefRow(props: {
   readonly projectId: ProjectId;
   readonly brief: FactoryKnowledgeBrief;
   readonly task: FactoryKnowledgeTask | null;
+  readonly deliverySupported: boolean;
   readonly canStart: boolean;
   readonly onReview: (restart: boolean) => void;
 }) {
@@ -631,6 +639,7 @@ function KnowledgeBriefRow(props: {
           environmentId={props.environmentId}
           projectId={props.projectId}
           briefId={brief.id}
+          deliverySupported={props.deliverySupported}
         />
       ) : null}
     </li>
@@ -641,6 +650,7 @@ function KnowledgeArtifact(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly briefId: string;
+  readonly deliverySupported: boolean;
 }) {
   const { environmentId, projectId, briefId } = props;
   const query = useEnvironmentQuery(
@@ -814,6 +824,15 @@ function KnowledgeArtifact(props: {
         <p id={id} role="status" className="text-muted-foreground text-xs">
           {disabledReason}
         </p>
+      ) : null}
+      {props.deliverySupported && acceptance !== null && data !== null && data.task !== null ? (
+        <FactoryArtifactDeliveryPanel
+          key={acceptance.id}
+          environmentId={environmentId}
+          projectId={projectId}
+          threadId={data.task.threadId}
+          acceptanceCurrent={state === "current"}
+        />
       ) : null}
     </section>
   );

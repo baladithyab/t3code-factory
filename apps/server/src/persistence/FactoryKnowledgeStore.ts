@@ -94,6 +94,9 @@ export class FactoryKnowledgeStore extends Context.Service<
     readonly getLaunch: (
       briefId: string,
     ) => Effect.Effect<Option.Option<FactoryKnowledgeBinding>, FactoryKnowledgeError>;
+    readonly getLaunchByThread: (
+      threadId: ThreadId,
+    ) => Effect.Effect<Option.Option<FactoryKnowledgeBinding>, FactoryKnowledgeError>;
     readonly listLaunches: (
       projectId: ProjectId,
     ) => Effect.Effect<readonly FactoryKnowledgeBinding[], FactoryKnowledgeError>;
@@ -203,6 +206,15 @@ const make = Effect.gen(function* () {
     (briefId: string) => findLaunch(briefId),
     Effect.mapError(persistenceError),
   );
+  const getLaunchByThread = Effect.fn("FactoryKnowledgeStore.getLaunchByThread")(function* (
+    threadId: ThreadId,
+  ) {
+    const rows = yield* decodeBindings(
+      yield* sql`SELECT intent_json AS intent, accepted FROM factory_knowledge_launches
+        WHERE thread_id = ${threadId} AND superseded = 0`,
+    );
+    return Option.fromNullishOr(rows[0]);
+  }, Effect.mapError(persistenceError));
   const listLaunches = Effect.fn("FactoryKnowledgeStore.listLaunches")(function* (
     projectId: ProjectId,
   ) {
@@ -296,6 +308,7 @@ const make = Effect.gen(function* () {
     listBriefs,
     getBrief,
     getLaunch,
+    getLaunchByThread,
     listLaunches,
     reserve,
     accept,

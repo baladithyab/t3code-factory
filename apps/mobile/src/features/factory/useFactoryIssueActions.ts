@@ -14,8 +14,9 @@ import {
   AuthOrchestrationReadScope,
   CommandId,
   type EnvironmentId,
-  type FactoryDeliveryIntent,
-  type FactoryDeliveryKind,
+  type FactoryCommitDeliveryIntent,
+  type FactoryCommitDeliveryPrepareResult,
+  type FactoryDeliveryCommitKind,
   type FactoryDeliveryPrepareResult,
   type FactoryDeliveryPublishPayload,
   type FactoryIssue,
@@ -50,6 +51,8 @@ import {
   describeFactoryMergeFailure,
   factoryAcceptanceView,
   factoryIssueStartKey,
+  isFactoryArtifactPrepareResult,
+  isFactoryCommitIntent,
   isLiveFactoryDelivery,
   sameFactoryDeliveryPayload,
   type FactoryIssueAction,
@@ -419,11 +422,18 @@ type DeliveryPreview = AsyncResult.AsyncResult<FactoryDeliveryPrepareResult, unk
 
 // Only a settled success is grantable: a failed re-prepare must not leave the previous digest
 // looking current, and a preview that is still re-reading may be about to change.
-function settledPreview(preview: DeliveryPreview) {
-  return preview._tag === "Success" && !preview.waiting ? preview.value : null;
+function settledPreview(preview: DeliveryPreview): FactoryCommitDeliveryPrepareResult | null {
+  if (preview._tag !== "Success" || preview.waiting) return null;
+  // Pull request previews are asked with commit payloads, so an artifact answer is never this
+  // hook's to grant.
+  return isFactoryArtifactPrepareResult(preview.value) ? null : preview.value;
 }
 
-function describeDeliveryFailure(kind: FactoryDeliveryKind, error: unknown, displayName: string) {
+function describeDeliveryFailure(
+  kind: FactoryDeliveryCommitKind,
+  error: unknown,
+  displayName: string,
+) {
   return kind === "merge-pr"
     ? describeFactoryMergeFailure(error, displayName)
     : describeFactoryDeliveryFailure(error, displayName);
@@ -437,7 +447,10 @@ interface DeliveryState {
   readonly mergePreviewed: PullRequestMergeMethod | null;
   readonly pending: boolean;
   // Tagged so a merge refusal shows under Merge and a publish refusal under Pull request.
-  readonly failure: { readonly kind: FactoryDeliveryKind; readonly failure: FactoryFailure } | null;
+  readonly failure: {
+    readonly kind: FactoryDeliveryCommitKind;
+    readonly failure: FactoryFailure;
+  } | null;
 }
 
 function emptyDeliveryState(key: string): DeliveryState {
@@ -530,7 +543,7 @@ export function useFactoryDelivery(input: {
       ? describeFactoryMergeFailure(Cause.squash(mergePreview.cause), displayName)
       : null;
 
-  const intents = deliveries.data?.intents ?? [];
+  const intents = (deliveries.data?.intents ?? []).filter(isFactoryCommitIntent);
   const publishIntents = intents.filter((intent) => intent.kind === "publish-pr");
   const mergeIntents = intents.filter((intent) => intent.kind === "merge-pr");
   const liveIntent = publishIntents.find(isLiveFactoryDelivery) ?? null;
@@ -560,7 +573,10 @@ export function useFactoryDelivery(input: {
   );
 
   const runGrantFor = useCallback(
-    async (kind: FactoryDeliveryKind, grantFrom: FactoryDeliveryPrepareResult | null) => {
+    async (
+      kind: FactoryDeliveryCommitKind,
+      grantFrom: FactoryCommitDeliveryPrepareResult | null,
+    ) => {
       const current = lifetime.current;
       if (current === null || !current.active || current.pending || grantFrom === null) return;
       current.pending = true;
@@ -600,7 +616,7 @@ export function useFactoryDelivery(input: {
   );
 
   const reconcile = useCallback(
-    async (intent: FactoryDeliveryIntent) => {
+    async (intent: FactoryCommitDeliveryIntent) => {
       const current = lifetime.current;
       if (current === null || !current.active || current.pending) return;
       current.pending = true;
@@ -644,7 +660,7 @@ export function useFactoryDelivery(input: {
     update,
   ]);
 
-  const failureFor = (kind: FactoryDeliveryKind) =>
+  const failureFor = (kind: FactoryDeliveryCommitKind) =>
     current.failure?.kind === kind ? current.failure.failure : null;
   return {
     supported: readable,

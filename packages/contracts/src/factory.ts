@@ -37,6 +37,8 @@ export const FactoryIssueCapabilities = Schema.Struct({
   closeAcceptance: Schema.Literals(["none", "close-reason"]),
   publish: Schema.Boolean,
   headPinnedMerge: Schema.Boolean,
+  // Servers before artifact delivery sent no such flag and could not comment; absent means no.
+  issueComment: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
 export type FactoryIssueCapabilities = typeof FactoryIssueCapabilities.Type;
 
@@ -50,6 +52,7 @@ const LegacyGitHubCapabilities: FactoryIssueCapabilities = {
   closeAcceptance: "close-reason",
   publish: true,
   headPinnedMerge: true,
+  issueComment: false,
 };
 const CapabilitiesOrLegacyGitHub = FactoryIssueCapabilities.pipe(
   Schema.withDecodingDefault(Effect.succeed(LegacyGitHubCapabilities)),

@@ -5,7 +5,8 @@ import {
   FactoryOriginKey,
   ProjectId,
   ThreadId,
-  type FactoryDeliveryIntent,
+  type FactoryCommitDeliveryIntent,
+  type FactoryArtifactDeliveryIntent,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -19,8 +20,8 @@ const at = "2026-10-27T00:00:00.000Z";
 const originKey = FactoryOriginKey.make("github:github.com/owner/repo#7");
 const intent = (
   id: string,
-  overrides: Partial<FactoryDeliveryIntent> = {},
-): FactoryDeliveryIntent => ({
+  overrides: Partial<FactoryCommitDeliveryIntent> = {},
+): FactoryCommitDeliveryIntent => ({
   id,
   originKey,
   threadId: ThreadId.make(`thread:${id}`),
@@ -206,4 +207,128 @@ it.effect("a merge intent keeps the remote set at grant through a failed settlem
       publish,
     );
   }).pipe(Effect.provide(layer)),
+);
+
+const artifactIntent = (id: string, issueNumber = 7): FactoryArtifactDeliveryIntent => ({
+  id,
+  originKey: FactoryOriginKey.make("knowledge:brief:one"),
+  threadId: ThreadId.make("artifact-thread"),
+  projectId: ProjectId.make("project"),
+  kind: "publish-artifact",
+  acceptanceId: "knowledge-acceptance:one",
+  briefId: "brief:one",
+  artifactPath: "DELIVERABLE.md",
+  artifactSha256: "a".repeat(64),
+  artifactBytes: 4,
+  repository: intent("repository").repository,
+  destinationKey: `comment:github:github.com/owner/repo#${issueNumber}`,
+  payload: { issueNumber },
+  body: "Body",
+  payloadDigest: "d".repeat(64),
+  grantedBy: EnvironmentId.make("environment"),
+  grantedAt: at,
+  requestCommandId: `command:${id}`,
+  status: "pending",
+  remote: null,
+  failure: null,
+  updatedAt: at,
+});
+
+it.effect("artifact rows share reads and command replay but are live per destination", () =>
+  Effect.gen(function* () {
+    const store = yield* Store.FactoryDeliveryStore;
+    const sql = yield* SqlClient.SqlClient;
+    const first = artifactIntent("artifact");
+    const commit = intent("commit", { threadId: first.threadId });
+    yield* store.grant(commit, { recheck: noop, enqueue: noop });
+    const before = yield* sql`SELECT * FROM factory_delivery_intents`;
+    let enqueued = 0;
+    const steps = {
+      recheck: noop,
+      enqueue: Effect.sync(() => {
+        enqueued += 1;
+      }),
+    };
+    assert.deepEqual((yield* store.grant(first, steps)).intent, first);
+    assert.deepEqual(yield* store.grant({ ...first, id: "replay" }, steps), {
+      intent: first,
+      created: false,
+    });
+    assert.equal(enqueued, 1);
+    assert.equal(
+      (yield* store.grant(artifactIntent("duplicate"), steps).pipe(Effect.flip)).reason,
+      "already-delivering",
+    );
+    const other = { ...artifactIntent("other", 8), grantedAt: "2026-10-28T00:00:00.000Z" };
+    yield* store.grant(other, steps);
+    assert.deepEqual(Option.getOrThrow(yield* store.get(first.id)), first);
+    assert.deepEqual(Option.getOrThrow(yield* store.getByCommand(first.requestCommandId)), first);
+    assert.deepEqual(
+      Option.getOrThrow(yield* store.getInProject(first.projectId, first.id)),
+      first,
+    );
+    assert.isTrue(Option.isNone(yield* store.getInProject(ProjectId.make("foreign"), first.id)));
+    assert.deepEqual(
+      Option.getOrThrow(yield* store.getLiveArtifact(first.originKey, first.destinationKey)),
+      first,
+    );
+    assert.deepEqual(
+      (yield* store.listByThread(first.threadId)).map(({ id }) => id),
+      ["other", "commit", "artifact"],
+    );
+    assert.deepEqual(yield* sql`SELECT * FROM factory_delivery_intents`, before);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "artifact sending is claimed once, recovered unknown and confirmed with a comment remote",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* Store.FactoryDeliveryStore;
+      const first = artifactIntent("artifact");
+      yield* store.grant(first, { recheck: noop, enqueue: noop });
+      assert.isTrue(yield* store.markSending(first.id, at));
+      assert.isFalse(yield* store.markSending(first.id, at));
+      assert.equal(yield* store.recoverInterrupted(at), 1);
+      assert.equal(Option.getOrThrow(yield* store.get(first.id)).status, "unknown");
+      const remote = {
+        commentId: 12,
+        url: "https://github.com/owner/repo/issues/7#issuecomment-12",
+      };
+      yield* store.settle(first.id, { status: "confirmed", remote, failure: null, updatedAt: at });
+      yield* store.settle(first.id, { status: "failed", failure: "late", updatedAt: at });
+      assert.deepEqual(Option.getOrThrow(yield* store.get(first.id)), {
+        ...first,
+        status: "confirmed",
+        remote,
+      });
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "artifact grants roll back both recheck and enqueue failures and release failed destinations",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* Store.FactoryDeliveryStore;
+      const first = artifactIntent("artifact");
+      const refused = Effect.fail(new FactoryDeliveryError({ reason: "artifact-changed" }));
+      for (const steps of [
+        { recheck: refused, enqueue: noop },
+        { recheck: noop, enqueue: refused },
+      ]) {
+        assert.equal(
+          (yield* store.grant(first, steps).pipe(Effect.flip)).reason,
+          "artifact-changed",
+        );
+        assert.isTrue(Option.isNone(yield* store.get(first.id)));
+      }
+      yield* store.grant(first, { recheck: noop, enqueue: noop });
+      yield* store.settle(first.id, { status: "failed", failure: "rejected", updatedAt: at });
+      assert.isTrue(
+        (yield* store.grant(artifactIntent("second"), {
+          recheck: noop,
+          enqueue: noop,
+        })).created,
+      );
+    }).pipe(Effect.provide(layer)),
 );

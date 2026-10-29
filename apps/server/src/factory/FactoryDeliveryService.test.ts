@@ -14,22 +14,39 @@ import {
   SourceControlProviderKind,
   ThreadId,
   type FactoryDeliveryPublishPayload,
+  type FactoryArtifactDeliveryGrantInput,
   type PullRequestActionInput,
   type PullRequestDetail,
 } from "@t3tools/contracts";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
+import {
+  IssueTrackerProviderError,
+  type TrackerIssueComment,
+} from "@t3tools/source-control-core/server/IssueTrackerProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- fixture digests independently check the bytes the service pins.
+import * as NodeCrypto from "node:crypto";
+import * as ServerConfig from "../config.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import { ChildProcessSpawner } from "effect/process";
 import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
 import * as GitManager from "../git/GitManager.ts";
 import { liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
+import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
+import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
+import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as AcceptanceStore from "../persistence/FactoryAcceptanceStore.ts";
 import * as DeliveryStore from "../persistence/FactoryDeliveryStore.ts";
+import * as KnowledgeStore from "../persistence/FactoryKnowledgeStore.ts";
+import * as Projects from "../project/ProjectService.ts";
+import * as Identities from "../project/RepositoryIdentityResolver.ts";
+import * as Folders from "../project/ManagedProjectFolders.ts";
 import { type FactoryLaunchIntent } from "../persistence/FactoryIssueLaunches.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as PullRequests from "../pullRequest/PullRequestService.ts";
@@ -37,7 +54,9 @@ import * as SourceControlProviderRegistry from "../sourceControl/SourceControlPr
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Acceptance from "./FactoryAcceptanceService.ts";
 import * as Delivery from "./FactoryDeliveryService.ts";
-import { issueOriginKey } from "./FactoryOriginKey.ts";
+import * as Knowledge from "./FactoryKnowledgeService.ts";
+import { renderArtifactComment, artifactDeliveryMarker } from "./FactoryArtifactDeliveryBody.ts";
+import { issueOriginKey, knowledgeBriefOriginKey } from "./FactoryOriginKey.ts";
 import { fakeIssueTracker, issueTrackersLayer } from "./IssueTrackerProviderRegistry.testkit.ts";
 
 const at = "2026-10-27T00:00:00.000Z";
@@ -100,10 +119,14 @@ const harness = (
   options: {
     readonly seedSending?: boolean;
     readonly trackers?: Parameters<typeof issueTrackersLayer>[0];
+    readonly artifactFolder?: string;
+    readonly seedArtifactSending?: boolean;
   } = {},
 ) => {
   const state = {
     head: first,
+    origin: "https://github.com/owner/repo.git",
+    artifactFolder: options.artifactFolder ?? "/artifact-worktree",
     open: Option.none<typeof pullRequest>(),
     push: "ok" as "ok" | "fail",
     create: "ok" as "ok" | "definite" | "ambiguous",
@@ -162,7 +185,13 @@ const harness = (
     execute: ({ args }) => {
       const revision = args[2];
       const stdout =
-        revision === "HEAD^{commit}" ? state.head : revision === "main^{commit}" ? base : null;
+        args[0] === "remote"
+          ? state.origin
+          : revision === "HEAD^{commit}"
+            ? state.head
+            : revision === "main^{commit}"
+              ? base
+              : null;
       if (stdout === null) return Effect.die(`Unexpected git arguments: ${JSON.stringify(args)}`);
       return Effect.succeed({
         exitCode: ChildProcessSpawner.ExitCode(0),
@@ -245,6 +274,39 @@ const harness = (
     NodeServices.layer,
     Layer.succeed(ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(environmentId) }),
     issueTrackersLayer(options.trackers),
+    ServerConfig.layerTest("/repo", "/delivery-test-home").pipe(Layer.provide(NodeServices.layer)),
+    Layer.mock(Folders.ManagedProjectFolders)({
+      namedProjectsRoot: "/delivery-test-home/projects",
+    }),
+    Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
+    Layer.mock(Receipts.CommandReceiptStoreV2)({
+      getByCommandId: () => Effect.succeed(Option.none()),
+    }),
+    Layer.mock(Projects.ProjectService)({
+      getById: (id) =>
+        Effect.succeed(
+          id === projectId
+            ? Option.some({
+                id,
+                title: "Project",
+                workspaceRoot: "/repo",
+                defaultModelSelection: null,
+                scripts: [],
+                createdAt: at,
+                updatedAt: at,
+                deletedAt: null,
+              })
+            : Option.none(),
+        ),
+    }),
+    Layer.mock(Identities.RepositoryIdentityResolver)({
+      resolve: () =>
+        Effect.succeed({
+          canonicalKey: "github.com/owner/repo",
+          provider: "github",
+          locator: { source: "git-remote", remoteName: "origin", remoteUrl: state.origin },
+        }),
+    }),
     Layer.mock(GitManager.GitManager)({
       findOpenPullRequestForHead: () =>
         Effect.succeed({ headSelector: "feature", open: state.open }),
@@ -259,7 +321,8 @@ const harness = (
         Effect.succeed({
           ...liveThreadShell(id),
           projectId,
-          worktreePath: id === unclaimed ? null : "/worktree",
+          worktreePath:
+            id === artifactThread ? state.artifactFolder : id === unclaimed ? null : "/worktree",
         }),
       dispatch: (command) => {
         state.links.push(command);
@@ -271,12 +334,45 @@ const harness = (
     DeliveryStore.layer,
     AcceptanceStore.layer,
     EffectOutbox.layer,
+    KnowledgeStore.layer,
+    Knowledge.layer.pipe(Layer.provide(KnowledgeStore.layer)),
     Acceptance.layer.pipe(Layer.provide(AcceptanceStore.layer)),
   ).pipe(Layer.provideMerge(dependencies));
   // Seeded after the stores exist and before the service is built, the order startup recovery
   // relies on.
   const seed = Layer.effectDiscard(
     Effect.gen(function* () {
+      if (options.seedArtifactSending === true) {
+        const store = yield* DeliveryStore.FactoryDeliveryStore;
+        yield* store.grant(
+          {
+            id: "delivery:artifact-seeded",
+            originKey: knowledgeBriefOriginKey("brief:seeded"),
+            threadId: artifactThread,
+            projectId,
+            kind: "publish-artifact",
+            acceptanceId: "acceptance:artifact-seeded",
+            briefId: "brief:seeded",
+            artifactPath: "DELIVERABLE.md",
+            artifactSha256: "a".repeat(64),
+            artifactBytes: 4,
+            repository: intent.repository,
+            destinationKey: "comment:github:github.com/owner/repo#7",
+            payload: { issueNumber: 7 },
+            body: "Body",
+            payloadDigest: "d".repeat(64),
+            grantedBy: environmentId,
+            grantedAt: at,
+            requestCommandId: "artifact-seeded",
+            status: "pending",
+            remote: null,
+            failure: null,
+            updatedAt: at,
+          },
+          { recheck: Effect.void, enqueue: Effect.void },
+        );
+        yield* store.markSending("delivery:artifact-seeded", at);
+      }
       if (options.seedSending !== true) return;
       const store = yield* DeliveryStore.FactoryDeliveryStore;
       const sql = yield* SqlClient.SqlClient;
@@ -311,8 +407,32 @@ const harness = (
     }),
   ).pipe(Layer.provideMerge(stores));
   const recovering = Delivery.layerWithStartupRecovery.pipe(Layer.provideMerge(seed));
-  const layer =
-    options.seedSending === true ? recovering : Delivery.layer.pipe(Layer.provideMerge(stores));
+  const deliveryLayer =
+    options.seedSending === true || options.seedArtifactSending === true
+      ? recovering
+      : Delivery.layer.pipe(Layer.provideMerge(stores));
+  const executor = Layer.effect(
+    EffectWorker.OrchestrationEffectExecutorV2,
+    Effect.gen(function* () {
+      const service = yield* Delivery.FactoryDeliveryService;
+      return EffectWorker.OrchestrationEffectExecutorV2.of({
+        execute: (effect) =>
+          effect.request.type === "factory.delivery.execute"
+            ? service.execute(effect.request.intentId).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new EffectWorker.OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              )
+            : Effect.die(`unexpected effect ${effect.request.type}`),
+      });
+    }),
+  ).pipe(Layer.provideMerge(deliveryLayer));
+  const layer = EffectWorker.layer.pipe(Layer.provideMerge(executor));
   return { state, layer };
 };
 
@@ -338,7 +458,13 @@ const acceptClaim = Effect.fn("DeliveryTest.acceptClaim")(function* (
 const accept = acceptClaim();
 const prepare = (threadId: ThreadId = claimed) =>
   Effect.flatMap(Delivery.FactoryDeliveryService, (service) =>
-    service.prepare({ projectId, threadId, kind: "publish-pr", payload }),
+    service
+      .prepare({ projectId, threadId, kind: "publish-pr", payload })
+      .pipe(
+        Effect.flatMap((result) =>
+          "headSha" in result ? Effect.succeed(result) : Effect.die("expected commit preparation"),
+        ),
+      ),
   );
 const grant = Effect.fn("DeliveryTest.grant")(function* (
   overrides: {
@@ -705,12 +831,18 @@ type MergeMethod = "merge" | "squash" | "rebase";
 const mergePayload = (mergeMethod: MergeMethod = "squash") => ({ mergeMethod });
 const prepareMerge = (mergeMethod?: MergeMethod) =>
   Effect.flatMap(Delivery.FactoryDeliveryService, (service) =>
-    service.prepare({
-      projectId,
-      threadId: claimed,
-      kind: "merge-pr",
-      payload: mergePayload(mergeMethod),
-    }),
+    service
+      .prepare({
+        projectId,
+        threadId: claimed,
+        kind: "merge-pr",
+        payload: mergePayload(mergeMethod),
+      })
+      .pipe(
+        Effect.flatMap((result) =>
+          "headSha" in result ? Effect.succeed(result) : Effect.die("expected merge preparation"),
+        ),
+      ),
   );
 const grantMerge = Effect.fn("DeliveryTest.grantMerge")(function* (
   overrides: {
@@ -1060,4 +1192,495 @@ it.effect(
       assert.deepEqual(state.mergeCalls, []);
     }).pipe(Effect.provide(layer));
   },
+);
+
+const artifactThread = ThreadId.make("artifact-thread");
+const artifactText = "## Findings\n\nThe accepted **markdown**.\n";
+const hash = (bytes: string | Uint8Array) =>
+  NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+
+const artifactHarness = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-artifact-delivery-" });
+  const folder = path.join(root, "task");
+  yield* fs.makeDirectory(folder);
+  const file = path.join(folder, "DELIVERABLE.md");
+  const host = {
+    reads: [] as number[],
+    posts: [] as { cwd: string; host: string; repository: string; number: number; body: string }[],
+    pages: [] as number[],
+    issue: "ok" as "ok" | "not-found" | "not-an-issue",
+    send: "ok" as "ok" | "definite" | "ambiguous",
+    listingFailure: null as IssueTrackerProviderError["reason"] | null,
+    failPage: 1,
+    listings: [] as { comments: readonly TrackerIssueComment[]; nextPage: number | null }[],
+  };
+  const failure = (
+    operation: string,
+    reason: IssueTrackerProviderError["reason"],
+    cause?: unknown,
+  ) =>
+    new IssueTrackerProviderError({
+      provider: SourceControlProviderKind.make("github"),
+      operation,
+      reason,
+      detail: "fixture response",
+      ...(cause === undefined ? {} : { cause }),
+    });
+  const fake = fakeIssueTracker("github", {
+    getIssue: (input) => {
+      host.reads.push(input.number);
+      return host.issue === "ok"
+        ? Effect.succeed({
+            ...intent.issue,
+            number: input.number,
+            url: `https://github.com/owner/repo/issues/${input.number}`,
+          })
+        : Effect.fail(failure("getIssue", host.issue));
+    },
+    commentOnIssue: (input) => {
+      host.posts.push(input);
+      if (host.send !== "ok")
+        return Effect.fail(
+          failure(
+            "commentOnIssue",
+            "failed",
+            host.send === "definite"
+              ? { _tag: "GitHubApiResponseError", status: 422 }
+              : { _tag: "GitHubApiRequestError" },
+          ),
+        );
+      return Effect.succeed({
+        id: 91,
+        body: input.body,
+        url: `https://github.com/owner/repo/issues/${input.number}#issuecomment-91`,
+      });
+    },
+    listIssueComments: ({ page }) => {
+      host.pages.push(page);
+      return host.listingFailure !== null && page === host.failPage
+        ? Effect.fail(failure("listIssueComments", host.listingFailure))
+        : Effect.succeed(host.listings[page - 1] ?? { comments: [], nextPage: null });
+    },
+  });
+  const tracker = { ...fake, capabilities: { ...fake.capabilities } };
+  const h = harness({ artifactFolder: folder, trackers: [tracker] });
+  return { ...h, fs, file, folder, host, tracker };
+});
+
+type ArtifactTestServices =
+  | Delivery.FactoryDeliveryService
+  | Knowledge.FactoryKnowledgeService
+  | KnowledgeStore.FactoryKnowledgeStore
+  | DeliveryStore.FactoryDeliveryStore
+  | EffectWorker.OrchestrationEffectWorkerV2
+  | EffectOutbox.EffectOutboxV2
+  | SqlClient.SqlClient;
+const withArtifact = <A, E>(
+  body: (h: Effect.Success<typeof artifactHarness>) => Effect.Effect<A, E, ArtifactTestServices>,
+) =>
+  Effect.gen(function* () {
+    const h = yield* artifactHarness;
+    return yield* body(h).pipe(Effect.provide(h.layer));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+
+const acceptArtifact = Effect.fn("DeliveryTest.acceptArtifact")(function* (
+  h: Effect.Success<typeof artifactHarness>,
+  text: string | Uint8Array = artifactText,
+) {
+  const knowledge = yield* Knowledge.FactoryKnowledgeService;
+  const brief = yield* knowledge.createBrief({
+    projectId,
+    commandId: CommandId.make("create-artifact"),
+    title: "Protocol survey",
+    question: "What changed?",
+    inputs: [],
+    acceptanceCriteria: "Cites sources",
+  });
+  const store = yield* KnowledgeStore.FactoryKnowledgeStore;
+  yield* store.reserve({
+    briefId: brief.id,
+    briefRevision: brief.revision,
+    title: brief.title,
+    projectId,
+    workspaceRoot: "/repo",
+    requestCommandId: CommandId.make("start-artifact"),
+    commandId: CommandId.make("launch-artifact"),
+    threadId: artifactThread,
+    messageId: MessageId.make("artifact-message"),
+    modelSelection: intent.modelSelection,
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+    prompt: "Brief",
+    createdBy: "user",
+    creationSource: "web",
+    createdAt: at,
+    previousThreadId: null,
+  });
+  yield* store.accept(artifactThread);
+  yield* h.fs.writeFile(h.file, typeof text === "string" ? new TextEncoder().encode(text) : text);
+  const accepted = yield* knowledge.accept({
+    projectId,
+    briefId: brief.id,
+    expectedSha256: hash(text),
+  });
+  return { brief, accepted };
+});
+
+const prepareArtifact = Effect.fn("DeliveryTest.prepareArtifact")(function* (issueNumber = 7) {
+  const prepared = yield* (yield* Delivery.FactoryDeliveryService).prepare({
+    projectId,
+    threadId: artifactThread,
+    kind: "publish-artifact",
+    payload: { issueNumber },
+  });
+  if (!("artifactSha256" in prepared)) return yield* Effect.die("expected artifact preparation");
+  return prepared;
+});
+
+const grantArtifact = Effect.fn("DeliveryTest.grantArtifact")(function* (
+  overrides: Partial<FactoryArtifactDeliveryGrantInput> = {},
+) {
+  const prepared = yield* prepareArtifact(overrides.payload?.issueNumber);
+  return yield* (yield* Delivery.FactoryDeliveryService).grant({
+    projectId,
+    threadId: artifactThread,
+    kind: "publish-artifact",
+    commandId: "artifact-grant",
+    expectedArtifactSha256: prepared.artifactSha256,
+    expectedPayloadDigest: prepared.payloadDigest,
+    payload: prepared.payload,
+    ...overrides,
+  });
+});
+
+const drain = Effect.gen(function* () {
+  return yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+});
+
+it.effect(
+  "artifact prepare renders accepted bytes and pins the origin issue, acceptance and exact body",
+  () =>
+    withArtifact((h) =>
+      Effect.gen(function* () {
+        const { brief, accepted } = yield* acceptArtifact(h);
+        const prepared = yield* prepareArtifact();
+        const acceptance = accepted.acceptance;
+        assert.isNotNull(acceptance);
+        if (acceptance === null) return yield* Effect.die("expected acceptance");
+        assert.deepEqual(prepared.acceptance, acceptance);
+        assert.equal(prepared.current, true);
+        assert.equal(prepared.repository.canonicalKey, "github.com/owner/repo");
+        assert.equal(prepared.destinationKey, "comment:github:github.com/owner/repo#7");
+        assert.deepEqual(prepared.destination, {
+          number: 7,
+          title: "Task",
+          state: "open",
+          url: "https://github.com/owner/repo/issues/7",
+        });
+        assert.equal(prepared.artifactSha256, hash(artifactText));
+        assert.equal(prepared.artifactBytes, new TextEncoder().encode(artifactText).byteLength);
+        assert.equal(
+          prepared.body,
+          renderArtifactComment({
+            briefTitle: brief.title,
+            deliverablePath: brief.deliverablePath,
+            text: artifactText,
+            artifactSha256: hash(artifactText),
+            acceptanceId: acceptance.id,
+          }),
+        );
+        assert.equal(
+          prepared.payloadDigest,
+          hash(
+            JSON.stringify([
+              "publish-artifact",
+              prepared.destinationKey,
+              acceptance.id,
+              hash(artifactText),
+              prepared.body,
+            ]),
+          ),
+        );
+        assert.deepEqual(h.host.reads, [7]);
+        assert.deepEqual(h.host.posts, []);
+        assert.equal(prepared.existing, null);
+        assert.lengthOf(yield* outboxRows, 0);
+      }),
+    ),
+);
+
+it.effect(
+  "artifact prepare and grant refuse a tracker without issueComment before any host call",
+  () =>
+    withArtifact((h) =>
+      Effect.gen(function* () {
+        yield* acceptArtifact(h);
+        h.tracker.capabilities.issueComment = false;
+        assert.equal((yield* prepareArtifact().pipe(Effect.flip)).reason, "capability-unsupported");
+        const refused = yield* (yield* Delivery.FactoryDeliveryService)
+          .grant({
+            projectId,
+            threadId: artifactThread,
+            kind: "publish-artifact",
+            commandId: "unsupported",
+            expectedArtifactSha256: hash(artifactText),
+            expectedPayloadDigest: "d".repeat(64),
+            payload: { issueNumber: 7 },
+          })
+          .pipe(Effect.flip);
+        assert.equal(refused.reason, "capability-unsupported");
+        assert.deepEqual(h.host, {
+          reads: [],
+          posts: [],
+          pages: [],
+          issue: "ok",
+          send: "ok",
+          listingFailure: null,
+          failPage: 1,
+          listings: [],
+        });
+      }),
+    ),
+);
+
+it.effect.each(["not-found", "not-an-issue"] as const)(
+  "artifact prepare maps a $0 destination to destination-not-found",
+  (reason) =>
+    withArtifact((h) =>
+      Effect.gen(function* () {
+        yield* acceptArtifact(h);
+        h.host.issue = reason;
+        assert.equal((yield* prepareArtifact().pipe(Effect.flip)).reason, "destination-not-found");
+        assert.deepEqual(h.host.reads, [7]);
+        assert.deepEqual(h.host.posts, []);
+      }),
+    ),
+);
+
+it.effect.each([
+  { name: "oversize body", text: "x".repeat(65536), reason: "artifact-too-large" },
+  { name: "truncated preview", text: "x".repeat(256 * 1024 + 1), reason: "artifact-too-large" },
+  { name: "invalid UTF-8", text: new Uint8Array([0xc3, 0x28]), reason: "artifact-not-text" },
+])("artifact prepare refuses $name without truncation or a host call", ({ text, reason }) =>
+  withArtifact((h) =>
+    Effect.gen(function* () {
+      yield* acceptArtifact(h, text);
+      assert.equal((yield* prepareArtifact().pipe(Effect.flip)).reason, reason);
+      assert.deepEqual(h.host.reads, []);
+      assert.deepEqual(h.host.posts, []);
+    }),
+  ),
+);
+
+it.effect("artifact grant refuses changed bytes, reviewer hash, body digest and destination", () =>
+  withArtifact((h) =>
+    Effect.gen(function* () {
+      yield* acceptArtifact(h);
+      const service = yield* Delivery.FactoryDeliveryService;
+      const prepared = yield* prepareArtifact();
+      const input: FactoryArtifactDeliveryGrantInput = {
+        projectId,
+        threadId: artifactThread,
+        kind: "publish-artifact",
+        commandId: "changed",
+        expectedArtifactSha256: prepared.artifactSha256,
+        expectedPayloadDigest: prepared.payloadDigest,
+        payload: prepared.payload,
+      };
+      assert.equal(
+        (yield* service
+          .grant({ ...input, expectedArtifactSha256: "b".repeat(64) })
+          .pipe(Effect.flip)).reason,
+        "artifact-changed",
+      );
+      assert.equal(
+        (yield* service
+          .grant({ ...input, expectedPayloadDigest: "b".repeat(64) })
+          .pipe(Effect.flip)).reason,
+        "payload-changed",
+      );
+      assert.equal(
+        (yield* service.grant({ ...input, payload: { issueNumber: 8 } }).pipe(Effect.flip)).reason,
+        "payload-changed",
+      );
+      yield* h.fs.writeFileString(h.file, "changed");
+      assert.equal((yield* service.grant(input).pipe(Effect.flip)).reason, "artifact-changed");
+      assert.lengthOf(yield* outboxRows, 0);
+      assert.deepEqual(h.host.posts, []);
+    }),
+  ),
+);
+
+it.effect(
+  "artifact grants are single-live per destination, and command replay ignores later file changes",
+  () =>
+    withArtifact((h) =>
+      Effect.gen(function* () {
+        yield* acceptArtifact(h);
+        const prepared = yield* prepareArtifact();
+        const first = yield* grantArtifact();
+        assert.deepEqual((yield* prepareArtifact()).existing, first);
+        assert.equal(
+          (yield* grantArtifact({ commandId: "duplicate" }).pipe(Effect.flip)).reason,
+          "already-delivering",
+        );
+        yield* TestClock.adjust("1 second");
+        const second = yield* grantArtifact({ commandId: "second", payload: { issueNumber: 8 } });
+        assert.notEqual(second.id, first.id);
+        const service = yield* Delivery.FactoryDeliveryService;
+        assert.deepEqual((yield* service.read({ projectId, threadId: artifactThread })).intents, [
+          second,
+          first,
+        ]);
+        yield* h.fs.writeFileString(h.file, "changed after grant");
+        const replay = yield* service.grant({
+          projectId,
+          threadId: artifactThread,
+          kind: "publish-artifact",
+          commandId: "artifact-grant",
+          expectedArtifactSha256: prepared.artifactSha256,
+          expectedPayloadDigest: prepared.payloadDigest,
+          payload: prepared.payload,
+        });
+        assert.deepEqual(replay, first);
+        assert.lengthOf(yield* outboxRows, 2);
+        assert.deepEqual(h.host.posts, []);
+      }),
+    ),
+);
+
+it.effect(
+  "the effect worker sends the frozen artifact body once and confirms its comment remote",
+  () =>
+    withArtifact((h) =>
+      Effect.gen(function* () {
+        yield* acceptArtifact(h);
+        const granted = yield* grantArtifact();
+        if (granted.kind !== "publish-artifact")
+          return yield* Effect.die("expected artifact intent");
+        yield* h.fs.remove(h.folder, { recursive: true });
+        h.state.origin = "https://github.com/other/repo.git";
+        assert.equal(yield* drain, 1);
+        assert.deepEqual(h.host.posts, [
+          {
+            cwd: "/repo",
+            host: "github.com",
+            repository: "owner/repo",
+            number: 7,
+            body: granted.body,
+          },
+        ]);
+        const store = yield* DeliveryStore.FactoryDeliveryStore;
+        const settled = Option.getOrThrow(yield* store.get(granted.id));
+        assert.equal(settled.status, "confirmed");
+        assert.deepEqual(settled.remote, {
+          commentId: 91,
+          url: "https://github.com/owner/repo/issues/7#issuecomment-91",
+        });
+        assert.equal(settled.failure, null);
+        assert.equal(yield* drain, 0);
+        yield* (yield* Delivery.FactoryDeliveryService).execute(granted.id);
+        assert.lengthOf(h.host.posts, 1);
+        assert.deepEqual(h.state.calls, []);
+        assert.deepEqual(h.state.links, []);
+        const queued = Option.getOrThrow(
+          yield* (yield* EffectOutbox.EffectOutboxV2).get(`${granted.id}:execute`),
+        );
+        assert.equal(queued.status, "succeeded");
+      }),
+    ),
+);
+
+it.effect.each([
+  { send: "definite", status: "failed" },
+  { send: "ambiguous", status: "unknown" },
+] as const)(
+  "the artifact worker settles $send errors as $status without retry",
+  ({ send, status }) =>
+    withArtifact((h) =>
+      Effect.gen(function* () {
+        yield* acceptArtifact(h);
+        h.host.send = send;
+        const granted = yield* grantArtifact();
+        assert.equal(yield* drain, 1);
+        const store = yield* DeliveryStore.FactoryDeliveryStore;
+        assert.equal(Option.getOrThrow(yield* store.get(granted.id)).status, status);
+        yield* TestClock.adjust("1 hour");
+        assert.equal(yield* drain, 0);
+        yield* (yield* Delivery.FactoryDeliveryService).execute(granted.id);
+        assert.lengthOf(h.host.posts, 1);
+      }),
+    ),
+);
+
+it.effect("startup recovery changes a sending artifact to unknown before execution", () => {
+  const { layer, state } = harness({ seedArtifactSending: true });
+  return Effect.gen(function* () {
+    const store = yield* DeliveryStore.FactoryDeliveryStore;
+    const recovered = Option.getOrThrow(yield* store.get("delivery:artifact-seeded"));
+    assert.equal(recovered.status, "unknown");
+    assert.equal(recovered.failure, "server restarted during send");
+    yield* (yield* Delivery.FactoryDeliveryService).execute(recovered.id);
+    assert.deepEqual(state.calls, []);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect(
+  "artifact reconciliation walks all pages, preserves failed reads and confirms a marker without a folder",
+  () =>
+    withArtifact((h) =>
+      Effect.gen(function* () {
+        yield* acceptArtifact(h);
+        h.host.send = "ambiguous";
+        const granted = yield* grantArtifact();
+        if (granted.kind !== "publish-artifact")
+          return yield* Effect.die("expected artifact intent");
+        yield* drain;
+        yield* h.fs.remove(h.folder, { recursive: true });
+        const service = yield* Delivery.FactoryDeliveryService;
+        const request = { projectId, intentId: granted.id };
+        const unknown = Option.getOrThrow(
+          yield* (yield* DeliveryStore.FactoryDeliveryStore).get(granted.id),
+        );
+        h.host.listings = [{ comments: [], nextPage: 2 }];
+        h.host.failPage = 2;
+        h.host.listingFailure = "truncated-response";
+        assert.deepEqual(yield* service.reconcile(request), unknown);
+        assert.deepEqual(h.host.pages, [1, 2]);
+        h.host.pages.length = 0;
+        h.host.listingFailure = "failed";
+        assert.deepEqual(yield* service.reconcile(request), unknown);
+        h.host.listingFailure = null;
+        const released = yield* service.reconcile(request);
+        assert.equal(released.status, "failed");
+        h.host.pages.length = 0;
+        h.host.listings = [
+          {
+            comments: [{ id: 3, body: "unrelated", url: "https://github.com/comment/3" }],
+            nextPage: 2,
+          },
+          {
+            comments: [
+              {
+                id: 92,
+                body: `host text\n${artifactDeliveryMarker(granted.acceptanceId, granted.artifactSha256)}`,
+                url: "https://github.com/owner/repo/issues/7#issuecomment-92",
+              },
+            ],
+            nextPage: null,
+          },
+        ];
+        const confirmed = yield* service.reconcile(request);
+        assert.equal(confirmed.status, "confirmed");
+        assert.deepEqual(confirmed.remote, {
+          commentId: 92,
+          url: "https://github.com/owner/repo/issues/7#issuecomment-92",
+        });
+        assert.deepEqual(h.host.pages, [1, 2]);
+        assert.lengthOf(h.host.posts, 1);
+        assert.deepEqual(h.state.calls, []);
+      }),
+    ),
 );

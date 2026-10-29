@@ -76,6 +76,7 @@ it.effect("maps iid and opened state, filters non-issues, and encodes the nested
       closeAcceptance: "none",
       publish: false,
       headPinnedMerge: false,
+      issueComment: false,
     });
   }),
 );

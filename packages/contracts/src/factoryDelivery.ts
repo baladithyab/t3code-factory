@@ -2,12 +2,14 @@ import * as Schema from "effect/Schema";
 import {
   EnvironmentId,
   IsoDateTime,
+  PositiveInt,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { FactoryAcceptance } from "./factoryAcceptance.ts";
 import { FactoryOriginKey } from "./factoryClaims.ts";
+import { FactoryKnowledgeAcceptance } from "./factoryKnowledge.ts";
 import { FactoryRepository } from "./factory.ts";
 import {
   PullRequestMergeMethod,
@@ -18,7 +20,13 @@ import {
 export const FACTORY_DELIVERY_TITLE_MAX_CHARS = 256;
 export const FACTORY_DELIVERY_BODY_MAX_CHARS = 65536;
 
-export const FactoryDeliveryKind = Schema.Literals(["publish-pr", "merge-pr"]);
+/** Kinds whose subject is an accepted commit in a worktree. */
+export const FactoryDeliveryCommitKind = Schema.Literals(["publish-pr", "merge-pr"]);
+export type FactoryDeliveryCommitKind = typeof FactoryDeliveryCommitKind.Type;
+/** The kind whose subject is an accepted knowledge artifact: no repository of its own, no commit. */
+export const FactoryDeliveryArtifactKind = Schema.Literal("publish-artifact");
+export type FactoryDeliveryArtifactKind = typeof FactoryDeliveryArtifactKind.Type;
+export const FactoryDeliveryKind = Schema.Literals(["publish-pr", "merge-pr", "publish-artifact"]);
 export type FactoryDeliveryKind = typeof FactoryDeliveryKind.Type;
 
 /**
@@ -50,39 +58,92 @@ export type FactoryDeliveryMergePayload = typeof FactoryDeliveryMergePayload.Typ
  * A stored `publish-pr` row has no `mergeMethod` and a merge payload has no `title`, so each
  * shape decodes as exactly one member and rows written before `merge-pr` existed still decode.
  */
-export const FactoryDeliveryPayload = Schema.Union([
+export const FactoryDeliveryCommitPayload = Schema.Union([
   FactoryDeliveryPublishPayload,
   FactoryDeliveryMergePayload,
 ]);
-export type FactoryDeliveryPayload = typeof FactoryDeliveryPayload.Type;
+export type FactoryDeliveryCommitPayload = typeof FactoryDeliveryCommitPayload.Type;
 
 /**
- * A grant-then-execute record. It is committed before the side effect and pinned to an exact
- * `(repository, baseRef, headSha, payloadDigest)`: a head move or a changed payload invalidates
- * the grant, and a lost response leaves it `unknown` rather than retried.
+ * The only caller-chosen part of an artifact delivery: which issue of the project's own origin
+ * repository receives the comment. The body is rendered by the server from the accepted bytes.
  */
-export const FactoryDeliveryIntent = Schema.Struct({
+export const FactoryDeliveryArtifactPayload = Schema.Struct({
+  issueNumber: PositiveInt,
+});
+export type FactoryDeliveryArtifactPayload = typeof FactoryDeliveryArtifactPayload.Type;
+
+export const FactoryDeliveryPayload = Schema.Union([
+  FactoryDeliveryPublishPayload,
+  FactoryDeliveryMergePayload,
+  FactoryDeliveryArtifactPayload,
+]);
+export type FactoryDeliveryPayload = typeof FactoryDeliveryPayload.Type;
+
+const FactoryDeliveryIntentCore = {
   id: Schema.String,
   originKey: FactoryOriginKey,
   threadId: ThreadId,
   projectId: ProjectId,
-  kind: FactoryDeliveryKind,
   acceptanceId: Schema.String,
-  repository: FactoryRepository,
-  baseRef: Schema.String,
-  baseSha: Schema.String,
-  headSha: Schema.String,
-  payload: FactoryDeliveryPayload,
   // sha256 hex, computed only on the server.
   payloadDigest: Schema.String,
   grantedBy: EnvironmentId,
   grantedAt: IsoDateTime,
   requestCommandId: Schema.String,
   status: FactoryDeliveryStatus,
-  remote: Schema.NullOr(Schema.Struct({ number: Schema.Int, url: Schema.String })),
   failure: Schema.NullOr(Schema.String),
   updatedAt: IsoDateTime,
+};
+
+/**
+ * A grant-then-execute record. It is committed before the side effect and pinned to an exact
+ * `(repository, baseRef, headSha, payloadDigest)`: a head move or a changed payload invalidates
+ * the grant, and a lost response leaves it `unknown` rather than retried.
+ */
+export const FactoryCommitDeliveryIntent = Schema.Struct({
+  ...FactoryDeliveryIntentCore,
+  kind: FactoryDeliveryCommitKind,
+  repository: FactoryRepository,
+  baseRef: Schema.String,
+  baseSha: Schema.String,
+  headSha: Schema.String,
+  payload: FactoryDeliveryCommitPayload,
+  remote: Schema.NullOr(Schema.Struct({ number: Schema.Int, url: Schema.String })),
 });
+export type FactoryCommitDeliveryIntent = typeof FactoryCommitDeliveryIntent.Type;
+
+export const FactoryArtifactDeliveryRemote = Schema.Struct({
+  commentId: Schema.Int,
+  url: Schema.String,
+});
+export type FactoryArtifactDeliveryRemote = typeof FactoryArtifactDeliveryRemote.Type;
+
+/**
+ * The same record for an accepted knowledge artifact. The pin is
+ * `(originKey, acceptanceId, artifactSha256, destinationKey, payloadDigest)`: the artifact digest
+ * plays the head's part (a file that no longer hashes to it is a moved head), the destination
+ * key plays the repository's. `body` is what was, or will be, posted, byte for byte.
+ */
+export const FactoryArtifactDeliveryIntent = Schema.Struct({
+  ...FactoryDeliveryIntentCore,
+  kind: FactoryDeliveryArtifactKind,
+  briefId: Schema.String,
+  artifactPath: Schema.String,
+  artifactSha256: Schema.String,
+  artifactBytes: Schema.Int,
+  repository: FactoryRepository,
+  destinationKey: Schema.String,
+  payload: FactoryDeliveryArtifactPayload,
+  body: Schema.String,
+  remote: Schema.NullOr(FactoryArtifactDeliveryRemote),
+});
+export type FactoryArtifactDeliveryIntent = typeof FactoryArtifactDeliveryIntent.Type;
+
+export const FactoryDeliveryIntent = Schema.Union([
+  FactoryCommitDeliveryIntent,
+  FactoryArtifactDeliveryIntent,
+]);
 export type FactoryDeliveryIntent = typeof FactoryDeliveryIntent.Type;
 
 /** Agents may call this (read-only): it proposes the exact payload a person can then grant. */
@@ -108,33 +169,81 @@ export const FactoryDeliveryPullRequest = Schema.Struct({
 });
 export type FactoryDeliveryPullRequest = typeof FactoryDeliveryPullRequest.Type;
 
-export const FactoryDeliveryPrepareResult = Schema.Struct({
+export const FactoryCommitDeliveryPrepareResult = Schema.Struct({
   acceptance: FactoryAcceptance,
   current: Schema.Boolean,
   repository: FactoryRepository,
   baseRef: Schema.String,
   headSha: Schema.String,
-  payload: FactoryDeliveryPayload,
+  payload: FactoryDeliveryCommitPayload,
   // What a grant must echo back; the grant recomputes it and refuses a mismatch.
   payloadDigest: Schema.String,
-  existing: Schema.NullOr(FactoryDeliveryIntent),
+  existing: Schema.NullOr(FactoryCommitDeliveryIntent),
   pullRequest: Schema.NullOr(FactoryDeliveryPullRequest),
 });
+export type FactoryCommitDeliveryPrepareResult = typeof FactoryCommitDeliveryPrepareResult.Type;
+
+/** The destination issue as the host reports it now, so the grantor sees where the comment lands. */
+export const FactoryDeliveryDestinationIssue = Schema.Struct({
+  number: PositiveInt,
+  title: Schema.String,
+  state: Schema.Literals(["open", "closed"]),
+  url: Schema.String,
+});
+export type FactoryDeliveryDestinationIssue = typeof FactoryDeliveryDestinationIssue.Type;
+
+/** `body` is the exact comment a grant will post; the grantor reviews it, never edits it. */
+export const FactoryArtifactDeliveryPrepareResult = Schema.Struct({
+  acceptance: FactoryKnowledgeAcceptance,
+  current: Schema.Boolean,
+  repository: FactoryRepository,
+  destination: FactoryDeliveryDestinationIssue,
+  destinationKey: Schema.String,
+  artifactSha256: Schema.String,
+  artifactBytes: Schema.Int,
+  body: Schema.String,
+  payload: FactoryDeliveryArtifactPayload,
+  payloadDigest: Schema.String,
+  existing: Schema.NullOr(FactoryArtifactDeliveryIntent),
+});
+export type FactoryArtifactDeliveryPrepareResult = typeof FactoryArtifactDeliveryPrepareResult.Type;
+
+export const FactoryDeliveryPrepareResult = Schema.Union([
+  FactoryCommitDeliveryPrepareResult,
+  FactoryArtifactDeliveryPrepareResult,
+]);
 export type FactoryDeliveryPrepareResult = typeof FactoryDeliveryPrepareResult.Type;
 
 /**
  * A person's act, never an agent's. `expectedHeadSha` and `expectedPayloadDigest` are only what
  * the grantor saw; the server re-derives both inside the grant transaction.
  */
-export const FactoryDeliveryGrantInput = Schema.Struct({
+export const FactoryCommitDeliveryGrantInput = Schema.Struct({
   projectId: ProjectId,
   threadId: ThreadId,
-  kind: FactoryDeliveryKind,
+  kind: FactoryDeliveryCommitKind,
   commandId: TrimmedNonEmptyString,
   expectedHeadSha: TrimmedNonEmptyString,
   expectedPayloadDigest: TrimmedNonEmptyString,
-  payload: FactoryDeliveryPayload,
+  payload: FactoryDeliveryCommitPayload,
 });
+export type FactoryCommitDeliveryGrantInput = typeof FactoryCommitDeliveryGrantInput.Type;
+
+export const FactoryArtifactDeliveryGrantInput = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+  kind: FactoryDeliveryArtifactKind,
+  commandId: TrimmedNonEmptyString,
+  expectedArtifactSha256: TrimmedNonEmptyString,
+  expectedPayloadDigest: TrimmedNonEmptyString,
+  payload: FactoryDeliveryArtifactPayload,
+});
+export type FactoryArtifactDeliveryGrantInput = typeof FactoryArtifactDeliveryGrantInput.Type;
+
+export const FactoryDeliveryGrantInput = Schema.Union([
+  FactoryCommitDeliveryGrantInput,
+  FactoryArtifactDeliveryGrantInput,
+]);
 export type FactoryDeliveryGrantInput = typeof FactoryDeliveryGrantInput.Type;
 
 export const FactoryDeliveryReadInput = Schema.Struct({
@@ -175,6 +284,10 @@ export class FactoryDeliveryError extends Schema.TaggedError<FactoryDeliveryErro
       "worktree-unavailable",
       "persistence-failure",
       "capability-unsupported",
+      "artifact-changed",
+      "artifact-too-large",
+      "artifact-not-text",
+      "destination-not-found",
     ]),
     cause: Schema.optional(Schema.Defect()),
   },
@@ -213,6 +326,14 @@ export class FactoryDeliveryError extends Schema.TaggedError<FactoryDeliveryErro
         return "The environment could not read or save the delivery.";
       case "capability-unsupported":
         return "This repository's host does not support that delivery action with the exact-commit guarantee the Factory requires.";
+      case "artifact-changed":
+        return "The deliverable changed since it was accepted. Accept the current file before publishing it.";
+      case "artifact-too-large":
+        return "The deliverable is larger than one comment can hold. It is never truncated or split.";
+      case "artifact-not-text":
+        return "The deliverable is not UTF-8 text, so it cannot be posted as a comment.";
+      case "destination-not-found":
+        return "That issue does not exist in the project's origin repository, or it is a pull request.";
     }
   }
 }

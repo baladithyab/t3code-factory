@@ -2,7 +2,7 @@ import {
   FACTORY_DELIVERY_BODY_MAX_CHARS,
   FACTORY_DELIVERY_TITLE_MAX_CHARS,
   type EnvironmentId,
-  type FactoryDeliveryIntent,
+  type FactoryCommitDeliveryIntent,
   type FactoryDeliveryPublishPayload,
   type FactoryIssueCapabilities,
   type ProjectId,
@@ -34,11 +34,11 @@ import {
 import { useFactoryDelivery } from "./useFactoryIssueActions";
 
 function DeliveryStatusRow(props: {
-  readonly intent: FactoryDeliveryIntent;
+  readonly intent: FactoryCommitDeliveryIntent;
   readonly displayName: string;
   readonly busy: boolean;
   readonly canReconcile: boolean;
-  readonly onReconcile: (intent: FactoryDeliveryIntent) => void;
+  readonly onReconcile: (intent: FactoryCommitDeliveryIntent) => void;
 }) {
   const view = factoryDeliveryStatusView(props.intent, props.displayName);
   const link = view.kind === "confirmed" ? view.link : null;
@@ -90,7 +90,10 @@ function DeliveryStatusRow(props: {
   );
 }
 
-function FailureNotice(props: { readonly failure: FactoryFailure; readonly live?: boolean }) {
+export function FailureNotice(props: {
+  readonly failure: FactoryFailure;
+  readonly live?: boolean;
+}) {
   return (
     <View
       accessibilityRole="alert"

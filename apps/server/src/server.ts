@@ -751,7 +751,9 @@ const layerMakeRoutes = Layer.mergeAll(
       FactoryClaimsService.layer,
       FactoryAcceptanceService.layer,
       FactoryKnowledgeService.layer,
-      FactoryDeliveryService.layer.pipe(Layer.provide(FactoryAcceptanceService.layer)),
+      FactoryDeliveryService.layer.pipe(
+        Layer.provide(Layer.merge(FactoryAcceptanceService.layer, FactoryKnowledgeService.layer)),
+      ),
       ProjectCoordinatorService.layer,
     ).pipe(
       Layer.provide(
