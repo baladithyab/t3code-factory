@@ -187,6 +187,7 @@ function setup({
     body: "# Recommendation\n\n**Use SQLite.**\n\n---\n_Delivered by T3 Factory_",
     payload: { issueNumber: 53 },
     payloadDigest: "e".repeat(64),
+    attempt: "attempt-1",
     existing: null,
   } satisfies FactoryArtifactDeliveryPrepareResult;
   const intent = (overrides: Partial<FactoryArtifactDeliveryIntent>) =>
@@ -306,6 +307,7 @@ it("prepares a comment, shows the exact server body as plain text, and grants th
         commandId: expect.any(String),
         expectedArtifactSha256: prepared.artifactSha256,
         expectedPayloadDigest: prepared.payloadDigest,
+        attempt: prepared.attempt,
         payload: { issueNumber: 53 },
       },
     });

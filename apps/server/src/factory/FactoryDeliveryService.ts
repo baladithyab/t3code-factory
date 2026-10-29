@@ -51,7 +51,7 @@ import * as SourceControlProviderRegistry from "../sourceControl/SourceControlPr
 import * as Git from "../vcs/GitVcsDriver.ts";
 import * as Acceptance from "./FactoryAcceptanceService.ts";
 import * as Knowledge from "./FactoryKnowledgeService.ts";
-import { artifactDeliveryMarker, renderArtifactComment } from "./FactoryArtifactDeliveryBody.ts";
+import { renderArtifactComment, sameCommentBody } from "./FactoryArtifactDeliveryBody.ts";
 import { issueOriginKey, knowledgeBriefOriginKey } from "./FactoryOriginKey.ts";
 import { makeRepositoryResolver } from "./FactoryTaskLaunch.ts";
 import { IssueTrackerProviderRegistry } from "./IssueTrackerProviderRegistry.ts";
@@ -353,6 +353,7 @@ const makeService = Effect.gen(function* () {
   });
   const observeArtifact = Effect.fn("FactoryDeliveryService.observeArtifact")(function* (
     input: FactoryDeliveryReadInput,
+    attempt: string,
   ) {
     const launch = yield* knowledgeStore
       .getLaunchByThread(input.threadId)
@@ -384,6 +385,7 @@ const makeService = Effect.gen(function* () {
       text: seen.artifact.preview,
       artifactSha256: seen.artifact.sha256,
       acceptanceId: seen.acceptance.id,
+      attempt,
     };
     const body = renderArtifactComment(rendered);
     if (body === null) return yield* new FactoryDeliveryError({ reason: "artifact-too-large" });
@@ -467,7 +469,7 @@ const makeService = Effect.gen(function* () {
   ) {
     const destination = yield* artifactDestination(input, input.payload.issueNumber);
     const validate = Effect.gen(function* () {
-      const seen = yield* observeArtifact(input);
+      const seen = yield* observeArtifact(input, input.attempt);
       if (seen.artifact.sha256 !== input.expectedArtifactSha256)
         return yield* new FactoryDeliveryError({ reason: "artifact-changed" });
       const payloadDigest = artifactDigest(destination.destinationKey, seen);
@@ -524,9 +526,11 @@ const makeService = Effect.gen(function* () {
     if (input.kind === "publish-artifact") {
       if (!("issueNumber" in input.payload))
         return yield* new FactoryDeliveryError({ reason: "payload-changed" });
-      const seen = yield* observeArtifact(input);
+      const attempt = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const seen = yield* observeArtifact(input, attempt);
       const destination = yield* artifactDestination(input, input.payload.issueNumber);
       return {
+        attempt,
         acceptance: seen.acceptance,
         current: true,
         ...destination,
@@ -968,7 +972,6 @@ const makeService = Effect.gen(function* () {
       .getById(intent.projectId)
       .pipe(Effect.mapError(persistenceFailure));
     if (Option.isNone(project)) return intent;
-    const marker = artifactDeliveryMarker(intent.acceptanceId, intent.artifactSha256);
     let page = 1;
     let remote: FactoryArtifactDeliveryRemote | null = null;
     while (true) {
@@ -982,7 +985,11 @@ const makeService = Effect.gen(function* () {
         }),
       );
       if (listed._tag === "Failure") return intent;
-      const match = listed.success.comments.find((comment) => comment.body.includes(marker));
+      // The whole body, never a substring: the attempt token is in it, so a copy of another
+      // delivery's comment, or of a quoted marker, cannot stand in for this one.
+      const match = listed.success.comments.find((comment) =>
+        sameCommentBody(comment.body, intent.body),
+      );
       if (remote === null && match !== undefined) remote = { commentId: match.id, url: match.url };
       if (listed.success.nextPage === null) break;
       // A non-advancing cursor cannot prove absence; it is an incomplete listing.

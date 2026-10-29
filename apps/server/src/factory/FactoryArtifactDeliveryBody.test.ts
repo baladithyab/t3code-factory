@@ -1,7 +1,11 @@
 import { assert, it } from "@effect/vitest";
 import { FACTORY_DELIVERY_BODY_MAX_CHARS } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { artifactDeliveryMarker, renderArtifactComment } from "./FactoryArtifactDeliveryBody.ts";
+import {
+  artifactDeliveryMarker,
+  renderArtifactComment,
+  sameCommentBody,
+} from "./FactoryArtifactDeliveryBody.ts";
 
 const input = {
   briefTitle: "Protocol survey",
@@ -9,23 +13,52 @@ const input = {
   text: "## Findings\n\n**Markdown** stays intact.\n",
   artifactSha256: "a".repeat(64),
   acceptanceId: "knowledge-acceptance:one",
+  attempt: "attempt-one",
 };
 
 it.effect(
-  "renders the accepted markdown verbatim with provenance and the marker on the last line",
+  "renders the accepted markdown verbatim with the marker between the text and the provenance footer",
   () =>
     Effect.sync(() => {
-      const marker = `<!-- t3-factory-delivery acceptance=${input.acceptanceId} sha256=${input.artifactSha256} -->`;
-      const expected = `# Protocol survey\n\n${input.text}\n\n---\n_Delivered by T3 Factory from brief “Protocol survey” · out/DELIVERABLE.md · sha256 ${input.artifactSha256} · acceptance ${input.acceptanceId}_\n${marker}`;
+      const marker = `<!-- t3-factory-delivery attempt=${input.attempt} -->`;
+      const expected = `# Protocol survey\n\n${input.text}\n\n${marker}\n\n---\n_Delivered by T3 Factory from brief “Protocol survey” · out/DELIVERABLE.md · sha256 ${input.artifactSha256} · acceptance ${input.acceptanceId}_`;
       assert.equal(renderArtifactComment(input), expected);
       assert.equal(renderArtifactComment(input), renderArtifactComment(input));
-      assert.equal(artifactDeliveryMarker(input.acceptanceId, input.artifactSha256), marker);
-      assert.equal(expected.split("\n").at(-1), marker);
+      assert.equal(artifactDeliveryMarker(input.attempt), marker);
+      assert.notEqual(
+        renderArtifactComment({ ...input, attempt: "attempt-two" }),
+        renderArtifactComment(input),
+      );
       assert.equal(
         renderArtifactComment({ ...input, briefTitle: "One\r\nTwo" })!.split("\n")[0],
         "# One Two",
       );
     }),
+);
+
+it.effect("an artifact ending in an open HTML comment cannot hide the footer", () =>
+  Effect.sync(() => {
+    const body = renderArtifactComment({ ...input, text: "last line <!--" })!;
+    const lines = body.split("\n");
+    const markerLine = lines.indexOf(artifactDeliveryMarker(input.attempt));
+    const footerRule = lines.indexOf("---");
+    assert.isAbove(markerLine, 0);
+    assert.include(lines[markerLine]!, "-->");
+    assert.isAbove(footerRule, markerLine);
+    assert.isTrue(lines.at(-1)!.startsWith("_Delivered by T3 Factory"));
+  }),
+);
+
+it.effect("sameCommentBody ignores line-ending and trailing-whitespace normalization only", () =>
+  Effect.sync(() => {
+    const body = renderArtifactComment(input)!;
+    assert.isTrue(sameCommentBody(body, body.replaceAll("\n", "\r\n")));
+    assert.isTrue(sameCommentBody(body, body.replaceAll("\n", "  \n")));
+    assert.isTrue(sameCommentBody(body, `${body}\n\n  `));
+    assert.isFalse(sameCommentBody(body, body.replace("Findings", "Findingz")));
+    assert.isFalse(sameCommentBody(body, body.slice(0, -1)));
+    assert.isFalse(sameCommentBody(body, `quoted\n${artifactDeliveryMarker(input.attempt)}`));
+  }),
 );
 
 it.effect(

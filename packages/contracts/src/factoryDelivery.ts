@@ -192,8 +192,13 @@ export const FactoryDeliveryDestinationIssue = Schema.Struct({
 });
 export type FactoryDeliveryDestinationIssue = typeof FactoryDeliveryDestinationIssue.Type;
 
-/** `body` is the exact comment a grant will post; the grantor reviews it, never edits it. */
+/**
+ * `body` is the exact comment a grant will post; the grantor reviews it, never edits it. `attempt`
+ * is a server-minted token rendered into that body: it is what tells one delivery's comment from
+ * another's with the same bytes to the same issue, and from a copy someone else pasted.
+ */
 export const FactoryArtifactDeliveryPrepareResult = Schema.Struct({
+  attempt: TrimmedNonEmptyString,
   acceptance: FactoryKnowledgeAcceptance,
   current: Schema.Boolean,
   repository: FactoryRepository,
@@ -236,6 +241,8 @@ export const FactoryArtifactDeliveryGrantInput = Schema.Struct({
   commandId: TrimmedNonEmptyString,
   expectedArtifactSha256: TrimmedNonEmptyString,
   expectedPayloadDigest: TrimmedNonEmptyString,
+  // Echoed from the prepare result so the server re-renders the very body the grantor read.
+  attempt: TrimmedNonEmptyString,
   payload: FactoryDeliveryArtifactPayload,
 });
 export type FactoryArtifactDeliveryGrantInput = typeof FactoryArtifactDeliveryGrantInput.Type;

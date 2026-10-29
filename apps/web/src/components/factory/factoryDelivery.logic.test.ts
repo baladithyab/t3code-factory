@@ -446,6 +446,7 @@ describe("delivery narrowing", () => {
     body: "Findings",
     payload: { issueNumber: 53 },
     payloadDigest: "e".repeat(64),
+    attempt: "attempt-1",
     existing: null,
   } satisfies FactoryArtifactDeliveryPrepareResult;
   const commitPrepared = {
