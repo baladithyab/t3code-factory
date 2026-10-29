@@ -111,8 +111,9 @@ export function FactoryResearchSealDialog(props: {
     setDraft((previous) => ({ ...previous, [field]: value }));
     setErrors((previous) => {
       if (previous[field] === undefined) return previous;
-      const { [field]: _cleared, ...rest } = previous;
-      return rest;
+      const next = { ...previous };
+      delete next[field];
+      return next;
     });
   };
   const describedBy = (field: FactoryResearchSealField, hint: boolean) =>

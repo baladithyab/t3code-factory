@@ -1690,7 +1690,7 @@ function EnvironmentTasks({
     }
   };
 
-  const act = async (task: ScheduledTask, action: "run" | "toggle" | "delete") => {
+  const act = (task: ScheduledTask, action: "run" | "toggle" | "delete") => {
     if (
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
       pendingAction.current ||
@@ -1700,7 +1700,8 @@ function EnvironmentTasks({
       return;
     pendingAction.current = true;
     setPendingTaskId(task.id);
-    try {
+    // React Compiler cannot lower try/finally; the promise still releases the guard on rejection.
+    return (async () => {
       if (action === "run") {
         if (task.schedule.type === "webhook") return;
         const result = await runNow({ environmentId, input: { id: task.id } });
@@ -1735,10 +1736,10 @@ function EnvironmentTasks({
           ? await setEnabled({ environmentId, input: { id: task.id, enabled: !task.enabled } })
           : await remove({ environmentId, input: { id: task.id } });
       failure(`Could not ${action === "toggle" ? "update" : "delete"} task`, result);
-    } finally {
+    })().finally(() => {
       pendingAction.current = false;
       setPendingTaskId(null);
-    }
+    });
   };
 
   return (
