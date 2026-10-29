@@ -457,6 +457,7 @@ describe("factory authorization", () => {
           closeAcceptance: "close-reason" as const,
           publish: true,
           headPinnedMerge: true,
+          issueComment: true,
         },
         issues: [],
         nextPage: null,

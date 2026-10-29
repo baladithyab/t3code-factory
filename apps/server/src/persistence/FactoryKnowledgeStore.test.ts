@@ -131,6 +131,11 @@ it.effect("reserves one live launch per brief and restarts only once per command
     assert.equal(raced.intent.threadId, "thread:a");
     yield* store.accept(ThreadId.make("thread:a"));
     assert.equal(Option.getOrThrow(yield* store.getLaunch("brief:one")).accepted, 1);
+    assert.deepEqual(Option.getOrThrow(yield* store.getLaunchByThread(ThreadId.make("thread:a"))), {
+      ...first,
+      accepted: 1,
+    });
+    assert.isTrue(Option.isNone(yield* store.getLaunchByThread(ThreadId.make("thread:missing"))));
     assert.deepEqual(
       (yield* store.listLaunches(projectId)).map((binding) => binding.intent.threadId),
       ["thread:a"],
@@ -140,6 +145,11 @@ it.effect("reserves one live launch per brief and restarts only once per command
       previousThreadId: ThreadId.make("thread:a"),
     });
     assert.equal((yield* store.reserve(restart)).intent.threadId, "thread:c");
+    assert.isTrue(Option.isNone(yield* store.getLaunchByThread(ThreadId.make("thread:a"))));
+    assert.equal(
+      Option.getOrThrow(yield* store.getLaunchByThread(ThreadId.make("thread:c"))).intent.briefId,
+      "brief:one",
+    );
     // The same restart command replayed does not authorize a further attempt.
     const replay = intent("brief:one", "thread:d", {
       previousThreadId: ThreadId.make("thread:c"),

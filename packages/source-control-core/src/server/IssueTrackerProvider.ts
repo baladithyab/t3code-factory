@@ -57,6 +57,17 @@ export interface TrackerIssuePage {
   readonly nextPage: number | null;
 }
 
+export interface TrackerIssueComment {
+  readonly id: number;
+  readonly body: string;
+  readonly url: string;
+}
+
+export interface TrackerIssueCommentPage {
+  readonly comments: ReadonlyArray<TrackerIssueComment>;
+  readonly nextPage: number | null;
+}
+
 /**
  * The provider's static ceiling. `publish` and `headPinnedMerge` describe what the Factory delivery
  * path can guarantee through this host's change-request adapter; they sit beside the tracker
@@ -82,4 +93,15 @@ export interface IssueTrackerProviderApi {
   readonly getIssue: (
     input: TrackerRepositoryRef & { readonly number: number },
   ) => Effect.Effect<TrackerIssue, IssueTrackerProviderError>;
+  /**
+   * Present exactly when `capabilities.issueComment` is true. The caller composed `body` from
+   * bytes a person reviewed; the adapter posts it verbatim and returns the host's comment identity.
+   */
+  readonly commentOnIssue?: (
+    input: TrackerRepositoryRef & { readonly number: number; readonly body: string },
+  ) => Effect.Effect<TrackerIssueComment, IssueTrackerProviderError>;
+  /** Oldest first, so a reconcile walks the whole list without a clock. */
+  readonly listIssueComments?: (
+    input: TrackerRepositoryRef & { readonly number: number; readonly page: number },
+  ) => Effect.Effect<TrackerIssueCommentPage, IssueTrackerProviderError>;
 }

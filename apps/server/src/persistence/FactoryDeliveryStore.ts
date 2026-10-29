@@ -1,9 +1,14 @@
 import {
+  FactoryArtifactDeliveryIntent,
+  FactoryArtifactDeliveryRemote,
+  FactoryCommitDeliveryIntent,
+  FactoryDeliveryArtifactPayload,
+  FactoryDeliveryCommitPayload,
   FactoryDeliveryError,
   FactoryDeliveryIntent,
   FactoryDeliveryPayload,
   FactoryRepository,
-  type FactoryDeliveryKind,
+  type FactoryDeliveryCommitKind,
   type FactoryDeliveryStatus,
   type FactoryOriginKey,
   type ProjectId,
@@ -17,16 +22,25 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 const Remote = Schema.Struct({ number: Schema.Int, url: Schema.String });
-const StoredIntent = FactoryDeliveryIntent.mapFields((fields) => ({
+const StoredIntent = FactoryCommitDeliveryIntent.mapFields((fields) => ({
   ...fields,
   repository: Schema.fromJsonString(FactoryRepository),
-  payload: Schema.fromJsonString(FactoryDeliveryPayload),
+  payload: Schema.fromJsonString(FactoryDeliveryCommitPayload),
   remote: Schema.NullOr(Schema.fromJsonString(Remote)),
 }));
+const StoredArtifactIntent = FactoryArtifactDeliveryIntent.mapFields((fields) => ({
+  ...fields,
+  repository: Schema.fromJsonString(FactoryRepository),
+  payload: Schema.fromJsonString(FactoryDeliveryArtifactPayload),
+  remote: Schema.NullOr(Schema.fromJsonString(FactoryArtifactDeliveryRemote)),
+}));
 const decodeIntents = Schema.decodeUnknownEffect(Schema.Array(StoredIntent));
+const decodeArtifacts = Schema.decodeUnknownEffect(Schema.Array(StoredArtifactIntent));
 const encodeRepository = Schema.encodeEffect(Schema.fromJsonString(FactoryRepository));
 const encodePayload = Schema.encodeEffect(Schema.fromJsonString(FactoryDeliveryPayload));
-const encodeRemote = Schema.encodeEffect(Schema.fromJsonString(Remote));
+const encodeRemote = Schema.encodeEffect(
+  Schema.fromJsonString(Schema.Union([Remote, FactoryArtifactDeliveryRemote])),
+);
 const isDeliveryError = Schema.is(FactoryDeliveryError);
 const persistenceError = (cause: unknown) =>
   isDeliveryError(cause)
@@ -35,7 +49,7 @@ const persistenceError = (cause: unknown) =>
 
 export interface FactoryDeliverySettlement {
   readonly status: FactoryDeliveryStatus;
-  readonly remote?: { readonly number: number; readonly url: string };
+  readonly remote?: NonNullable<FactoryDeliveryIntent["remote"]>;
   readonly failure: string | null;
   readonly updatedAt: string;
 }
@@ -52,8 +66,12 @@ export class FactoryDeliveryStore extends Context.Service<
     /** The live intent (pending, sending, confirmed or unknown) of an origin and kind. */
     readonly getLive: (
       originKey: FactoryOriginKey,
-      kind: FactoryDeliveryKind,
-    ) => Effect.Effect<Option.Option<FactoryDeliveryIntent>, FactoryDeliveryError>;
+      kind: FactoryDeliveryCommitKind,
+    ) => Effect.Effect<Option.Option<FactoryCommitDeliveryIntent>, FactoryDeliveryError>;
+    readonly getLiveArtifact: (
+      originKey: FactoryOriginKey,
+      destinationKey: string,
+    ) => Effect.Effect<Option.Option<FactoryArtifactDeliveryIntent>, FactoryDeliveryError>;
     /** Newest first. */
     readonly listByThread: (
       threadId: ThreadId,
@@ -100,33 +118,56 @@ const make = Effect.gen(function* () {
     payload_digest AS payloadDigest, granted_by AS grantedBy, granted_at AS grantedAt,
     request_command_id AS requestCommandId, status, remote_json AS remote, failure,
     updated_at AS updatedAt`);
+  const artifactColumns = sql.literal(`id, origin_key AS originKey, thread_id AS threadId,
+    project_id AS projectId, kind, acceptance_id AS acceptanceId, brief_id AS briefId,
+    artifact_path AS artifactPath, artifact_sha256 AS artifactSha256, artifact_bytes AS artifactBytes,
+    repository_json AS repository, destination_key AS destinationKey, payload_json AS payload,
+    body, payload_digest AS payloadDigest, granted_by AS grantedBy, granted_at AS grantedAt,
+    request_command_id AS requestCommandId, status, remote_json AS remote, failure,
+    updated_at AS updatedAt`);
   const get = Effect.fn("FactoryDeliveryStore.get")(function* (id: string) {
-    const rows = yield* decodeIntents(
-      yield* sql`SELECT ${columns} FROM factory_delivery_intents WHERE id = ${id}`,
-    );
+    const rows: ReadonlyArray<FactoryDeliveryIntent> = [
+      ...(yield* decodeIntents(
+        yield* sql`SELECT ${columns} FROM factory_delivery_intents WHERE id = ${id}`,
+      )),
+      ...(yield* decodeArtifacts(
+        yield* sql`SELECT ${artifactColumns} FROM factory_artifact_deliveries WHERE id = ${id}`,
+      )),
+    ];
     return Option.fromNullishOr(rows[0]);
   }, Effect.mapError(persistenceError));
   const getInProject = Effect.fn("FactoryDeliveryStore.getInProject")(function* (
     projectId: ProjectId,
     id: string,
   ) {
-    const rows = yield* decodeIntents(
-      yield* sql`SELECT ${columns} FROM factory_delivery_intents
-        WHERE id = ${id} AND project_id = ${projectId}`,
-    );
+    const rows: ReadonlyArray<FactoryDeliveryIntent> = [
+      ...(yield* decodeIntents(
+        yield* sql`SELECT ${columns} FROM factory_delivery_intents
+          WHERE id = ${id} AND project_id = ${projectId}`,
+      )),
+      ...(yield* decodeArtifacts(
+        yield* sql`SELECT ${artifactColumns} FROM factory_artifact_deliveries
+          WHERE id = ${id} AND project_id = ${projectId}`,
+      )),
+    ];
     return Option.fromNullishOr(rows[0]);
   }, Effect.mapError(persistenceError));
   const getByCommand = Effect.fn("FactoryDeliveryStore.getByCommand")(function* (
     commandId: string,
   ) {
-    const rows = yield* decodeIntents(
-      yield* sql`SELECT ${columns} FROM factory_delivery_intents WHERE request_command_id = ${commandId}`,
-    );
+    const rows: ReadonlyArray<FactoryDeliveryIntent> = [
+      ...(yield* decodeIntents(
+        yield* sql`SELECT ${columns} FROM factory_delivery_intents WHERE request_command_id = ${commandId}`,
+      )),
+      ...(yield* decodeArtifacts(
+        yield* sql`SELECT ${artifactColumns} FROM factory_artifact_deliveries WHERE request_command_id = ${commandId}`,
+      )),
+    ];
     return Option.fromNullishOr(rows[0]);
   }, Effect.mapError(persistenceError));
   const getLive = Effect.fn("FactoryDeliveryStore.getLive")(function* (
     originKey: FactoryOriginKey,
-    kind: FactoryDeliveryKind,
+    kind: FactoryDeliveryCommitKind,
   ) {
     const rows = yield* decodeIntents(
       yield* sql`SELECT ${columns} FROM factory_delivery_intents
@@ -135,12 +176,39 @@ const make = Effect.gen(function* () {
     );
     return Option.fromNullishOr(rows[0]);
   }, Effect.mapError(persistenceError));
+  const getLiveArtifact = Effect.fn("FactoryDeliveryStore.getLiveArtifact")(function* (
+    originKey: FactoryOriginKey,
+    destinationKey: string,
+  ) {
+    const rows = yield* decodeArtifacts(
+      yield* sql`SELECT ${artifactColumns} FROM factory_artifact_deliveries
+        WHERE origin_key = ${originKey} AND destination_key = ${destinationKey}
+          AND kind = 'publish-artifact'
+          AND status IN ('pending', 'sending', 'confirmed', 'unknown')`,
+    );
+    return Option.fromNullishOr(rows[0]);
+  }, Effect.mapError(persistenceError));
   const listByThread = Effect.fn("FactoryDeliveryStore.listByThread")(function* (
     threadId: ThreadId,
   ) {
-    return yield* decodeIntents(
-      yield* sql`SELECT ${columns} FROM factory_delivery_intents
-        WHERE thread_id = ${threadId} ORDER BY granted_at DESC, id DESC`,
+    const rows: FactoryDeliveryIntent[] = [
+      ...(yield* decodeIntents(
+        yield* sql`SELECT ${columns} FROM factory_delivery_intents WHERE thread_id = ${threadId}`,
+      )),
+      ...(yield* decodeArtifacts(
+        yield* sql`SELECT ${artifactColumns} FROM factory_artifact_deliveries WHERE thread_id = ${threadId}`,
+      )),
+    ];
+    return rows.sort((a, b) =>
+      a.grantedAt === b.grantedAt
+        ? a.id === b.id
+          ? 0
+          : a.id < b.id
+            ? 1
+            : -1
+        : a.grantedAt < b.grantedAt
+          ? 1
+          : -1,
     );
   }, Effect.mapError(persistenceError));
   const grant = Effect.fn("FactoryDeliveryStore.grant")(function* (
@@ -170,21 +238,39 @@ const make = Effect.gen(function* () {
             return yield* new FactoryDeliveryError({ reason: "payload-changed" });
           return { intent: replay.value, created: false };
         }
-        if (Option.isSome(yield* getLive(intent.originKey, intent.kind)))
-          return yield* new FactoryDeliveryError({ reason: "already-delivering" });
+        const live =
+          intent.kind === "publish-artifact"
+            ? Option.isSome(yield* getLiveArtifact(intent.originKey, intent.destinationKey))
+            : Option.isSome(yield* getLive(intent.originKey, intent.kind));
+        if (live) return yield* new FactoryDeliveryError({ reason: "already-delivering" });
         yield* steps.recheck;
         // The partial unique index arbitrates a concurrent grant that slipped between the read
         // above and this insert; the loser reads its own row back as absent.
-        yield* sql`INSERT INTO factory_delivery_intents
-          (id, origin_key, thread_id, project_id, kind, acceptance_id, repository_json, base_ref,
-           base_sha, head_sha, payload_json, payload_digest, granted_by, granted_at,
-           request_command_id, status, remote_json, failure, updated_at)
-          VALUES (${intent.id}, ${intent.originKey}, ${intent.threadId}, ${intent.projectId},
-            ${intent.kind}, ${intent.acceptanceId}, ${repository}, ${intent.baseRef},
-            ${intent.baseSha}, ${intent.headSha}, ${payload}, ${intent.payloadDigest},
-            ${intent.grantedBy}, ${intent.grantedAt}, ${intent.requestCommandId}, 'pending',
-            ${remote}, NULL, ${intent.updatedAt})
-          ON CONFLICT DO NOTHING`;
+        if (intent.kind === "publish-artifact") {
+          yield* sql`INSERT INTO factory_artifact_deliveries
+            (id, origin_key, thread_id, project_id, kind, acceptance_id, brief_id, artifact_path,
+             artifact_sha256, artifact_bytes, repository_json, destination_key, payload_json,
+             body, payload_digest, granted_by, granted_at, request_command_id, status,
+             remote_json, failure, updated_at)
+            VALUES (${intent.id}, ${intent.originKey}, ${intent.threadId}, ${intent.projectId},
+              ${intent.kind}, ${intent.acceptanceId}, ${intent.briefId}, ${intent.artifactPath},
+              ${intent.artifactSha256}, ${intent.artifactBytes}, ${repository}, ${intent.destinationKey},
+              ${payload}, ${intent.body}, ${intent.payloadDigest}, ${intent.grantedBy},
+              ${intent.grantedAt}, ${intent.requestCommandId}, 'pending', ${remote}, NULL,
+              ${intent.updatedAt})
+            ON CONFLICT DO NOTHING`;
+        } else {
+          yield* sql`INSERT INTO factory_delivery_intents
+            (id, origin_key, thread_id, project_id, kind, acceptance_id, repository_json, base_ref,
+             base_sha, head_sha, payload_json, payload_digest, granted_by, granted_at,
+             request_command_id, status, remote_json, failure, updated_at)
+            VALUES (${intent.id}, ${intent.originKey}, ${intent.threadId}, ${intent.projectId},
+              ${intent.kind}, ${intent.acceptanceId}, ${repository}, ${intent.baseRef},
+              ${intent.baseSha}, ${intent.headSha}, ${payload}, ${intent.payloadDigest},
+              ${intent.grantedBy}, ${intent.grantedAt}, ${intent.requestCommandId}, 'pending',
+              ${remote}, NULL, ${intent.updatedAt})
+            ON CONFLICT DO NOTHING`;
+        }
         const stored = yield* getByCommand(intent.requestCommandId);
         if (Option.isNone(stored))
           return yield* new FactoryDeliveryError({ reason: "already-delivering" });
@@ -200,7 +286,10 @@ const make = Effect.gen(function* () {
     const rows = yield* sql<{ readonly id: string }>`UPDATE factory_delivery_intents
       SET status = 'sending', updated_at = ${updatedAt}
       WHERE id = ${id} AND status = 'pending' RETURNING id`;
-    return rows.length === 1;
+    const artifacts = yield* sql<{ readonly id: string }>`UPDATE factory_artifact_deliveries
+      SET status = 'sending', updated_at = ${updatedAt}
+      WHERE id = ${id} AND status = 'pending' RETURNING id`;
+    return rows.length + artifacts.length === 1;
   }, Effect.mapError(persistenceError));
   const settle = Effect.fn("FactoryDeliveryStore.settle")(function* (
     id: string,
@@ -213,6 +302,10 @@ const make = Effect.gen(function* () {
       SET status = ${settlement.status}, remote_json = COALESCE(${remote}, remote_json),
         failure = ${settlement.failure}, updated_at = ${settlement.updatedAt}
       WHERE id = ${id} AND status <> 'confirmed'`;
+    yield* sql`UPDATE factory_artifact_deliveries
+      SET status = ${settlement.status}, remote_json = COALESCE(${remote}, remote_json),
+        failure = ${settlement.failure}, updated_at = ${settlement.updatedAt}
+      WHERE id = ${id} AND status <> 'confirmed'`;
     return yield* get(id);
   }, Effect.mapError(persistenceError));
   const recoverInterrupted = Effect.fn("FactoryDeliveryStore.recoverInterrupted")(function* (
@@ -221,12 +314,16 @@ const make = Effect.gen(function* () {
     const rows = yield* sql<{ readonly id: string }>`UPDATE factory_delivery_intents
       SET status = 'unknown', failure = 'server restarted during send', updated_at = ${updatedAt}
       WHERE status = 'sending' RETURNING id`;
-    return rows.length;
+    const artifacts = yield* sql<{ readonly id: string }>`UPDATE factory_artifact_deliveries
+      SET status = 'unknown', failure = 'server restarted during send', updated_at = ${updatedAt}
+      WHERE status = 'sending' RETURNING id`;
+    return rows.length + artifacts.length;
   }, Effect.mapError(persistenceError));
   return FactoryDeliveryStore.of({
     get,
     getByCommand,
     getLive,
+    getLiveArtifact,
     listByThread,
     getInProject,
     grant,

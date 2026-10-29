@@ -10,8 +10,10 @@ import {
   SourceControlProviderKind,
   ThreadId,
   type FactoryAcceptance,
-  type FactoryDeliveryIntent,
-  type FactoryDeliveryPrepareResult,
+  type FactoryArtifactDeliveryIntent,
+  type FactoryArtifactDeliveryPrepareResult,
+  type FactoryCommitDeliveryIntent,
+  type FactoryCommitDeliveryPrepareResult,
   type FactoryDeliveryPullRequest,
   type FactoryIssue,
   type FactoryIssueCapabilities,
@@ -24,10 +26,15 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   applyFactoryIssuePage,
   describeFactoryAcceptanceFailure,
+  describeFactoryArtifactDeliveryFailure,
   describeFactoryDeliveryFailure,
   describeFactoryFailure,
   describeFactoryMergeFailure,
   EMPTY_FACTORY_ISSUE_PAGES,
+  FACTORY_ARTIFACT_ALREADY_DELIVERING,
+  FACTORY_ARTIFACT_CHANGED,
+  FACTORY_ARTIFACT_NOT_ACCEPTED,
+  FACTORY_ARTIFACT_PAYLOAD_CHANGED,
   FACTORY_DELIVERY_ALREADY_DELIVERING,
   FACTORY_DELIVERY_HEAD_MOVED,
   FACTORY_DELIVERY_PAYLOAD_CHANGED,
@@ -39,9 +46,19 @@ import {
   FACTORY_MERGE_NOT_PUBLISHED,
   FACTORY_MERGE_PR_HEAD_MOVED,
   factoryAcceptanceView,
+  factoryArtifactDeliveryStatusView,
+  factoryArtifactDestinationText,
+  factoryArtifactGrantBlocker,
+  factoryDeliveryStatusView,
+  factoryIssueCommentUnsupportedText,
+  isFactoryCommitIntent,
+  isFactoryArtifactIntent,
+  isFactoryArtifactPrepareResult,
+  isFactoryArtifactReconcilable,
+  liveFactoryArtifactIntent,
+  parseFactoryIssueNumber,
   factoryDeliveryDefaultPayload,
   factoryDeliveryGrantBlocker,
-  factoryDeliveryStatusView,
   factoryMergeGrantBlocker,
   factoryMergeabilityLabel,
   factoryPublishUnsupportedText,
@@ -98,6 +115,7 @@ const githubCapabilities: FactoryIssueCapabilities = {
   closeAcceptance: "close-reason",
   publish: true,
   headPinnedMerge: true,
+  issueComment: true,
 };
 
 const gitlabCapabilities: FactoryIssueCapabilities = {
@@ -108,6 +126,7 @@ const gitlabCapabilities: FactoryIssueCapabilities = {
   closeAcceptance: "none",
   publish: false,
   headPinnedMerge: false,
+  issueComment: false,
 };
 
 function page(issues: FactoryIssue[], nextPage: number | null): FactoryIssueListResult {
@@ -421,7 +440,7 @@ describe("factory delivery", () => {
     acceptedBy: EnvironmentId.make("environment-1"),
     evidenceRefs: [],
   };
-  const prepared: FactoryDeliveryPrepareResult = {
+  const prepared: FactoryCommitDeliveryPrepareResult = {
     acceptance,
     current: true,
     repository,
@@ -432,7 +451,9 @@ describe("factory delivery", () => {
     existing: null,
     pullRequest: null,
   };
-  function intent(overrides: Partial<FactoryDeliveryIntent> = {}): FactoryDeliveryIntent {
+  function intent(
+    overrides: Partial<FactoryCommitDeliveryIntent> = {},
+  ): FactoryCommitDeliveryIntent {
     return {
       id: "intent-1",
       originKey: acceptance.originKey,
@@ -639,7 +660,7 @@ describe("factory delivery", () => {
       checksSummary: "3 passed",
       mergeMethods: ["merge", "squash", "rebase"],
     };
-    const mergePrepared: FactoryDeliveryPrepareResult = {
+    const mergePrepared: FactoryCommitDeliveryPrepareResult = {
       ...prepared,
       payload: { mergeMethod: "squash" },
       pullRequest,
@@ -792,6 +813,273 @@ describe("factory delivery", () => {
           displayName,
         ).title,
       ).toBe("Couldn't merge");
+    });
+  });
+
+  describe("artifact", () => {
+    const sha = "e".repeat(64);
+    const artifactPrepared: FactoryArtifactDeliveryPrepareResult = {
+      acceptance: {
+        id: "knowledge-acceptance-1",
+        briefId: "brief-1",
+        threadId: acceptance.threadId,
+        projectId: acceptance.projectId,
+        artifactPath: "answer.md",
+        sha256: sha,
+        bytes: 14,
+        acceptedAt: "2026-01-01T00:00:00.000Z",
+        acceptedBy: acceptance.acceptedBy,
+      },
+      current: true,
+      repository,
+      destination: {
+        number: 7,
+        title: "Docs\u202E gap",
+        state: "open",
+        url: "https://github.com/owner/name/issues/7",
+      },
+      destinationKey: "comment:github:github.com/owner/name#7",
+      artifactSha256: sha,
+      artifactBytes: 14,
+      body: "# Answer\n\nbody",
+      payload: { issueNumber: 7 },
+      payloadDigest: "f".repeat(64),
+      existing: null,
+    };
+    function artifactIntent(
+      overrides: Partial<FactoryArtifactDeliveryIntent> = {},
+    ): FactoryArtifactDeliveryIntent {
+      return {
+        id: "artifact-intent-1",
+        originKey: acceptance.originKey,
+        threadId: acceptance.threadId,
+        projectId: acceptance.projectId,
+        kind: "publish-artifact",
+        acceptanceId: artifactPrepared.acceptance.id,
+        briefId: "brief-1",
+        artifactPath: "answer.md",
+        artifactSha256: sha,
+        artifactBytes: 14,
+        repository,
+        destinationKey: artifactPrepared.destinationKey,
+        payload: { issueNumber: 7 },
+        body: artifactPrepared.body,
+        payloadDigest: artifactPrepared.payloadDigest,
+        grantedBy: acceptance.acceptedBy,
+        grantedAt: "2026-01-01T00:00:00.000Z",
+        requestCommandId: "command-2",
+        status: "pending",
+        remote: null,
+        failure: null,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+      };
+    }
+    const grantable = {
+      permitted: true,
+      acceptedSha256: sha,
+      issueNumber: 7,
+      liveIntent: null,
+      prepared: artifactPrepared,
+    };
+
+    it("tells an artifact apart from a commit by the digest it carries", () => {
+      expect(isFactoryArtifactPrepareResult(artifactPrepared)).toBe(true);
+      expect(isFactoryArtifactPrepareResult(prepared)).toBe(false);
+      expect(isFactoryArtifactIntent(artifactIntent())).toBe(true);
+      expect(isFactoryArtifactIntent(intent())).toBe(false);
+      expect(isFactoryCommitIntent(intent())).toBe(true);
+      expect(isFactoryCommitIntent(artifactIntent())).toBe(false);
+    });
+
+    it("accepts only a positive whole issue number", () => {
+      expect(parseFactoryIssueNumber("7")).toBe(7);
+      expect(parseFactoryIssueNumber(" 12 ")).toBe(12);
+      for (const text of ["", "0", "07", "-1", "1.5", "1e3", "#7", "1234567890"]) {
+        expect(parseFactoryIssueNumber(text)).toBeNull();
+      }
+    });
+
+    it("grants only the exact current preview for the typed issue", () => {
+      expect(factoryArtifactGrantBlocker(grantable)).toBeNull();
+      expect(factoryArtifactGrantBlocker({ ...grantable, prepared: null })).toBe(
+        "Prepare a preview before granting.",
+      );
+      expect(factoryArtifactGrantBlocker({ ...grantable, permitted: false })).toContain(
+        "isn't permitted",
+      );
+      // Typing another issue after Prepare is an edit the preview does not cover.
+      expect(factoryArtifactGrantBlocker({ ...grantable, issueNumber: 8 })).toBe(
+        FACTORY_ARTIFACT_PAYLOAD_CHANGED,
+      );
+      expect(factoryArtifactGrantBlocker({ ...grantable, issueNumber: null })).toBe(
+        FACTORY_ARTIFACT_PAYLOAD_CHANGED,
+      );
+    });
+
+    it("refuses a grant whose preview no longer matches the accepted bytes", () => {
+      expect(
+        factoryArtifactGrantBlocker({
+          ...grantable,
+          prepared: { ...artifactPrepared, current: false },
+        }),
+      ).toBe(FACTORY_ARTIFACT_CHANGED);
+      expect(factoryArtifactGrantBlocker({ ...grantable, acceptedSha256: "1".repeat(64) })).toBe(
+        FACTORY_ARTIFACT_CHANGED,
+      );
+    });
+
+    it("allows one live comment per issue, but a failed one can be granted again", () => {
+      for (const status of ["pending", "sending", "unknown"] as const) {
+        expect(
+          factoryArtifactGrantBlocker({ ...grantable, liveIntent: artifactIntent({ status }) }),
+        ).toBe(FACTORY_ARTIFACT_ALREADY_DELIVERING);
+      }
+      expect(
+        factoryArtifactGrantBlocker({
+          ...grantable,
+          liveIntent: artifactIntent({ status: "confirmed" }),
+        }),
+      ).toBe("This deliverable was already posted on that issue.");
+      expect(
+        factoryArtifactGrantBlocker({
+          ...grantable,
+          prepared: { ...artifactPrepared, existing: artifactIntent({ status: "sending" }) },
+        }),
+      ).toBe(FACTORY_ARTIFACT_ALREADY_DELIVERING);
+      expect(
+        factoryArtifactGrantBlocker({
+          ...grantable,
+          prepared: { ...artifactPrepared, existing: artifactIntent({ status: "failed" }) },
+        }),
+      ).toBeNull();
+    });
+
+    it("finds the live comment for the typed issue only", () => {
+      const onSeven = artifactIntent({ id: "seven", status: "confirmed" });
+      const failedOnEight = artifactIntent({
+        id: "eight",
+        status: "failed",
+        payload: { issueNumber: 8 },
+      });
+      const onNine = artifactIntent({ id: "nine", payload: { issueNumber: 9 } });
+      const all = [onSeven, failedOnEight, onNine];
+      expect(liveFactoryArtifactIntent(all, 7)).toBe(onSeven);
+      expect(liveFactoryArtifactIntent(all, 8)).toBeNull();
+      expect(liveFactoryArtifactIntent(all, 9)).toBe(onNine);
+      expect(liveFactoryArtifactIntent(all, 10)).toBeNull();
+      expect(liveFactoryArtifactIntent(all, null)).toBeNull();
+    });
+
+    it("describes each comment status and links only an https comment", () => {
+      expect(factoryArtifactDeliveryStatusView(artifactIntent({ status: "sending" }))).toEqual({
+        kind: "in-progress",
+        text: "Posting comment on issue #7…",
+      });
+      const comment = { commentId: 99, url: "https://github.com/owner/name/issues/7#c-99" };
+      expect(
+        factoryArtifactDeliveryStatusView(artifactIntent({ status: "confirmed", remote: comment })),
+      ).toEqual({
+        kind: "confirmed",
+        text: "Posted comment on issue #7",
+        link: { label: "Open comment", url: comment.url },
+      });
+      expect(
+        factoryArtifactDeliveryStatusView(
+          artifactIntent({ status: "confirmed", remote: { ...comment, url: "http://x.test" } }),
+        ),
+      ).toMatchObject({ link: null });
+      expect(
+        factoryArtifactDeliveryStatusView(artifactIntent({ status: "failed", failure: "boom" })),
+      ).toEqual({ kind: "failed", text: "boom" });
+      expect(factoryArtifactDeliveryStatusView(artifactIntent({ status: "failed" })).text).toBe(
+        "Posting the comment failed.",
+      );
+      // The host comes from the repository the comment was granted for.
+      expect(factoryArtifactDeliveryStatusView(artifactIntent({ status: "unknown" }))).toEqual({
+        kind: "unknown",
+        text: "The server lost the response. Reconcile to check github.com.",
+      });
+    });
+
+    it("routes the shared status view to the comment wording", () => {
+      expect(factoryDeliveryStatusView(artifactIntent({ status: "pending" }), "GitHub").text).toBe(
+        "Posting comment on issue #7…",
+      );
+    });
+
+    it("offers Reconcile for an unknown or failed comment only", () => {
+      expect(isFactoryArtifactReconcilable(artifactIntent({ status: "unknown" }))).toBe(true);
+      expect(isFactoryArtifactReconcilable(artifactIntent({ status: "failed" }))).toBe(true);
+      for (const status of ["pending", "sending", "confirmed"] as const) {
+        expect(isFactoryArtifactReconcilable(artifactIntent({ status }))).toBe(false);
+      }
+    });
+
+    it("names the destination issue with its title made safe", () => {
+      expect(factoryArtifactDestinationText(artifactPrepared.destination)).toBe(
+        "#7 Docs gap (open)",
+      );
+    });
+
+    it("maps comment refusals to the next step a person can take", () => {
+      const cases = [
+        ["artifact-changed", FACTORY_ARTIFACT_CHANGED],
+        ["acceptance-stale", FACTORY_ARTIFACT_CHANGED],
+        ["payload-changed", FACTORY_ARTIFACT_PAYLOAD_CHANGED],
+        ["already-delivering", FACTORY_ARTIFACT_ALREADY_DELIVERING],
+        ["not-accepted", FACTORY_ARTIFACT_NOT_ACCEPTED],
+      ] as const;
+      for (const [reason, detail] of cases) {
+        expect(
+          describeFactoryArtifactDeliveryFailure(new FactoryDeliveryError({ reason }), "GitHub")
+            .detail,
+        ).toBe(detail);
+      }
+      for (const reason of ["artifact-too-large", "artifact-not-text"] as const) {
+        const error = new FactoryDeliveryError({ reason });
+        expect(describeFactoryArtifactDeliveryFailure(error, "GitHub")).toEqual({
+          kind: "error",
+          title: "Can't post this deliverable",
+          detail: error.message,
+        });
+      }
+      expect(
+        describeFactoryArtifactDeliveryFailure(
+          new FactoryDeliveryError({ reason: "destination-not-found" }),
+          "GitHub",
+        ),
+      ).toMatchObject({ kind: "repository", title: "Issue not found" });
+      expect(
+        describeFactoryArtifactDeliveryFailure(
+          new FactoryDeliveryError({ reason: "persistence-failure" }),
+          "GitHub",
+        ).title,
+      ).toBe("Couldn't post the comment");
+      expect(
+        describeFactoryArtifactDeliveryFailure(
+          new EnvironmentAuthorizationError({
+            message: "nope",
+            requiredScope: "source-control:write",
+          }),
+          "GitHub",
+        ).kind,
+      ).toBe("auth");
+    });
+
+    it("names the host in the one-line unsupported text, or stays neutral", () => {
+      const error = new FactoryDeliveryError({ reason: "capability-unsupported" });
+      expect(factoryIssueCommentUnsupportedText("GitLab")).toBe(
+        "GitLab does not support issue comments yet.",
+      );
+      expect(describeFactoryArtifactDeliveryFailure(error, "GitLab")).toEqual({
+        kind: "unsupported",
+        title: "Not supported",
+        detail: "GitLab does not support issue comments yet.",
+      });
+      expect(describeFactoryArtifactDeliveryFailure(error, null).detail).toBe(
+        "This repository's host does not support issue comments yet.",
+      );
     });
   });
 });

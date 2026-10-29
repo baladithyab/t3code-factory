@@ -6,9 +6,14 @@ import {
   FactoryIssueError,
   type FactoryAcceptance,
   type FactoryAcceptanceReadResult,
+  type FactoryArtifactDeliveryIntent,
+  type FactoryArtifactDeliveryPrepareResult,
+  type FactoryCommitDeliveryIntent,
+  type FactoryCommitDeliveryPrepareResult,
+  type FactoryDeliveryCommitPayload,
+  type FactoryDeliveryDestinationIssue,
   type FactoryDeliveryIntent,
   type FactoryDeliveryMergePayload,
-  type FactoryDeliveryPayload,
   type FactoryDeliveryPrepareResult,
   type FactoryDeliveryPublishPayload,
   type FactoryIssue,
@@ -381,9 +386,29 @@ export function isLiveFactoryDelivery(intent: FactoryDeliveryIntent): boolean {
 
 // Stored publish payloads have no merge method, which is what tells the two shapes apart.
 export function isFactoryMergePayload(
-  payload: FactoryDeliveryPayload,
+  payload: FactoryDeliveryCommitPayload,
 ): payload is FactoryDeliveryMergePayload {
   return "mergeMethod" in payload;
+}
+
+// A prepare answers one of two shapes; only an artifact preview carries the artifact digest.
+export function isFactoryArtifactPrepareResult(
+  result: FactoryDeliveryPrepareResult,
+): result is FactoryArtifactDeliveryPrepareResult {
+  return "artifactSha256" in result;
+}
+
+export function isFactoryArtifactIntent(
+  intent: FactoryDeliveryIntent,
+): intent is FactoryArtifactDeliveryIntent {
+  return intent.kind === "publish-artifact";
+}
+
+// A commit-backed row: the pull request and merge sections never show a comment row.
+export function isFactoryCommitIntent(
+  intent: FactoryDeliveryIntent,
+): intent is FactoryCommitDeliveryIntent {
+  return intent.kind !== "publish-artifact";
 }
 
 /**
@@ -394,8 +419,8 @@ export function factoryDeliveryGrantBlocker(input: {
   readonly permitted: boolean;
   readonly acceptedHeadSha: string | null;
   readonly acceptanceCurrent: boolean;
-  readonly liveIntent: FactoryDeliveryIntent | null;
-  readonly prepared: FactoryDeliveryPrepareResult | null;
+  readonly liveIntent: FactoryCommitDeliveryIntent | null;
+  readonly prepared: FactoryCommitDeliveryPrepareResult | null;
   readonly draft: FactoryDeliveryPublishPayload;
 }): string | null {
   if (!input.permitted) {
@@ -448,7 +473,7 @@ export const FACTORY_MERGE_METHOD_CHANGED =
 export const factoryMergeDraft = (displayName: string) =>
   `The pull request is a draft. Mark it ready for review on ${displayName}, then prepare again.`;
 
-type FactoryMergePullRequest = NonNullable<FactoryDeliveryPrepareResult["pullRequest"]>;
+type FactoryMergePullRequest = NonNullable<FactoryCommitDeliveryPrepareResult["pullRequest"]>;
 
 export function factoryMergeabilityLabel(
   mergeability: PullRequestMergeability,
@@ -496,8 +521,8 @@ export function factoryMergeGrantBlocker(input: {
   readonly permitted: boolean;
   readonly acceptedHeadSha: string | null;
   readonly acceptanceCurrent: boolean;
-  readonly liveIntent: FactoryDeliveryIntent | null;
-  readonly prepared: FactoryDeliveryPrepareResult | null;
+  readonly liveIntent: FactoryCommitDeliveryIntent | null;
+  readonly prepared: FactoryCommitDeliveryPrepareResult | null;
   readonly mergeMethod: PullRequestMergeMethod;
   readonly displayName: string;
 }): string | null {
@@ -553,11 +578,15 @@ export type FactoryDeliveryStatusView =
   | { readonly kind: "failed"; readonly text: string }
   | { readonly kind: "unknown"; readonly text: string };
 
-/** Publish and merge rows share a list shape, so each says which act it records. */
+/**
+ * Publish, merge, and comment rows share a list shape, so each says which act it records. A
+ * comment names its host by the repository it was granted for, never by a guessed display name.
+ */
 export function factoryDeliveryStatusView(
   intent: FactoryDeliveryIntent,
   displayName: string,
 ): FactoryDeliveryStatusView {
+  if (isFactoryArtifactIntent(intent)) return factoryArtifactDeliveryStatusView(intent);
   const merge = intent.kind === "merge-pr";
   switch (intent.status) {
     case "pending":
@@ -687,4 +716,163 @@ export function describeFactoryMergeFailure(error: unknown, displayName: string)
     }
   }
   return describeFactoryFailure(error, "Couldn't merge", displayName);
+}
+
+export const FACTORY_ARTIFACT_ALREADY_DELIVERING =
+  "A comment with this deliverable is already being posted, or was posted, on that issue.";
+export const FACTORY_ARTIFACT_CHANGED =
+  "The deliverable changed since it was accepted. Re-accept it, then prepare again.";
+export const FACTORY_ARTIFACT_PAYLOAD_CHANGED =
+  "The issue number changed since the preview. Prepare again.";
+export const FACTORY_ARTIFACT_NOT_ACCEPTED =
+  "Accept the current artifact before posting it as an issue comment.";
+
+/** A host that cannot comment on issues gets this one line instead of a preview. */
+export const factoryIssueCommentUnsupportedText = (displayName: string | null) =>
+  `${displayName ?? "This repository's host"} does not support issue comments yet.`;
+
+/** The issue number a person typed, or null while it is not a positive whole number. */
+export function parseFactoryIssueNumber(text: string): number | null {
+  const trimmed = text.trim();
+  if (!/^[1-9][0-9]{0,8}$/.test(trimmed)) return null;
+  return Number(trimmed);
+}
+
+/** Reconcile reads the host for an `unknown` or `failed` comment; it never posts again. */
+export function isFactoryArtifactReconcilable(intent: FactoryArtifactDeliveryIntent): boolean {
+  return intent.status === "unknown" || intent.status === "failed";
+}
+
+/** One live comment per destination: a comment on another issue never blocks this one. */
+export function liveFactoryArtifactIntent(
+  intents: ReadonlyArray<FactoryArtifactDeliveryIntent>,
+  issueNumber: number | null,
+): FactoryArtifactDeliveryIntent | null {
+  if (issueNumber === null) return null;
+  return (
+    intents.find(
+      (intent) => intent.payload.issueNumber === issueNumber && isLiveFactoryDelivery(intent),
+    ) ?? null
+  );
+}
+
+export function factoryArtifactDeliveryStatusView(
+  intent: FactoryArtifactDeliveryIntent,
+): FactoryDeliveryStatusView {
+  const issue = intent.payload.issueNumber;
+  switch (intent.status) {
+    case "pending":
+    case "sending":
+      return { kind: "in-progress", text: `Posting comment on issue #${issue}…` };
+    case "confirmed": {
+      const url = intent.remote === null ? null : safeFactoryIssueUrl(intent.remote.url);
+      return {
+        kind: "confirmed",
+        text: `Posted comment on issue #${issue}`,
+        link: url === null ? null : { label: "Open comment", url },
+      };
+    }
+    case "failed":
+      return { kind: "failed", text: intent.failure ?? "Posting the comment failed." };
+    case "unknown":
+      return {
+        kind: "unknown",
+        text: `The server lost the response. Reconcile to check ${intent.repository.host}.`,
+      };
+  }
+}
+
+/** The destination as the host reports it now, so a person sees where the comment lands. */
+export function factoryArtifactDestinationText(destination: FactoryDeliveryDestinationIssue) {
+  const title = safeFactoryIssueText(destination.title, 240) || "Untitled issue";
+  return `#${destination.number} ${title} (${destination.state})`;
+}
+
+/**
+ * Why Grant publish is unavailable for an artifact, or null when it may be pressed. The grant
+ * echoes the last preview's artifact digest and payload digest, so anything that would make the
+ * server refuse it is stated here before the tap. `liveIntent` is the live comment for the
+ * typed issue only: a comment on another issue never blocks this one.
+ */
+export function factoryArtifactGrantBlocker(input: {
+  readonly permitted: boolean;
+  readonly acceptedSha256: string | null;
+  readonly issueNumber: number | null;
+  readonly liveIntent: FactoryArtifactDeliveryIntent | null;
+  readonly prepared: FactoryArtifactDeliveryPrepareResult | null;
+}): string | null {
+  if (!input.permitted) {
+    return "This connection isn't permitted to publish issue comments in this environment.";
+  }
+  if (input.liveIntent !== null) {
+    return input.liveIntent.status === "confirmed"
+      ? "This deliverable was already posted on that issue."
+      : FACTORY_ARTIFACT_ALREADY_DELIVERING;
+  }
+  const { prepared } = input;
+  if (prepared === null) return "Prepare a preview before granting.";
+  if (!prepared.current || prepared.artifactSha256 !== input.acceptedSha256) {
+    return FACTORY_ARTIFACT_CHANGED;
+  }
+  if (prepared.existing !== null && isLiveFactoryDelivery(prepared.existing)) {
+    return FACTORY_ARTIFACT_ALREADY_DELIVERING;
+  }
+  if (input.issueNumber === null || prepared.payload.issueNumber !== input.issueNumber) {
+    return FACTORY_ARTIFACT_PAYLOAD_CHANGED;
+  }
+  return null;
+}
+
+/**
+ * Maps a refused comment preview, grant, or reconcile to the next step. `displayName` is null
+ * when no issue read has named the host, so the unsupported line stays host-neutral.
+ */
+export function describeFactoryArtifactDeliveryFailure(
+  error: unknown,
+  displayName: string | null,
+): FactoryFailure {
+  if (isFactoryDeliveryError(error)) {
+    switch (error.reason) {
+      case "artifact-changed":
+      case "acceptance-stale":
+        return { kind: "changed", title: "Deliverable changed", detail: FACTORY_ARTIFACT_CHANGED };
+      case "payload-changed":
+        return {
+          kind: "changed",
+          title: "Preview changed",
+          detail: FACTORY_ARTIFACT_PAYLOAD_CHANGED,
+        };
+      case "already-delivering":
+        return {
+          kind: "changed",
+          title: "Already posting",
+          detail: FACTORY_ARTIFACT_ALREADY_DELIVERING,
+        };
+      case "not-accepted":
+        return {
+          kind: "changed",
+          title: "No accepted artifact",
+          detail: FACTORY_ARTIFACT_NOT_ACCEPTED,
+        };
+      case "artifact-too-large":
+      case "artifact-not-text":
+        return { kind: "error", title: "Can't post this deliverable", detail: error.message };
+      case "destination-not-found":
+        return {
+          kind: "repository",
+          title: "Issue not found",
+          detail:
+            "That number is not an issue in this project's repository. Check the number, then prepare again.",
+        };
+      case "capability-unsupported":
+        return {
+          kind: "unsupported",
+          title: "Not supported",
+          detail: factoryIssueCommentUnsupportedText(displayName),
+        };
+      default:
+        return { kind: "error", title: "Couldn't post the comment", detail: error.message };
+    }
+  }
+  return describeFactoryFailure(error, "Couldn't post the comment", displayName ?? undefined);
 }

@@ -201,6 +201,7 @@ const capabilities: FactoryIssueCapabilities = {
   closeAcceptance: "close-reason",
   publish: true,
   headPinnedMerge: true,
+  issueComment: true,
 };
 
 const openEdge: FactoryReadinessEdge = {

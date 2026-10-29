@@ -188,6 +188,7 @@ export const make = Effect.gen(function* () {
       closeAcceptance: "none",
       publish: false,
       headPinnedMerge: false,
+      issueComment: false,
     },
     repositoryPath: (path) => {
       const segments = path.split("/");

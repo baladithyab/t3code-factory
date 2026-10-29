@@ -145,7 +145,7 @@ make your first commit before pushing.
 ## Factory
 
 Open **Factory** in the sidebar or command palette. Its sections are **Overview**, **Issues**,
-**Sources**, **Research**, **Workflows**, and **Orchestrator**. **Sessions** and **New thread** still open
+**Briefs**, **Sources**, **Research**, **Workflows**, and **Orchestrator**. **Sessions** and **New thread** still open
 ordinary conversations; you do not need an orchestrator to use them.
 
 ### Choose the scope
@@ -344,6 +344,18 @@ be missing some. Assignees are shown for context and never change a verdict.
 This is a planning view, not a queue: it does not pick a next issue, order work, or start
 anything, and there is no batch action. Agents can read the same list with the read-only
 `factory_read_issue_frontier`.
+
+### Briefs
+
+Open **Factory → Briefs** to write a knowledge brief, review its frozen revision, and start a task
+that writes its deliverable in its own folder. Once you accept the deliverable, you can publish it
+as one comment on an issue of the project's GitHub `origin` repository: choose the issue number,
+and T3 Code shows that issue and the exact comment it will post, the accepted file followed by a
+line naming the brief and the file's digest. You review that text but never edit it, and nothing
+is posted until you grant it, which needs `source-control:write`; a deliverable that changed since
+you accepted it must be accepted again first. If GitHub's answer is lost, the delivery shows as
+unknown and is never posted again on its own; **Reconcile** looks for the comment on the issue and
+settles it. GitLab issues cannot receive deliveries yet.
 
 ### Start a task from a feed item
 

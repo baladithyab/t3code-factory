@@ -16,6 +16,7 @@ const capabilities = {
     closeAcceptance: "close-reason",
     publish: true,
     headPinnedMerge: true,
+    issueComment: true,
   },
   gitlab: {
     displayName: "GitLab",
@@ -24,19 +25,31 @@ const capabilities = {
     closeAcceptance: "none",
     publish: false,
     headPinnedMerge: false,
+    issueComment: false,
   },
 } satisfies Record<string, IssueTrackerCapabilities>;
 
 /** A tracker whose host calls die unless a test supplies them. */
 export const fakeIssueTracker = (
   kind: keyof typeof capabilities,
-  calls: Partial<Pick<IssueTrackerProviderApi, "listIssues" | "getIssue">> = {},
+  calls: Partial<
+    Pick<
+      IssueTrackerProviderApi,
+      "listIssues" | "getIssue" | "commentOnIssue" | "listIssueComments"
+    >
+  > = {},
 ): IssueTrackerProviderApi => ({
   kind: SourceControlProviderKind.make(kind),
   capabilities: capabilities[kind],
   repositoryPath: (path) => path,
   listIssues: () => Effect.die(`Unexpected ${kind} issue listing`),
   getIssue: () => Effect.die(`Unexpected ${kind} issue read`),
+  ...(capabilities[kind].issueComment
+    ? {
+        commentOnIssue: () => Effect.die(`Unexpected ${kind} issue comment`),
+        listIssueComments: () => Effect.die(`Unexpected ${kind} comment listing`),
+      }
+    : {}),
   ...calls,
 });
 

@@ -74,6 +74,7 @@ it.effect("normalizes issues and filters PRs while retaining Link pagination", (
       closeAcceptance: "close-reason",
       publish: true,
       headPinnedMerge: true,
+      issueComment: true,
     });
   }),
 );
@@ -184,6 +185,125 @@ it.effect.each([
     assert.equal(failure.reason, reason);
     assert.equal(failure.cause, error);
     if ("retryAt" in error) assert.equal(failure.retryAt, 1234);
+  }),
+);
+
+const comment = {
+  id: 6489487402,
+  body: "Delivered\n<!-- t3-factory-delivery acceptance=a sha256=b -->",
+  html_url: "https://github.com/owner/project/issues/12#issuecomment-6489487402",
+  user: { login: "someone" },
+};
+
+it.effect("posts the body verbatim as one comment and returns the host's identity", () =>
+  Effect.gen(function* () {
+    const requests: GitHubRest.GitHubRestInput[] = [];
+    const tracker = yield* make((input) => {
+      requests.push(input);
+      return response(comment, { status: 201 });
+    });
+    const created = yield* tracker.commentOnIssue({
+      ...repository,
+      number: 12,
+      body: comment.body,
+    });
+    assert.deepEqual(created, { id: comment.id, body: comment.body, url: comment.html_url });
+    assert.deepEqual(requests, [
+      {
+        host: "github.com",
+        operation: "issues.comment",
+        path: "repos/owner/project/issues/12/comments",
+        method: "POST",
+        body: { body: comment.body },
+        allowReserve: true,
+      },
+    ]);
+  }),
+);
+
+it.effect("lists comments oldest first a hundred at a time and follows Link rel=next", () =>
+  Effect.gen(function* () {
+    const requests: GitHubRest.GitHubRestInput[] = [];
+    const tracker = yield* make((input) => {
+      requests.push(input);
+      return input.path.endsWith("page=1")
+        ? response([comment, { ...comment, id: 7, body: "later" }], {
+            headers: {
+              link: '<https://api.github.com/repositories/1/issues/12/comments?page=2>; rel="next", <https://api.github.com/repositories/1/issues/12/comments?page=2>; rel="last"',
+            },
+          })
+        : response([]);
+    });
+    assert.deepEqual(yield* tracker.listIssueComments({ ...repository, number: 12, page: 1 }), {
+      comments: [
+        { id: comment.id, body: comment.body, url: comment.html_url },
+        { id: 7, body: "later", url: comment.html_url },
+      ],
+      nextPage: 2,
+    });
+    assert.deepEqual(yield* tracker.listIssueComments({ ...repository, number: 12, page: 2 }), {
+      comments: [],
+      nextPage: null,
+    });
+    assert.deepEqual(
+      requests.map(({ method, path, operation }) => ({ method, path, operation })),
+      [1, 2].map((page) => ({
+        method: undefined,
+        path: `repos/owner/project/issues/12/comments?per_page=100&page=${page}`,
+        operation: "issues.comments.list",
+      })),
+    );
+  }),
+);
+
+it.effect.each([
+  { error: new GitHubApiNotFoundError(context), reason: "not-found" },
+  { error: new GitHubApiAuthenticationError(context), reason: "unauthenticated" },
+  { error: new GitHubApiRateLimitError({ ...context, retryAt: 1234 }), reason: "rate-limited" },
+  // The delivery outbox reads the status off the cause to tell a refusal from a lost answer.
+  { error: new GitHubApiResponseError({ ...context, status: 422 }), reason: "failed" },
+  { error: new GitHubApiRequestError({ ...context, cause: "network" }), reason: "failed" },
+])("maps a refused or lost comment to $reason and keeps the cause", ({ error, reason }) =>
+  Effect.gen(function* () {
+    const tracker = yield* make(() => Effect.fail(error));
+    const failure = yield* tracker
+      .commentOnIssue({ ...repository, number: 12, body: "x" })
+      .pipe(Effect.flip);
+    assert.equal(failure.reason, reason);
+    assert.equal(failure.cause, error);
+    const listing = yield* tracker
+      .listIssueComments({ ...repository, number: 12, page: 1 })
+      .pipe(Effect.flip);
+    assert.equal(listing.reason, reason);
+  }),
+);
+
+it.effect.each([
+  { override: { truncated: true }, reason: "truncated-response" },
+  { override: { invalidUtf8: true }, reason: "invalid-response" },
+  { override: { body: JSON.stringify({ id: 1, html_url: "u" }) }, reason: "invalid-response" },
+])("rejects an incomplete comment answer as $reason", ({ override, reason }) =>
+  Effect.gen(function* () {
+    const tracker = yield* make(() => response(comment, override));
+    assert.equal(
+      (yield* tracker.commentOnIssue({ ...repository, number: 12, body: "x" }).pipe(Effect.flip))
+        .reason,
+      reason,
+    );
+  }),
+);
+
+it.effect.each([
+  { override: { truncated: true }, reason: "truncated-response" },
+  { override: { body: JSON.stringify([{ ...comment, id: "7" }]) }, reason: "invalid-response" },
+])("rejects an incomplete comment listing as $reason", ({ override, reason }) =>
+  Effect.gen(function* () {
+    const tracker = yield* make(() => response([comment], override));
+    assert.equal(
+      (yield* tracker.listIssueComments({ ...repository, number: 12, page: 1 }).pipe(Effect.flip))
+        .reason,
+      reason,
+    );
   }),
 );
 

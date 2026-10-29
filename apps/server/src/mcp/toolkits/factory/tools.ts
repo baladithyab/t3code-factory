@@ -93,7 +93,8 @@ const readAcceptance = Tool.make("factory_read_acceptance", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
 // Deliberately no grant or reconcile tool: granting a delivery is a person's act over the exact
-// head and payload they reviewed. Preparing only proposes that payload and changes nothing.
+// head or artifact bytes and payload they reviewed. Preparing only proposes that payload and
+// changes nothing.
 const prepareDelivery = Tool.make("factory_prepare_delivery", {
   ...shared,
   dependencies: [
@@ -102,7 +103,7 @@ const prepareDelivery = Tool.make("factory_prepare_delivery", {
     McpInvocationContext.McpInvocationContext,
   ],
   description:
-    "Propose a pull request for a claimed task's accepted commit. Returns the exact repository, base, head and payload digest a person must grant from the app. This never pushes, creates a pull request or changes any state; refused unless a commit is accepted and still current, and refused with capability-unsupported on a host that cannot deliver the exact accepted commit.",
+    "Propose a delivery that only a person can grant from the app. publish-pr and merge-pr propose a pull request for a claimed task's accepted commit and return the exact repository, base, head and payload digest. publish-artifact proposes one comment carrying a knowledge brief's accepted deliverable on issue payload.issueNumber of the project's origin repository (threadId is the brief's task thread); it returns the destination issue, the artifact digest, the exact server-rendered comment body and the payload digest. This never pushes, comments, creates a pull request or changes any state, and no tool can grant or reconcile a delivery. Refused unless the accepted commit or deliverable is still current, and with capability-unsupported on a host that cannot deliver it with the guarantee the Factory requires.",
   parameters: FactoryDeliveryPrepareInput,
   success: FactoryDeliveryPrepareResult,
 })
@@ -116,7 +117,7 @@ const readDeliveries = Tool.make("factory_read_deliveries", {
     McpInvocationContext.McpInvocationContext,
   ],
   description:
-    "Read the pull request deliveries a person granted for a claimed task, newest first, with each one's status (pending, sending, confirmed, failed or unknown) and the pull request number and URL once confirmed.",
+    "Read the deliveries a person granted for a claimed task or knowledge brief task thread, newest first: pull requests (publish-pr, merge-pr) and issue comments (publish-artifact). Each has its status (pending, sending, confirmed, failed or unknown) and, once confirmed, the pull request number and URL or the comment id and URL. This read never sends, grants or reconciles anything.",
   parameters: FactoryDeliveryReadInput,
   success: FactoryDeliveryReadResult,
 })

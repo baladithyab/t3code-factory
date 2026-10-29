@@ -29,9 +29,11 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Textarea } from "../ui/textarea";
 import {
   canGrantFactoryDelivery,
+  commitDeliveryPrepareResult,
   describeDeliveryStatus,
   factoryDeliveryFailureMessage,
   factoryDeliveryGrantDisabledReason,
+  isCommitDeliveryIntent,
   isLiveFactoryDelivery,
   mergeGrantDisabledReason,
 } from "./factoryDelivery.logic";
@@ -117,8 +119,9 @@ export function FactoryDeliveryPanel(props: {
     reportFailure: false,
   });
 
-  const prepared = prepareInput === null ? null : preview.data;
-  const intents = deliveries.data?.intents ?? [];
+  // A thread's deliveries may include artifact comments; this panel only speaks for commits.
+  const prepared = prepareInput === null ? null : commitDeliveryPrepareResult(preview.data);
+  const intents = (deliveries.data?.intents ?? []).filter(isCommitDeliveryIntent);
   const existing =
     intents.find((intent) => intent.kind === "publish-pr" && isLiveFactoryDelivery(intent)) ??
     prepared?.existing ??
@@ -126,7 +129,8 @@ export function FactoryDeliveryPanel(props: {
   const published = intents.some(
     (intent) => intent.kind === "publish-pr" && intent.status === "confirmed",
   );
-  const mergePrepared = mergePrepareInput === null ? null : mergePreview.data;
+  const mergePrepared =
+    mergePrepareInput === null ? null : commitDeliveryPrepareResult(mergePreview.data);
   const mergeExisting =
     intents.find((intent) => intent.kind === "merge-pr" && isLiveFactoryDelivery(intent)) ??
     mergePrepared?.existing ??

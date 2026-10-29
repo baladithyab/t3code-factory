@@ -215,10 +215,10 @@ export function createFactoryEnvironmentAtoms<R, E>(
     }),
     prepareDelivery,
     readDeliveries,
-    // A grant is single-use over the head and digest the grantor saw, so both are part of the key:
-    // a different head or payload is a different decision and never joins an in-flight grant. A
-    // failed response can still follow a persisted intent, so every outcome reads the deliveries
-    // and the acceptance again.
+    // A grant is single-use over the head (or, for an artifact, its digest) and the payload digest
+    // the grantor saw, so both are part of the key: a different head or payload is a different
+    // decision and never joins an in-flight grant. A failed response can still follow a persisted
+    // intent, so every outcome reads the deliveries, and a commit grant the acceptance, again.
     grantDelivery: createEnvironmentRpcCommand(runtime, {
       label: "environment-command:factory:grant-delivery",
       tag: WS_METHODS.factoryGrantDelivery,
@@ -230,7 +230,9 @@ export function createFactoryEnvironmentAtoms<R, E>(
             input.projectId,
             input.threadId,
             input.kind,
-            input.expectedHeadSha,
+            input.kind === "publish-artifact"
+              ? input.expectedArtifactSha256
+              : input.expectedHeadSha,
             input.expectedPayloadDigest,
           ]),
       },
@@ -242,12 +244,15 @@ export function createFactoryEnvironmentAtoms<R, E>(
               input: { projectId: input.projectId, threadId: input.threadId },
             }),
           );
-          registry.refresh(
-            readAcceptance({
-              environmentId,
-              input: { projectId: input.projectId, threadId: input.threadId },
-            }),
-          );
+          // An artifact grant never touches the commit acceptance, and its thread has none to read.
+          if (input.kind !== "publish-artifact") {
+            registry.refresh(
+              readAcceptance({
+                environmentId,
+                input: { projectId: input.projectId, threadId: input.threadId },
+              }),
+            );
+          }
         }),
     }),
     // Reconcile settles one intent by reading the forge. The input names the intent, not its
