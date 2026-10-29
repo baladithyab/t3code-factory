@@ -164,6 +164,7 @@ export function FactoryArtifactDeliveryPanel(props: {
         commandId: randomUUID(),
         expectedArtifactSha256: prepared.artifactSha256,
         expectedPayloadDigest: prepared.payloadDigest,
+        attempt: prepared.attempt,
         payload: prepared.payload,
       },
     }).finally(() => {

@@ -1449,6 +1449,7 @@ const artifactGrantInput = (commandId: string) =>
     commandId,
     expectedArtifactSha256: "a".repeat(64),
     expectedPayloadDigest: "d".repeat(64),
+    attempt: "attempt-1",
     payload: { issueNumber: 53 },
   }) satisfies FactoryDeliveryGrantInput;
 

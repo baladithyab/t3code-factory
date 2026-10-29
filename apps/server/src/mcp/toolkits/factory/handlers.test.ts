@@ -1028,6 +1028,7 @@ it.effect(
           url: "https://github.com/owner/repo/issues/7",
         },
         destinationKey: artifactIntent.destinationKey,
+        attempt: "attempt-1",
         artifactSha256: "abc",
         artifactBytes: 10,
         body,

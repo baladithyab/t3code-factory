@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodePlatformCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as TestClock from "effect/testing/TestClock";
 import {
@@ -270,7 +270,7 @@ const harness = (
     pullRequests,
     Sqlite.layerMemory,
     git,
-    NodeCrypto.layer,
+    NodePlatformCrypto.layer,
     NodeServices.layer,
     Layer.succeed(ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(environmentId) }),
     issueTrackersLayer(options.trackers),
@@ -301,6 +301,12 @@ const harness = (
     }),
     Layer.mock(Identities.RepositoryIdentityResolver)({
       resolve: () =>
+        Effect.succeed({
+          canonicalKey: "github.com/owner/repo",
+          provider: "github",
+          locator: { source: "git-remote", remoteName: "origin", remoteUrl: state.origin },
+        }),
+      resolveRemote: () =>
         Effect.succeed({
           canonicalKey: "github.com/owner/repo",
           provider: "github",
@@ -1350,6 +1356,7 @@ const grantArtifact = Effect.fn("DeliveryTest.grantArtifact")(function* (
     commandId: "artifact-grant",
     expectedArtifactSha256: prepared.artifactSha256,
     expectedPayloadDigest: prepared.payloadDigest,
+    attempt: prepared.attempt,
     payload: prepared.payload,
     ...overrides,
   });
@@ -1366,6 +1373,7 @@ it.effect(
       Effect.gen(function* () {
         const { brief, accepted } = yield* acceptArtifact(h);
         const prepared = yield* prepareArtifact();
+        assert.isNotEmpty(prepared.attempt);
         const acceptance = accepted.acceptance;
         assert.isNotNull(acceptance);
         if (acceptance === null) return yield* Effect.die("expected acceptance");
@@ -1389,6 +1397,7 @@ it.effect(
             text: artifactText,
             artifactSha256: hash(artifactText),
             acceptanceId: acceptance.id,
+            attempt: prepared.attempt,
           }),
         );
         assert.equal(
@@ -1427,6 +1436,7 @@ it.effect(
             commandId: "unsupported",
             expectedArtifactSha256: hash(artifactText),
             expectedPayloadDigest: "d".repeat(64),
+            attempt: "unused-attempt",
             payload: { issueNumber: 7 },
           })
           .pipe(Effect.flip);
@@ -1487,6 +1497,7 @@ it.effect("artifact grant refuses changed bytes, reviewer hash, body digest and 
         commandId: "changed",
         expectedArtifactSha256: prepared.artifactSha256,
         expectedPayloadDigest: prepared.payloadDigest,
+        attempt: prepared.attempt,
         payload: prepared.payload,
       };
       assert.equal(
@@ -1499,6 +1510,10 @@ it.effect("artifact grant refuses changed bytes, reviewer hash, body digest and 
         (yield* service
           .grant({ ...input, expectedPayloadDigest: "b".repeat(64) })
           .pipe(Effect.flip)).reason,
+        "payload-changed",
+      );
+      assert.equal(
+        (yield* service.grant({ ...input, attempt: "another-attempt" }).pipe(Effect.flip)).reason,
         "payload-changed",
       );
       assert.equal(
@@ -1520,7 +1535,10 @@ it.effect(
       Effect.gen(function* () {
         yield* acceptArtifact(h);
         const prepared = yield* prepareArtifact();
-        const first = yield* grantArtifact();
+        const first = yield* grantArtifact({
+          expectedPayloadDigest: prepared.payloadDigest,
+          attempt: prepared.attempt,
+        });
         assert.deepEqual((yield* prepareArtifact()).existing, first);
         assert.equal(
           (yield* grantArtifact({ commandId: "duplicate" }).pipe(Effect.flip)).reason,
@@ -1542,6 +1560,7 @@ it.effect(
           commandId: "artifact-grant",
           expectedArtifactSha256: prepared.artifactSha256,
           expectedPayloadDigest: prepared.payloadDigest,
+          attempt: prepared.attempt,
           payload: prepared.payload,
         });
         assert.deepEqual(replay, first);
@@ -1628,7 +1647,7 @@ it.effect("startup recovery changes a sending artifact to unknown before executi
 });
 
 it.effect(
-  "artifact reconciliation walks all pages, preserves failed reads and confirms a marker without a folder",
+  "artifact reconciliation walks all pages, preserves failed reads and confirms the whole body without a folder",
   () =>
     withArtifact((h) =>
       Effect.gen(function* () {
@@ -1656,6 +1675,7 @@ it.effect(
         const released = yield* service.reconcile(request);
         assert.equal(released.status, "failed");
         h.host.pages.length = 0;
+        // The host stores the comment with CRLF line endings and trailing whitespace.
         h.host.listings = [
           {
             comments: [{ id: 3, body: "unrelated", url: "https://github.com/comment/3" }],
@@ -1665,7 +1685,7 @@ it.effect(
             comments: [
               {
                 id: 92,
-                body: `host text\n${artifactDeliveryMarker(granted.acceptanceId, granted.artifactSha256)}`,
+                body: `${granted.body.replaceAll("\n", "  \r\n")}\r\n\r\n`,
                 url: "https://github.com/owner/repo/issues/7#issuecomment-92",
               },
             ],
@@ -1681,6 +1701,99 @@ it.effect(
         assert.deepEqual(h.host.pages, [1, 2]);
         assert.lengthOf(h.host.posts, 1);
         assert.deepEqual(h.state.calls, []);
+      }),
+    ),
+);
+
+it.effect(
+  "artifact reconciliation never confirms a comment that merely contains or quotes the marker",
+  () =>
+    withArtifact((h) =>
+      Effect.gen(function* () {
+        yield* acceptArtifact(h);
+        h.host.send = "ambiguous";
+        const granted = yield* grantArtifact();
+        if (granted.kind !== "publish-artifact")
+          return yield* Effect.die("expected artifact intent");
+        yield* drain;
+        const service = yield* Delivery.FactoryDeliveryService;
+        const marker = artifactDeliveryMarker(granted.body.match(/attempt=(\S+) -->/)![1]!);
+        assert.include(granted.body, marker);
+        h.host.listings = [
+          {
+            comments: [
+              {
+                id: 5,
+                body: `> quoting someone\n${marker}`,
+                url: "https://github.com/owner/repo/issues/7#issuecomment-5",
+              },
+              {
+                id: 6,
+                body: `${granted.body}\n\nand more text`,
+                url: "https://github.com/owner/repo/issues/7#issuecomment-6",
+              },
+              {
+                id: 7,
+                body: `prefix\n${granted.body}`,
+                url: "https://github.com/owner/repo/issues/7#issuecomment-7",
+              },
+            ],
+            nextPage: null,
+          },
+        ];
+        const settled = yield* service.reconcile({ projectId, intentId: granted.id });
+        assert.equal(settled.status, "failed");
+        assert.isNull(settled.remote);
+        assert.lengthOf(h.host.posts, 1);
+      }),
+    ),
+);
+
+it.effect(
+  "reconciling a failed grant never confirms it against a later grant's comment for the same destination",
+  () =>
+    withArtifact((h) =>
+      Effect.gen(function* () {
+        yield* acceptArtifact(h);
+        const service = yield* Delivery.FactoryDeliveryService;
+        const store = yield* DeliveryStore.FactoryDeliveryStore;
+        h.host.send = "ambiguous";
+        const grantedA = yield* grantArtifact({ commandId: "grant-a" });
+        yield* drain;
+        assert.equal(
+          (yield* service.reconcile({ projectId, intentId: grantedA.id })).status,
+          "failed",
+        );
+
+        h.host.send = "ok";
+        const grantedB = yield* grantArtifact({ commandId: "grant-b" });
+        if (grantedA.kind !== "publish-artifact" || grantedB.kind !== "publish-artifact")
+          return yield* Effect.die("expected artifact intents");
+        assert.notEqual(grantedB.body, grantedA.body);
+        assert.equal(grantedB.acceptanceId, grantedA.acceptanceId);
+        assert.equal(grantedB.destinationKey, grantedA.destinationKey);
+        assert.equal(yield* drain, 1);
+        assert.equal(Option.getOrThrow(yield* store.get(grantedB.id)).status, "confirmed");
+        assert.lengthOf(h.host.posts, 2);
+
+        h.host.listings = [
+          {
+            comments: [
+              {
+                id: 91,
+                body: h.host.posts[1]!.body,
+                url: "https://github.com/owner/repo/issues/7#issuecomment-91",
+              },
+            ],
+            nextPage: null,
+          },
+        ];
+        const reconciled = yield* service.reconcile({ projectId, intentId: grantedA.id });
+        assert.equal(reconciled.status, "failed");
+        assert.isNull(reconciled.remote);
+        const stored = Option.getOrThrow(yield* store.get(grantedA.id));
+        assert.equal(stored.status, "failed");
+        assert.isNull(stored.remote);
       }),
     ),
 );
