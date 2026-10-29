@@ -130,7 +130,7 @@ it.effect(
 it.effect("075 backfills legacy issue keys without requiring admission provenance", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 74 });
+    yield* runMigrations({ toMigrationInclusive: 198 });
     const legacy = intent("legacy");
     yield* sql`INSERT INTO factory_issue_launches (thread_id, canonical_key, issue_number, request_command_id, intent_json)
       VALUES (${legacy.threadId}, ${key.canonicalKey}, ${key.issueNumber}, ${legacy.requestCommandId}, ${JSON.stringify(legacy)})`;

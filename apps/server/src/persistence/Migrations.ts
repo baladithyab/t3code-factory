@@ -222,6 +222,79 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
   });
 });
 
+// The pre-sync Factory build used 69-75; translate only that exact history, atomically
+// installing upstream's missing 69-73 before the migrator's highest-id guard runs.
+const reconcileFactoryMigrations = Effect.fn("reconcileFactoryMigrations")(function* (
+  throughId?: number,
+) {
+  if (throughId !== undefined && throughId < 193) return [];
+  const sql = yield* SqlClient.SqlClient;
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const tables =
+        yield* sql`SELECT name FROM sqlite_master WHERE name = 'effect_sql_migrations'`;
+      if (tables.length === 0) return [];
+      const recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+      SELECT migration_id, name FROM effect_sql_migrations
+    `;
+      const legacy = migrationEntries.filter(([id]) => id >= 193 && id <= 199);
+      if (
+        !recorded.some((row) =>
+          legacy.some(([id, name]) => row.migration_id === id - 124 && row.name === name),
+        )
+      )
+        return [];
+      const translated = new Map<number, string>();
+      for (const row of recorded) {
+        const entry = legacy.find(
+          ([id, name]) => row.migration_id === id - 124 && row.name === name,
+        );
+        const id = entry?.[0] ?? row.migration_id;
+        if (
+          translated.has(id) ||
+          !migrationEntries.some(([expectedId, name]) => expectedId === id && name === row.name)
+        ) {
+          return yield* new Migrator.MigrationError({
+            kind: "BadState",
+            message:
+              "Unrecognized or mixed legacy Factory migration history; refusing to rewrite it.",
+          });
+        }
+        translated.set(id, row.name);
+      }
+      const latest = Math.max(...translated.keys());
+      for (const [id, name] of migrationEntries) {
+        if (id < FIRST_V2_MIGRATION_ID || id > latest || (id >= 69 && id <= 73)) continue;
+        if (translated.get(id) !== name) {
+          return yield* new Migrator.MigrationError({
+            kind: "BadState",
+            message: `Incomplete legacy Factory migration history: missing ${id}_${name}.`,
+          });
+        }
+      }
+      for (const [id, name] of legacy) {
+        yield* sql`UPDATE effect_sql_migrations SET migration_id = ${id} WHERE migration_id = ${id - 124} AND name = ${name}`;
+      }
+      const executed: Array<readonly [number, string]> = [];
+      for (const [id, name, migration] of migrationEntries) {
+        if (id < 69 || id > 73 || translated.has(id)) continue;
+        yield* Effect.catch(migration, (cause: unknown) =>
+          Effect.fail(
+            new Migrator.MigrationError({
+              kind: "Failed",
+              message: `Failed to install ${id}_${name} while upgrading legacy Factory history.`,
+              cause,
+            }),
+          ),
+        );
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})`;
+        executed.push([id, name]);
+      }
+      return executed;
+    }),
+  );
+});
+
 const run = Migrator.make({});
 
 export interface RunMigrationsOptions {
@@ -234,11 +307,15 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
+  const factoryMigrations = includesV2
+    ? yield* reconcileFactoryMigrations(toMigrationInclusive)
+    : [];
   if (includesV2) {
     yield* assertV2MigrationsCanRun(toMigrationInclusive);
   }
   const executedMigrations = [
     ...previewMigrations,
+    ...factoryMigrations,
     ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
   ];
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);

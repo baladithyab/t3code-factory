@@ -327,6 +327,7 @@ function ExactCoordinator(props: {
   const mounted = useRef(true);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<CoordinatorFailure | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to the mounted view that started them.
   useEffect(() => {
     mounted.current = true;
     return () => {

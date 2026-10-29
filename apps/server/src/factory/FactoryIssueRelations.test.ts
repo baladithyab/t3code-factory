@@ -1,3 +1,5 @@
+import { IssueTrackerProviderError } from "@t3tools/source-control-core/server/IssueTrackerProvider";
+import { SourceControlProviderKind } from "@t3tools/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import {
@@ -70,7 +72,7 @@ const routes =
       : Effect.die(`Unexpected GitHub path ${host}/${path}`);
 const identity: RepositoryIdentity = {
   canonicalKey: "github.com/owner/factory",
-  provider: "github",
+  provider: SourceControlProviderKind.make("github"),
   rootPath: "/repo",
   locator: {
     source: "git-remote",
@@ -90,23 +92,52 @@ function harness(
   const dependencies = Layer.mergeAll(
     NodeCrypto.layer,
     Store.layer.pipe(Layer.provideMerge(Sqlite.layerMemory)),
-    Layer.mock(GitHubRest.GitHubRest)({ rest }),
     repositoryIdentitiesLayer(resolve),
-    issueTrackersLayer(options.trackers),
+    issueTrackersLayer(
+      (options.trackers ?? [fakeIssueTracker("github"), fakeIssueTracker("gitlab")]).map(
+        (tracker) => ({
+          ...tracker,
+          ...(tracker.kind === "github"
+            ? {
+                readRelationResource: (input: { readonly host: string; readonly path: string }) =>
+                  rest({ ...input, operation: "FactoryIssueRelations.read" }).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new IssueTrackerProviderError({
+                          provider: tracker.kind,
+                          operation: "relations",
+                          reason:
+                            cause._tag === "GitHubApiRateLimitError" ||
+                            cause._tag === "SourceControlRateLimitPausedError"
+                              ? "rate-limited"
+                              : cause._tag === "GitHubApiNotFoundError"
+                                ? "not-found"
+                                : cause._tag === "GitHubApiRequestError" ||
+                                    cause._tag === "GitHubApiResponseError"
+                                  ? "failed"
+                                  : "unauthenticated",
+                          detail: "fixture",
+                          cause,
+                        }),
+                    ),
+                  ),
+              }
+            : {}),
+        }),
+      ),
+    ),
     Layer.mock(Projects.ProjectService)({
       getById: () =>
-        Effect.succeed(
-          Option.some({
-            id: projectId,
-            title: "Factory",
-            workspaceRoot: "/repo",
-            defaultModelSelection: null,
-            scripts: [],
-            createdAt: at,
-            updatedAt: at,
-            deletedAt: null,
-          }),
-        ),
+        Effect.succeedSome({
+          id: projectId,
+          title: "Factory",
+          workspaceRoot: "/repo",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: at,
+          updatedAt: at,
+          deletedAt: null,
+        }),
     }),
     Layer.mock(Git.GitVcsDriver)({
       execute: () =>
@@ -1023,7 +1054,7 @@ it.effect(
       const relations = yield* Relations.FactoryIssueRelations;
       const result = yield* relations.read(input);
       assert.deepEqual(result.repository, {
-        provider: "gitlab",
+        provider: SourceControlProviderKind.make("gitlab"),
         host: "gitlab.com",
         repository: "group/sub/factory",
         canonicalKey: "gitlab.com/group/sub/factory",

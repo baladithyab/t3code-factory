@@ -334,7 +334,7 @@ it("old-format issue intent JSON round-trips byte-identically through the extrac
   };
   const json = JSON.stringify(old);
   const schema = Schema.fromJsonString(IssueLaunches.FactoryLaunchIntent);
-  assert.equal(Schema.encodeSync(schema)(Schema.decodeUnknownSync(schema)(json)), json);
+  assert.equal(Schema.encodeSync(schema)(Schema.decodeSync(schema)(json)), json);
 });
 
 it.effect("retraction and restore never turn an unreviewable preview into admissible content", () =>
@@ -380,7 +380,7 @@ it.effect("retraction and restore never turn an unreviewable preview into admiss
 it.effect("075 preserves legacy duplicates, marks later claims and refuses their admission", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 74 });
+    yield* runMigrations({ toMigrationInclusive: 198 });
     const earliest = {
       ...intent("z-earliest"),
       snapshot: { ...intent("z-earliest").snapshot, feed: "https://news.example.org/a|b#c:%3A" },

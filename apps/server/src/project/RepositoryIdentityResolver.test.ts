@@ -34,7 +34,7 @@ it.effect("refines a supplied origin independently of the cached upstream identi
     const resolver = yield* RepositoryIdentityResolver.make({
       refine: (identity) => {
         refined.push(identity);
-        return Effect.succeed({ ...identity, provider: "gitlab" });
+        return Effect.succeed({ ...identity, provider: SourceControlProviderKind.make("gitlab") });
       },
     });
     const primary = yield* resolver.resolve("/repo");
@@ -55,28 +55,26 @@ it.effect("refines a supplied origin independently of the cached upstream identi
       displayName: "me/sub/project",
       owner: "me",
       name: "project",
-      provider: "gitlab",
+      provider: SourceControlProviderKind.make("gitlab"),
     });
     expect(refined.map((identity) => identity.locator.remoteName)).toEqual(["upstream", "origin"]);
     expect(yield* resolver.resolve("/repo")).toEqual(primary);
   }).pipe(
-    Effect.provide(
-      Layer.succeed(ProcessRunner.ProcessRunner, {
-        run: ({ args }) =>
-          Effect.succeed({
-            code: ChildProcessSpawner.ExitCode(0),
-            stdout: args.includes("--show-toplevel")
-              ? "/repo\n"
-              : "upstream git@forge.example:team/project.git (fetch)\n",
-            stderr: "",
-            timedOut: false,
-            stdoutTruncated: false,
-            stderrTruncated: false,
-            stdoutInvalidUtf8: false,
-            stderrInvalidUtf8: false,
-          }),
-      }),
-    ),
+    Effect.provideService(ProcessRunner.ProcessRunner, {
+      run: ({ args }) =>
+        Effect.succeed({
+          code: ChildProcessSpawner.ExitCode(0),
+          stdout: args.includes("--show-toplevel")
+            ? "/repo\n"
+            : "upstream git@forge.example:team/project.git (fetch)\n",
+          stderr: "",
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdoutInvalidUtf8: false,
+          stderrInvalidUtf8: false,
+        }),
+    }),
   ),
 );
 

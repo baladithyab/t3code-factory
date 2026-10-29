@@ -143,37 +143,34 @@ export const makeStatusInspector = Effect.fnUntraced(function* <E>(options: {
   const projects = yield* Projects.ProjectService;
   const threads = yield* Threads.ThreadManagementService;
   const receipts = yield* Receipts.CommandReceiptStoreV2;
-  return Effect.fnUntraced(function* (binding: Binding<Launched>) {
-    const { intent } = binding;
-    const shell = yield* threads
-      .getThreadShell(intent.threadId)
-      .pipe(Effect.mapError((cause) => options.error("persistence-failure", cause)));
-    let status: FactoryIssueTask["status"];
-    if (shell === null) {
-      // Receipt and tombstone distinguish an interrupted reservation from a deletion even
-      // when the process died before recording the launch response in this table.
-      const receipt = yield* receipts
-        .getByCommandId(intent.commandId)
-        .pipe(Effect.mapError((cause) => options.error("persistence-failure", cause)));
-      status =
-        binding.accepted === 1 || (Option.isSome(receipt) && receipt.value.status === "accepted")
-          ? "missing"
-          : "launching";
-      if (status === "launching") {
-        const owner = yield* projects
-          .getById(intent.projectId)
-          .pipe(Effect.mapError((cause) => options.error("persistence-failure", cause)));
-        if (Option.isNone(owner)) status = "missing";
-      }
-    } else if (shell.deletedAt !== null) status = "missing";
-    else if (shell.archivedAt !== null) status = "archived";
-    else if (shell.status === "preparing") status = "preparing";
-    else if (shell.status === "failed") status = "failed";
-    else if (["running", "starting", "waiting", "queued"].includes(shell.status))
-      status = "running";
-    else status = binding.accepted === 0 && shell.latestRunId === null ? "launching" : "idle";
-    return { shell, status };
-  });
+  return Effect.fnUntraced(
+    function* (binding: Binding<Launched>) {
+      const { intent } = binding;
+      const shell = yield* threads.getThreadShell(intent.threadId);
+      let status: FactoryIssueTask["status"];
+      if (shell === null) {
+        // Receipt and tombstone distinguish an interrupted reservation from a deletion even
+        // when the process died before recording the launch response in this table.
+        const receipt = yield* receipts.getByCommandId(intent.commandId);
+        status =
+          binding.accepted === 1 || (Option.isSome(receipt) && receipt.value.status === "accepted")
+            ? "missing"
+            : "launching";
+        if (status === "launching") {
+          const owner = yield* projects.getById(intent.projectId);
+          if (Option.isNone(owner)) status = "missing";
+        }
+      } else if (shell.deletedAt !== null) status = "missing";
+      else if (shell.archivedAt !== null) status = "archived";
+      else if (shell.status === "preparing") status = "preparing";
+      else if (shell.status === "failed") status = "failed";
+      else if (["running", "starting", "waiting", "queued"].includes(shell.status))
+        status = "running";
+      else status = binding.accepted === 0 && shell.latestRunId === null ? "launching" : "idle";
+      return { shell, status };
+    },
+    Effect.mapError((cause) => options.error("persistence-failure", cause)),
+  );
 });
 
 export const makeInspector = Effect.fn("FactoryTaskLaunch.makeInspector")(function* <E>(options: {

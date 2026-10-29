@@ -24,7 +24,7 @@ import {
   type PullRequestDetail,
   type PullRequestRef,
 } from "@t3tools/contracts";
-import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
+import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the digest must be one pure, synchronous function so the transactional grant recheck and prepare compute byte-identical values without a service boundary between them.
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
@@ -57,11 +57,8 @@ import { IssueTrackerProviderRegistry } from "./IssueTrackerProviderRegistry.ts"
 
 const FAILURE_MAX_CHARS = 1000;
 
-// A rejection the forge answered definitively, so nothing was created. Everything else (network,
-// timeout, 5xx, an undecodable answer) may still have created the pull request and is `unknown`.
-// The tags are GitHub's: a host whose rejections are not classified here could settle a request
-// that never landed as `unknown`, which is why `publish` stays undeclared on every other host and
-// prepare and grant refuse them by capability.
+// Only these GitHub rejections prove no write occurred; all other failures stay unknown.
+// Other hosts cannot publish until their definite rejections are classified here.
 const DEFINITE_REJECTION_TAGS = new Set([
   "GitHubApiAuthenticationError",
   "GitHubApiRateLimitError",
@@ -743,7 +740,7 @@ const makeService = Effect.gen(function* () {
   // command id is derived from the intent, so a retried link replays instead of duplicating.
   const linkPullRequest = Effect.fn("FactoryDeliveryService.linkPullRequest")(
     function* (intent: FactoryCommitDeliveryIntent, remote: { readonly url: string }) {
-      const key = parseChangeRequestUrl(remote.url);
+      const key = sourceControlDefinitions.parseChangeRequestUrl(remote.url)?.link ?? null;
       if (key === null) return;
       yield* threads
         .dispatch({

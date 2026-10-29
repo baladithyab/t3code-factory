@@ -180,17 +180,16 @@ const make = Effect.gen(function* () {
     const source = yield* store.claimFetch(check);
     const response = yield* fetcher.fetch(source, source).pipe(
       Effect.catchTags({
-        FeedFetchError: (cause) =>
-          Effect.gen(function* () {
-            const error = new FactoryFeedError({ reason: cause.reason, cause });
-            yield* store.failed({
-              ...check,
-              nextAllowedAt: cause.nextAllowedAt ?? check.nextAllowedAt,
-              error: error.message,
-              suspend: cause.suspend === true,
-            });
-            return yield* error;
-          }),
+        FeedFetchError: Effect.fn("FactoryFeedService.fetchFailed")(function* (cause) {
+          const error = new FactoryFeedError({ reason: cause.reason, cause });
+          yield* store.failed({
+            ...check,
+            nextAllowedAt: cause.nextAllowedAt ?? check.nextAllowedAt,
+            error: error.message,
+            suspend: cause.suspend === true,
+          });
+          return yield* error;
+        }),
       }),
     );
     if (response.kind === "notModified")

@@ -53,6 +53,7 @@ export function FactoryOrchestratorPanel({
   const [failure, setFailure] = useState<string | null>(null);
   const lifetime = useRef<{ active: boolean; pending: boolean } | null>(null);
   // FactoryRouteScreen keys this panel by environment, project and section.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to the mounted view that started them.
   useLayoutEffect(() => {
     const current = { active: true, pending: false };
     lifetime.current = current;
@@ -61,6 +62,7 @@ export function FactoryOrchestratorPanel({
     };
   }, []);
   const focused = useRef(isFocused);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Tracks native navigator focus for in-flight server commands.
   useLayoutEffect(() => {
     focused.current = isFocused;
   }, [isFocused]);

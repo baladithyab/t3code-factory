@@ -154,13 +154,7 @@ export const FactoryResearchFindingReason = Schema.Literals([
 ]);
 export type FactoryResearchFindingReason = typeof FactoryResearchFindingReason.Type;
 
-/**
- * Derived on read. `supported` requires an acceptable observation at the base commit (the
- * measured baseline), an acceptable explore observation at a candidate commit, and an
- * acceptable web-launched verify observation at that same commit, with both candidate values
- * clearing `minimumEffect` in the sealed direction against the baseline. k=1; variance is
- * unmeasured and said so.
- */
+/** Derived on read. `supported` requires an acceptable observation at the base commit (the measured baseline), an acceptable explore observation at a candidate commit, and an acceptable web-launched verify observation at that same commit, with both candidate values clearing `minimumEffect` in the sealed direction against the baseline. k=1; variance is unmeasured and said so. */
 export const FactoryResearchFinding = Schema.Struct({
   protocolId: FactoryResearchProtocolId,
   protocolRevision: TrimmedNonEmptyString,

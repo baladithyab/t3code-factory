@@ -387,9 +387,9 @@ const SETTINGS_SCREENS = {
     },
   }),
   SettingsFactoryIssues: createNativeStackScreen({
-    screen: FactoryIssuesRouteScreen,
+    screen: FactoryRouteScreen,
     linking: "settings/factory-issues",
-    options: { ...SETTINGS_PAGE_OPTIONS, title: "Factory issues" },
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "Factory" },
   }),
   SettingsFactoryBranch: createNativeStackScreen({
     screen: FactoryBranchPickerRouteScreen,
@@ -399,7 +399,9 @@ const SETTINGS_SCREENS = {
     screen: FactoryModelPickerRouteScreen,
     options: {
       headerShown: false,
-      ...(Platform.OS === "android" ? { presentation: "card" as const } : THREAD_SETTINGS_SHEET_OPTIONS),
+      ...(Platform.OS === "android"
+        ? { presentation: "card" as const }
+        : THREAD_SETTINGS_SHEET_OPTIONS),
     },
   }),
   SettingsScheduledTasks: createNativeStackScreen({

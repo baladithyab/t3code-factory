@@ -83,6 +83,7 @@ export const layer = McpToolAccess.toLayer(FactoryToolkit, {
           })
           .pipe(Effect.provideService(DispatchModeLimit, caller.limits), Effect.mapError(failure));
       }),
+    { refused: "Factory launches cannot carry a linked caller origin." },
   ),
   factory_record_research_evidence: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
@@ -121,6 +122,7 @@ export const layer = McpToolAccess.toLayer(FactoryToolkit, {
           .admitCandidate({ ...input, ...modes, creationSource: "mcp" })
           .pipe(Effect.provideService(DispatchModeLimit, caller.limits), Effect.mapError(failure));
       }),
+    { refused: "Factory launches cannot carry a linked caller origin." },
   ),
   factory_list_claims: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
@@ -213,6 +215,7 @@ export const layer = McpToolAccess.toLayer(FactoryToolkit, {
           .start({ ...input, ...modes, creationSource: "mcp" })
           .pipe(Effect.provideService(DispatchModeLimit, caller.limits), Effect.mapError(failure));
       }),
+    { refused: "Factory launches cannot carry a linked caller origin." },
   ),
   factory_get_orchestrator: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
@@ -232,5 +235,6 @@ export const layer = McpToolAccess.toLayer(FactoryToolkit, {
           .ensure({ ...input, ...modes, creationSource: "mcp" })
           .pipe(Effect.provideService(DispatchModeLimit, caller.limits), Effect.mapError(failure));
       }),
+    { refused: "Factory launches cannot carry a linked caller origin." },
   ),
 });

@@ -127,6 +127,7 @@ export function FactoryKnowledgeReviewModal(props: {
               <Text className="text-sm text-foreground-muted">This brief has no inputs.</Text>
             ) : (
               snapshot.inputs.map((entry, index) => (
+                // oxlint-disable-next-line react/no-array-index-key -- Frozen reviewed inputs never edit or reorder their rows.
                 <View key={index} className="gap-1">
                   <Text selectable className="text-sm font-t3-semibold text-foreground">
                     {index + 1}. {entry.labelText}

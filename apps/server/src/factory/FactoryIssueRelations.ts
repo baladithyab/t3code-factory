@@ -1,5 +1,7 @@
+import * as IssueTrackers from "./IssueTrackerProviderRegistry.ts";
 import {
   FactoryIssueError,
+  SourceControlProviderKind,
   FactoryReadinessReason,
   FactoryReadinessOverrideId,
   IsoDateTime,
@@ -17,14 +19,14 @@ import {
   type FactoryReadinessOverrideRevokeInput,
   type FactoryRepository,
 } from "@t3tools/contracts";
-import type { IssueTrackerProviderApi } from "@t3tools/source-control-core/server/IssueTrackerProvider";
-// Slice 1 keeps GitHub's blocker transport here; it moves into the GitHub adapter when a second
-// host declares `blockedBy`.
-import * as GitHubRest from "@t3tools/source-control-github/server/GitHubRest";
+import type {
+  IssueTrackerProviderError,
+  IssueTrackerProviderApi,
+} from "@t3tools/source-control-core/server/IssueTrackerProvider";
 import {
   gitHubApiUrls,
   isRateLimited,
-  type GitHubApiError,
+  GitHubApiResponseError,
 } from "@t3tools/source-control-github/server/GitHubRequestPolicy";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
@@ -102,24 +104,19 @@ const statusFailure = (status: number) =>
               ? "rate-limited"
               : "remote-failure",
   });
-function requestFailure(error: GitHubApiError): ObservationFailure {
-  switch (error._tag) {
-    case "GitHubCliMissingError":
-    case "GitHubNotSignedInError":
-    case "GitHubHostDisabledError":
-    case "GitHubCliFailedError":
-    case "GitHubApiAuthenticationError":
-      return new ObservationFailure({ reason: "authentication" });
-    case "GitHubApiRateLimitError":
-    case "SourceControlRateLimitPausedError":
-      return new ObservationFailure({ reason: "rate-limited" });
-    case "GitHubApiNotFoundError":
-      return statusFailure(404);
-    case "GitHubApiResponseError":
-      return statusFailure(error.status);
-    case "GitHubApiRequestError":
-      return new ObservationFailure({ reason: "remote-failure" });
-  }
+const isGitHubApiResponseError = Schema.is(GitHubApiResponseError);
+function requestFailure(error: IssueTrackerProviderError): ObservationFailure {
+  if (isGitHubApiResponseError(error.cause)) return statusFailure(error.cause.status);
+  return error.reason === "not-found"
+    ? statusFailure(404)
+    : new ObservationFailure({
+        reason:
+          error.reason === "unauthenticated" || error.reason === "missing-tool"
+            ? "authentication"
+            : error.reason === "rate-limited"
+              ? "rate-limited"
+              : "remote-failure",
+      });
 }
 
 type Completeness = Pick<
@@ -347,7 +344,9 @@ export class FactoryIssueRelations extends Context.Service<
 >()("t3/factory/FactoryIssueRelations") {}
 
 const make = Effect.gen(function* () {
-  const github = yield* GitHubRest.GitHubRest;
+  const github = (yield* IssueTrackers.IssueTrackerProviderRegistry).get(
+    SourceControlProviderKind.make("github"),
+  );
   const store = yield* Store.FactoryIssueRelationStore;
   const resolve = yield* makeRepositoryResolver;
   const crypto = yield* Crypto.Crypto;
@@ -367,8 +366,10 @@ const make = Effect.gen(function* () {
     host: string,
     path: string,
   ) {
+    if (!github?.readRelationResource)
+      return yield* new ObservationFailure({ reason: "remote-failure" });
     const response = yield* github
-      .rest({ host, path, operation: "FactoryIssueRelations.read" })
+      .readRelationResource({ host, path })
       .pipe(Effect.mapError(requestFailure));
     if (isRateLimited(response)) return yield* new ObservationFailure({ reason: "rate-limited" });
     if (response.status !== 200) return yield* statusFailure(response.status);
@@ -583,7 +584,7 @@ const make = Effect.gen(function* () {
         const reason =
           error._tag === "FactoryRelationObservationFailure" ? error.reason : "remote-failure";
         return store.recordFailure({ subject, observedAt, failure: reason }).pipe(
-          Effect.catch(() => Effect.void),
+          Effect.ignore,
           Effect.as(
             result(
               deriveReadiness(

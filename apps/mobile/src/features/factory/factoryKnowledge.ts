@@ -33,6 +33,7 @@ export const FACTORY_KNOWLEDGE_NOTICE =
   "Knowledge tasks run in a private folder, not in this checkout. Accepting an artifact records which bytes you reviewed, not that they are correct.";
 
 export interface FactoryKnowledgeInputDraft {
+  readonly key?: string;
   readonly label: string;
   readonly content: string;
 }

@@ -56,13 +56,7 @@ function emptyState(key: string): ArtifactDeliveryState {
   return { key, previewedIssue: null, pending: false, failure: null };
 }
 
-/**
- * Posting one accepted artifact as a comment on an issue of the project's own repository. The
- * grant is single-use over the exact preview the human last saw: it echoes that prepare's
- * artifact digest and payload digest, never a fresh read, so a rewritten file or a different
- * rendered body is refused by the server instead of posted. The server renders the body and
- * holds the forge credentials; this hook only previews, grants, and reconciles a lost response.
- */
+/** Posting one accepted artifact as a comment on an issue of the project's own repository. The grant is single-use over the exact preview the human last saw: it echoes that prepare's artifact digest and payload digest, never a fresh read, so a rewritten file or a different rendered body is refused by the server instead of posted. The server renders the body and holds the forge credentials; this hook only previews, grants, and reconciles a lost response. */
 export function useFactoryArtifactDelivery(input: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
@@ -90,6 +84,7 @@ export function useFactoryArtifactDelivery(input: {
   const lifetime = useRef<{ readonly key: string; active: boolean; pending: boolean } | null>(null);
   const [state, setState] = useState<ArtifactDeliveryState>(() => emptyState(key));
   if (state.key !== key) setState(emptyState(key));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to the mounted view that started them.
   useLayoutEffect(() => {
     const current = { key, active: true, pending: false };
     lifetime.current = current;

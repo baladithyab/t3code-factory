@@ -280,7 +280,7 @@ const harness = (
     }),
     Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
     Layer.mock(Receipts.CommandReceiptStoreV2)({
-      getByCommandId: () => Effect.succeed(Option.none()),
+      getByCommandId: () => Effect.succeedNone,
     }),
     Layer.mock(Projects.ProjectService)({
       getById: (id) =>
@@ -303,13 +303,13 @@ const harness = (
       resolve: () =>
         Effect.succeed({
           canonicalKey: "github.com/owner/repo",
-          provider: "github",
+          provider: SourceControlProviderKind.make("github"),
           locator: { source: "git-remote", remoteName: "origin", remoteUrl: state.origin },
         }),
       resolveRemote: () =>
         Effect.succeed({
           canonicalKey: "github.com/owner/repo",
-          provider: "github",
+          provider: SourceControlProviderKind.make("github"),
           locator: { source: "git-remote", remoteName: "origin", remoteUrl: state.origin },
         }),
     }),
@@ -464,13 +464,12 @@ const acceptClaim = Effect.fn("DeliveryTest.acceptClaim")(function* (
 const accept = acceptClaim();
 const prepare = (threadId: ThreadId = claimed) =>
   Effect.flatMap(Delivery.FactoryDeliveryService, (service) =>
-    service
-      .prepare({ projectId, threadId, kind: "publish-pr", payload })
-      .pipe(
-        Effect.flatMap((result) =>
-          "headSha" in result ? Effect.succeed(result) : Effect.die("expected commit preparation"),
-        ),
+    service.prepare({ projectId, threadId, kind: "publish-pr", payload }).pipe(
+      Effect.filterOrElse(
+        (result) => "headSha" in result,
+        () => Effect.die("expected commit preparation"),
       ),
+    ),
   );
 const grant = Effect.fn("DeliveryTest.grant")(function* (
   overrides: {
@@ -845,8 +844,9 @@ const prepareMerge = (mergeMethod?: MergeMethod) =>
         payload: mergePayload(mergeMethod),
       })
       .pipe(
-        Effect.flatMap((result) =>
-          "headSha" in result ? Effect.succeed(result) : Effect.die("expected merge preparation"),
+        Effect.filterOrElse(
+          (result) => "headSha" in result,
+          () => Effect.die("expected merge preparation"),
         ),
       ),
   );

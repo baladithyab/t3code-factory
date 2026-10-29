@@ -197,6 +197,28 @@ export const make = Effect.gen(function* () {
         ? path
         : null;
     },
+    readRelationResource: (input) =>
+      github.rest({ ...input, operation: "FactoryIssueRelations.read" }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new IssueTrackerProviderError({
+              provider: kind,
+              operation: "FactoryIssueRelations.read",
+              reason:
+                cause._tag === "GitHubApiRateLimitError" ||
+                cause._tag === "SourceControlRateLimitPausedError"
+                  ? "rate-limited"
+                  : cause._tag === "GitHubApiNotFoundError"
+                    ? "not-found"
+                    : cause._tag === "GitHubApiRequestError" ||
+                        cause._tag === "GitHubApiResponseError"
+                      ? "failed"
+                      : "unauthenticated",
+              detail: "The issue relation request failed.",
+              cause,
+            }),
+        ),
+      ),
     listIssues,
     getIssue,
     commentOnIssue,

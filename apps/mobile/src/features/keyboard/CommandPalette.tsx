@@ -364,11 +364,7 @@ export function CommandPalette(props: {
           "orchestrator",
           "coordinator",
         ],
-        run: () =>
-          navigation.navigate("SettingsSheet", {
-            screen: "SettingsContent",
-            params: { screen: "SettingsFactoryIssues" },
-          }),
+        run: () => navigation.navigate("SettingsFactoryIssues"),
       },
     ];
     if (canTriage) {

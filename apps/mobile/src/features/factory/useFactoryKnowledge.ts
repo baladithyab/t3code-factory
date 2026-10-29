@@ -41,19 +41,6 @@ interface Lifetime {
   pending: boolean;
 }
 
-// A settled command only updates the screen lifetime that sent it.
-function useLifetime(key: string) {
-  const lifetime = useRef<Lifetime | null>(null);
-  useLayoutEffect(() => {
-    const current: Lifetime = { key, active: true, pending: false };
-    lifetime.current = current;
-    return () => {
-      current.active = false;
-    };
-  }, [key]);
-  return lifetime;
-}
-
 /**
  * Authoring one brief. The server mints the id and computes the revision; an unchanged draft
  * retried after a lost response reuses its command id so it cannot create a second brief.
@@ -68,7 +55,15 @@ export function useFactoryKnowledgeCreate(input: {
   );
   const run = useAtomCommand(factoryEnvironment.createKnowledgeBrief, { reportFailure: false });
   const key = JSON.stringify([environmentId, projectId]);
-  const lifetime = useLifetime(key);
+  const lifetime = useRef<Lifetime | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to this mounted scope.
+  useLayoutEffect(() => {
+    const current: Lifetime = { key, active: true, pending: false };
+    lifetime.current = current;
+    return () => {
+      current.active = false;
+    };
+  }, [key]);
   const commandIds = useRef(new Map<string, string>());
   const [state, setState] = useState<{
     readonly key: string;
@@ -194,6 +189,7 @@ export function useFactoryKnowledgeStart(input: {
     readonly review: FactoryKnowledgeReview | null;
   }>({ key: scopeKey, busyBrief: null, review: null });
   if (state.key !== scopeKey) setState({ key: scopeKey, busyBrief: null, review: null });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to the mounted view that started them.
   useLayoutEffect(() => {
     if (scopeKey === null) {
       lifetime.current = null;
@@ -406,7 +402,15 @@ export function useFactoryKnowledgeTask(input: {
     reportFailure: false,
   });
   const key = JSON.stringify([environmentId, projectId, briefId]);
-  const lifetime = useLifetime(key);
+  const lifetime = useRef<Lifetime | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to this mounted scope.
+  useLayoutEffect(() => {
+    const current: Lifetime = { key, active: true, pending: false };
+    lifetime.current = current;
+    return () => {
+      current.active = false;
+    };
+  }, [key]);
   const [state, setState] = useState<{
     readonly key: string;
     readonly pending: boolean;

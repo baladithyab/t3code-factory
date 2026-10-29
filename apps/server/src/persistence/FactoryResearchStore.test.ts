@@ -239,7 +239,7 @@ it.effect(
 it.effect("075 backfills legacy research keys and keeps old intent JSON readable", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 74 });
+    yield* runMigrations({ toMigrationInclusive: 198 });
     const legacy = intent("legacy");
     yield* sql`INSERT INTO factory_research_launches (thread_id, protocol_id, role, request_command_id, intent_json, created_at)
       VALUES (${legacy.threadId}, ${legacy.protocolId}, ${legacy.role}, ${legacy.requestCommandId}, ${JSON.stringify(legacy)}, ${legacy.createdAt})`;

@@ -1,3 +1,4 @@
+import { useNavigation } from "@react-navigation/native";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
@@ -122,10 +123,7 @@ type SidebarNavigationProps = ThreadNavigationSidebarProps & {
 export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
   const navigation = useNavigation();
   const onOpenFactory = () => {
-    navigation.navigate("SettingsSheet", {
-      screen: "SettingsContent",
-      params: { screen: "SettingsFactoryIssues" },
-    });
+    navigation.navigate("SettingsFactoryIssues");
   };
   if (Platform.OS !== "ios") {
     return (

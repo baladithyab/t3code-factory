@@ -8,12 +8,7 @@ import {
   getCustomModelOptionsByInstance,
   resolveEffectiveDefaultModelSelection,
 } from "../../modelSelection";
-import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
-  sortProviderInstanceEntries,
-  type ProviderInstanceEntry,
-} from "../../providerInstances";
+import { providerInstanceEntriesFor, type ProviderInstanceEntry } from "../../providerInstances";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import type { ModelEsque } from "../chat/providerIconUtils";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
@@ -37,9 +32,7 @@ export function useFactoryLaunchModelSettings(
   const settings = useEnvironmentSettings(environmentId);
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
-  const instanceEntries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, project.id),
-  );
+  const instanceEntries = providerInstanceEntriesFor(providers, settings, project.id);
   const normalizeModelSelection = (selection: ModelSelection) =>
     resolveEffectiveDefaultModelSelection(settings, providers, selection);
   const configuredDefault = scheduledTaskDefaultModel(settings, project, instanceEntries);

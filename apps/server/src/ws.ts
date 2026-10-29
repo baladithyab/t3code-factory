@@ -2624,24 +2624,24 @@ export const layerWsRpc = (
         [WS_METHODS.factorySealResearchProtocol]: (input) =>
           factoryResearch.sealProtocol({
             ...input,
-            creationSource: clientOrigin.surface === "mobile" ? "mobile" : "web",
+            creationSource: clientAnalyticsProps.surface === "mobile" ? "mobile" : "web",
           }),
         [WS_METHODS.factoryLaunchResearchRun]: (input) =>
           factoryResearch.launchRun({
             ...input,
-            creationSource: clientOrigin.surface === "mobile" ? "mobile" : "web",
+            creationSource: clientAnalyticsProps.surface === "mobile" ? "mobile" : "web",
           }),
         [WS_METHODS.factoryAdmitResearchImplementation]: (input) =>
           factoryResearch.admitImplementation({
             ...input,
-            creationSource: clientOrigin.surface === "mobile" ? "mobile" : "web",
+            creationSource: clientAnalyticsProps.surface === "mobile" ? "mobile" : "web",
           }),
         [WS_METHODS.projectCoordinatorsGet]: (input) => projectCoordinators.get(input),
         [WS_METHODS.projectCoordinatorsList]: (_input) => projectCoordinators.list(),
         [WS_METHODS.projectCoordinatorsEnsure]: (input) =>
           projectCoordinators.ensure({
             ...input,
-            creationSource: clientOrigin.surface === "mobile" ? "mobile" : "web",
+            creationSource: clientAnalyticsProps.surface === "mobile" ? "mobile" : "web",
           }),
         [WS_METHODS.pullRequestsList]: (input) => pullRequests.list(input),
         [WS_METHODS.pullRequestsListStats]: (input) => pullRequests.listStats(input),
@@ -3408,65 +3408,71 @@ export const layer = Layer.unwrap(
           return httpEffect;
         }).pipe(
           Effect.provide(
-            layerWsRpc(session, clientAnalyticsProps, serverBrowser).pipe(
-              Layer.provideMerge(RpcSerialization.layerJson),
-              // Handler-context reporters see only request defects, not server-wide defects.
-              Layer.provide(DefectReporter.layer),
-              Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
-              Layer.provide(AgentSessionScanner.layer),
-              Layer.provide(ProviderMaintenanceRunner.layer),
-              Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
-              // Share server-lifetime PR caches so WS mutations invalidate every client's HTTP diffs.
-              Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
-              Layer.provide(Layer.succeed(FactoryIssueService.FactoryIssueService, factory)),
-              Layer.provide(
-                Layer.succeed(FactoryIssueRelations.FactoryIssueRelations, factoryRelations),
-              ),
-              Layer.provide(Layer.succeed(FactoryFeedService.FactoryFeedService, factoryFeeds)),
-              Layer.provide(
-                Layer.succeed(FactoryResearchService.FactoryResearchService, factoryResearch),
-              ),
-              Layer.provide(
-                Layer.succeed(FactoryClaimsService.FactoryClaimsService, factoryClaims),
-              ),
-              Layer.provide(
-                Layer.succeed(FactoryAcceptanceService.FactoryAcceptanceService, factoryAcceptance),
-              ),
-              Layer.provide(
-                Layer.succeed(FactoryKnowledgeService.FactoryKnowledgeService, factoryKnowledge),
-              ),
-              Layer.provide(
-                Layer.succeed(FactoryDeliveryService.FactoryDeliveryService, factoryDelivery),
-              ),
-              Layer.provide(
-                Layer.succeed(
-                  ProjectCoordinatorService.ProjectCoordinatorService,
-                  projectCoordinators,
+            layerWsRpc(session, clientAnalyticsProps, serverBrowser)
+              .pipe(
+                Layer.provideMerge(RpcSerialization.layerJson),
+                // Handler-context reporters see only request defects, not server-wide defects.
+                Layer.provide(DefectReporter.layer),
+                Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+                Layer.provide(AgentSessionScanner.layer),
+                Layer.provide(ProviderMaintenanceRunner.layer),
+                Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+                // Share server-lifetime PR caches so WS mutations invalidate every client's HTTP diffs.
+                Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+              )
+              .pipe(
+                Layer.provide(Layer.succeed(FactoryIssueService.FactoryIssueService, factory)),
+                Layer.provide(
+                  Layer.succeed(FactoryIssueRelations.FactoryIssueRelations, factoryRelations),
                 ),
-              ),
-              Layer.provide(OtlpEndpointCheck.layer),
-              Layer.provide(
-                Layer.succeed(
-                  PullRequestReviewGuideService.PullRequestReviewGuideService,
-                  reviewGuides,
+                Layer.provide(Layer.succeed(FactoryFeedService.FactoryFeedService, factoryFeeds)),
+                Layer.provide(
+                  Layer.succeed(FactoryResearchService.FactoryResearchService, factoryResearch),
                 ),
-              ),
-              Layer.provide(Layer.succeed(PeerLinks.PeerLinks, peerLinks)),
-              Layer.provide(Layer.succeed(PeerLinkRequests.PeerLinkRequests, peerLinkRequests)),
-              Layer.provide(
-                SourceControlDiscovery.layer.pipe(
-                  Layer.provide(
-                    SourceControlProviderRegistry.layer.pipe(
-                      Layer.provide(SourceControlBuiltInDrivers.layer),
-                      Layer.provideMerge(GitVcsDriver.layer),
-                      Layer.provide(
-                        VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
+                Layer.provide(
+                  Layer.succeed(FactoryClaimsService.FactoryClaimsService, factoryClaims),
+                ),
+                Layer.provide(
+                  Layer.succeed(
+                    FactoryAcceptanceService.FactoryAcceptanceService,
+                    factoryAcceptance,
+                  ),
+                ),
+                Layer.provide(
+                  Layer.succeed(FactoryKnowledgeService.FactoryKnowledgeService, factoryKnowledge),
+                ),
+                Layer.provide(
+                  Layer.succeed(FactoryDeliveryService.FactoryDeliveryService, factoryDelivery),
+                ),
+                Layer.provide(
+                  Layer.succeed(
+                    ProjectCoordinatorService.ProjectCoordinatorService,
+                    projectCoordinators,
+                  ),
+                ),
+                Layer.provide(OtlpEndpointCheck.layer),
+                Layer.provide(
+                  Layer.succeed(
+                    PullRequestReviewGuideService.PullRequestReviewGuideService,
+                    reviewGuides,
+                  ),
+                ),
+                Layer.provide(Layer.succeed(PeerLinks.PeerLinks, peerLinks)),
+                Layer.provide(Layer.succeed(PeerLinkRequests.PeerLinkRequests, peerLinkRequests)),
+                Layer.provide(
+                  SourceControlDiscovery.layer.pipe(
+                    Layer.provide(
+                      SourceControlProviderRegistry.layer.pipe(
+                        Layer.provide(SourceControlBuiltInDrivers.layer),
+                        Layer.provideMerge(GitVcsDriver.layer),
+                        Layer.provide(
+                          VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
           ),
         );
         return yield* Effect.acquireUseRelease(

@@ -1,8 +1,8 @@
+import { SourceControlProviderKind } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import { ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Identities from "../project/RepositoryIdentityResolver.ts";
@@ -22,9 +22,9 @@ const harness = (origin: string, upstream?: string) => {
       refine: (identity) =>
         Effect.succeed(
           identity.canonicalKey.startsWith("forge.example/")
-            ? { ...identity, provider: "gitlab" }
+            ? { ...identity, provider: SourceControlProviderKind.make("gitlab") }
             : identity.canonicalKey.startsWith("code.example/")
-              ? { ...identity, provider: "github" }
+              ? { ...identity, provider: SourceControlProviderKind.make("github") }
               : identity,
         ),
     }),
@@ -50,18 +50,16 @@ const harness = (origin: string, upstream?: string) => {
     issueTrackersLayer(),
     Layer.mock(Projects.ProjectService)({
       getById: () =>
-        Effect.succeed(
-          Option.some({
-            id: projectId,
-            title: "Factory",
-            workspaceRoot: "/repo",
-            defaultModelSelection: null,
-            scripts: [],
-            createdAt: at,
-            updatedAt: at,
-            deletedAt: null,
-          }),
-        ),
+        Effect.succeedSome({
+          id: projectId,
+          title: "Factory",
+          workspaceRoot: "/repo",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: at,
+          updatedAt: at,
+          deletedAt: null,
+        }),
     }),
     Layer.mock(Git.GitVcsDriver)({
       execute: () =>
@@ -112,8 +110,8 @@ it.effect.each([
 );
 
 it.effect.each([
-  { host: "gitlab.example", provider: "gitlab" },
-  { host: "code.example", provider: "github" },
+  { host: "gitlab.example", provider: SourceControlProviderKind.make("gitlab") },
+  { host: "code.example", provider: SourceControlProviderKind.make("github") },
 ])(
   "preserves the HTTPS authority for $provider without changing its canonical key",
   ({ host, provider }) =>

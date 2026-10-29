@@ -65,6 +65,7 @@ export function useFactoryIssueList(input: {
     readonly controller: AbortController;
   } | null>(null);
   const activeKey = useRef<string | null>(key);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Owns the active scope of the abortable paged server query.
   useLayoutEffect(() => {
     activeKey.current = key;
     return () => {
@@ -112,12 +113,14 @@ export function useFactoryIssueList(input: {
     [environmentId, filter, key, projectId, registry],
   );
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Starts and cancels the paged server query owned by this mounted scope.
   useEffect(() => {
     if (key === null) {
       activeRequest.current?.controller.abort();
       activeRequest.current = null;
       return;
     }
+    // oxlint-disable-next-line react/set-state-in-effect -- Starts the abortable paged server query for this scope.
     void fetchPage(1);
     return () => {
       activeRequest.current?.controller.abort();

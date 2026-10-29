@@ -77,6 +77,21 @@ export interface TrackerIssueCommentPage {
 export type IssueTrackerCapabilities = Omit<FactoryIssueCapabilities, "provider">;
 
 export interface IssueTrackerProviderApi {
+  /** Transitional read transport for the GitHub-only blocker and sub-issue decoder. */
+  readonly readRelationResource?: (input: {
+    readonly host: string;
+    readonly path: string;
+  }) => Effect.Effect<
+    {
+      readonly status: number;
+      readonly headers: Readonly<Record<string, string | undefined>>;
+      readonly body: string;
+      readonly truncated: boolean;
+      readonly invalidUtf8: boolean;
+    },
+    IssueTrackerProviderError
+  >;
+
   readonly kind: SourceControlProviderKind;
   readonly capabilities: IssueTrackerCapabilities;
   /**

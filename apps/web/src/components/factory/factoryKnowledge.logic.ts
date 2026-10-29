@@ -80,8 +80,15 @@ export function factoryKnowledgeArtifactState(
 
 export type FactoryKnowledgeDraft = Pick<
   FactoryKnowledgeBriefCreateInput,
-  "title" | "question" | "inputs" | "acceptanceCriteria"
-> & { readonly deliverablePath: string };
+  "title" | "question" | "acceptanceCriteria"
+> & {
+  readonly deliverablePath: string;
+  readonly inputs: ReadonlyArray<{
+    readonly key?: string;
+    readonly label: string;
+    readonly content: string;
+  }>;
+};
 
 export const EMPTY_KNOWLEDGE_DRAFT: FactoryKnowledgeDraft = {
   title: "",

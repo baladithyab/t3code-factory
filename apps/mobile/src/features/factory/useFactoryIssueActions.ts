@@ -1,10 +1,4 @@
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
-import {
-  StackActions,
-  useNavigation,
-  type NavigationAction,
-  type NavigationState,
-} from "@react-navigation/native";
 import { factoryIssueReviewText } from "@t3tools/client-runtime/state/factory";
 import {
   isAtomCommandInterrupted,
@@ -31,7 +25,6 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import { Platform } from "react-native";
 
 import * as Dialog from "../../components/ui/Dialog";
 import { uuidv4 } from "../../lib/uuid";
@@ -43,7 +36,7 @@ import {
 import { useEnvironmentQuery } from "../../state/query";
 import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useAndroidWorkspaceSelection } from "../workspace/useAndroidWorkspaceSelection";
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import {
   describeFactoryAcceptanceFailure,
   describeFactoryDeliveryFailure,
@@ -59,36 +52,10 @@ import {
   type FactoryFailure,
 } from "./factoryIssues";
 
-interface NavigationNode {
-  readonly dispatch: (action: NavigationAction) => void;
-  readonly getParent: () => NavigationNode | undefined;
-  readonly getState: () => NavigationState | undefined;
-}
-
-/**
- * Opens an existing thread with the normal chat, Git, and pull request controls. Settings is a
- * sheet over the workspace, so it is replaced rather than left underneath the thread.
- */
 export function useOpenFactoryThread() {
-  const navigation = useNavigation();
-  const selectAndroidWorkspace = useAndroidWorkspaceSelection();
-  return useCallback(
-    (environmentId: EnvironmentId, threadId: ThreadId) => {
-      const params = { environmentId: String(environmentId), threadId: String(threadId) };
-      if (Platform.OS === "android") {
-        selectAndroidWorkspace({ name: "Thread", params });
-        return;
-      }
-      let root: NavigationNode = navigation;
-      while (!root.getState()?.routeNames.includes("Thread")) {
-        const parent = root.getParent();
-        if (!parent) break;
-        root = parent;
-      }
-      root.dispatch(StackActions.replace("Thread", params));
-    },
-    [navigation, selectAndroidWorkspace],
-  );
+  const selectDetail = useSelectWorkspaceDetail();
+  return (environmentId: EnvironmentId, threadId: ThreadId) =>
+    selectDetail({ name: "Thread", params: { environmentId, threadId } });
 }
 
 export interface FactoryStartSettings {
@@ -151,6 +118,7 @@ export function useFactoryIssueActions(input: {
     readonly review: FactoryIssueReview | null;
   }>({ key: scopeKey, busyIssue: null, review: null });
   if (state.key !== scopeKey) setState({ key: scopeKey, busyIssue: null, review: null });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to the mounted view that started them.
   useLayoutEffect(() => {
     if (scopeKey === null) {
       lifetime.current = null;
@@ -324,12 +292,7 @@ export function useFactoryIssueActions(input: {
   };
 }
 
-/**
- * The accepted commit of one launched task. Accept pins the head the reviewer was last shown:
- * `expectedHeadSha` always comes from the last read, never a fresh one, so the server refuses
- * rather than accepting a commit nobody saw. A failure keeps that read on screen with its
- * explanation; only an explicit refresh replaces what the reviewer is looking at.
- */
+/** The accepted commit of one launched task. Accept pins the head the reviewer was last shown: `expectedHeadSha` always comes from the last read, never a fresh one, so the server refuses rather than accepting a commit nobody saw. A failure keeps that read on screen with its explanation; only an explicit refresh replaces what the reviewer is looking at. */
 export function useFactoryAcceptCommit(input: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
@@ -353,6 +316,7 @@ export function useFactoryAcceptCommit(input: {
     readonly failure: FactoryFailure | null;
   }>({ key, pending: false, failure: null });
   if (state.key !== key) setState({ key, pending: false, failure: null });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to the mounted view that started them.
   useLayoutEffect(() => {
     const current = { key, active: true, pending: false };
     lifetime.current = current;
@@ -457,13 +421,7 @@ function emptyDeliveryState(key: string): DeliveryState {
   return { key, previewed: null, mergePreviewed: null, pending: false, failure: null };
 }
 
-/**
- * Publishing one task's accepted commit as a pull request, then merging that pull request. Each
- * grant is single-use over the exact preview the human last saw: it echoes that prepare's head
- * and payload digest, never a fresh read, so a moved head, a moved pull request, or an edited
- * payload is refused by the server instead of delivered. The server performs the push, the pull
- * request, and the merge; this hook only previews, grants, and reconciles a lost response.
- */
+/** Publishing one task's accepted commit as a pull request, then merging that pull request. Each grant is single-use over the exact preview the human last saw: it echoes that prepare's head and payload digest, never a fresh read, so a moved head, a moved pull request, or an edited payload is refused by the server instead of delivered. The server performs the push, the pull request, and the merge; this hook only previews, grants, and reconciles a lost response. */
 export function useFactoryDelivery(input: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
@@ -491,6 +449,7 @@ export function useFactoryDelivery(input: {
   const lifetime = useRef<{ readonly key: string; active: boolean; pending: boolean } | null>(null);
   const [state, setState] = useState<DeliveryState>(() => emptyDeliveryState(key));
   if (state.key !== key) setState(emptyDeliveryState(key));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to the mounted view that started them.
   useLayoutEffect(() => {
     const current = { key, active: true, pending: false };
     lifetime.current = current;

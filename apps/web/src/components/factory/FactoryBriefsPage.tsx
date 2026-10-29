@@ -296,7 +296,10 @@ function KnowledgeBriefForm(props: {
         ...draft,
         title: draft.title.trim(),
         deliverablePath: draft.deliverablePath.trim(),
-        inputs: draft.inputs.map((input) => ({ ...input, label: input.label.trim() })),
+        inputs: draft.inputs.map((input) => ({
+          content: input.content,
+          label: input.label.trim(),
+        })),
         commandId: CommandId.make(randomUUID()),
         projectId: props.projectId,
       },
@@ -361,7 +364,7 @@ function KnowledgeBriefForm(props: {
             Inputs ({draft.inputs.length}/{KNOWLEDGE_LIMITS.inputs})
           </h4>
           {draft.inputs.map((input, index) => (
-            <fieldset key={index} className="min-w-0 space-y-2 rounded-lg border p-3">
+            <fieldset key={input.key} className="min-w-0 space-y-2 rounded-lg border p-3">
               <legend className="text-sm">Input {index + 1}</legend>
               <Label htmlFor={`${id}-input-${index}-label`}>Label</Label>
               <Input
@@ -402,7 +405,7 @@ function KnowledgeBriefForm(props: {
             onClick={() =>
               setDraft((previous) => ({
                 ...previous,
-                inputs: [...previous.inputs, { label: "", content: "" }],
+                inputs: [...previous.inputs, { key: randomUUID(), label: "", content: "" }],
               }))
             }
           >

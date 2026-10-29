@@ -82,7 +82,7 @@ const issue: TrackerIssue = {
 };
 const identity: RepositoryIdentity = {
   canonicalKey: "github.com/upstream/root",
-  provider: "github",
+  provider: SourceControlProviderKind.make("github"),
   rootPath: "/repo",
   locator: {
     source: "git-remote",
@@ -164,9 +164,10 @@ function harness(
   );
   const external = Layer.mergeAll(
     Layer.succeed(ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(environmentId) }),
-    repositoryIdentitiesLayer(options.resolve ?? (() => Effect.succeed(identity)), {
-      ...(options.refine ? { refine: options.refine } : {}),
-    }),
+    repositoryIdentitiesLayer(
+      options.resolve ?? (() => Effect.succeed(identity)),
+      options.refine ? { refine: options.refine } : {},
+    ),
     Layer.succeed(Favicons.ProjectFaviconResolver, {
       resolvePath: () => Effect.succeed(null),
       invalidate: () => Effect.void,
@@ -303,7 +304,10 @@ it.effect(
       yield* seed;
       const factory = yield* Factory.FactoryIssueService;
       const listed = yield* factory.list({ projectId });
-      assert.deepEqual(listed.capabilities, { provider: "gitlab", ...tracker.capabilities });
+      assert.deepEqual(listed.capabilities, {
+        provider: SourceControlProviderKind.make("gitlab"),
+        ...tracker.capabilities,
+      });
       assert.deepInclude(listed.repository, {
         provider: tracker.kind,
         repository,
@@ -332,7 +336,7 @@ it.effect(
           resolve: () =>
             Effect.succeed({
               canonicalKey,
-              provider: "gitlab",
+              provider: SourceControlProviderKind.make("gitlab"),
               rootPath: "/repo",
               locator: {
                 source: "git-remote",
@@ -371,7 +375,7 @@ it.effect.each(["before-reservation", "before-resume"] as const)(
   "rejects a provider change at %s even when the canonical key stays the same",
   (phase) => {
     const canonicalKey = "forge.example/owner/project";
-    let provider = "github";
+    let provider = SourceControlProviderKind.make("github");
     return Effect.gen(function* () {
       yield* seed;
       const factory = yield* Factory.FactoryIssueService;
@@ -385,7 +389,7 @@ it.effect.each(["before-reservation", "before-resume"] as const)(
       if (phase === "before-resume") {
         const first = yield* factory.start(input);
         yield* sql`UPDATE factory_issue_launches SET accepted = 0 WHERE thread_id = ${first.threadId}`;
-        provider = "gitlab";
+        provider = SourceControlProviderKind.make("gitlab");
       }
       assert.equal((yield* factory.start(input).pipe(Effect.flip)).reason, "repository-changed");
       const rows = yield* sql`SELECT thread_id FROM factory_issue_launches`;
@@ -408,7 +412,8 @@ it.effect.each(["before-reservation", "before-resume"] as const)(
             }),
           resolveCommit: () =>
             Effect.sync(() => {
-              if (phase === "before-reservation") provider = "gitlab";
+              if (phase === "before-reservation")
+                provider = SourceControlProviderKind.make("gitlab");
               return { commitSha: baseRef };
             }),
         }).layer,
@@ -763,7 +768,7 @@ it.effect.each(["github.com", "github.com:8443"])(
       // The row exactly as written before issue revisions existed.
       const legacyIntent = JSON.stringify({
         repository: {
-          provider: "github",
+          provider: SourceControlProviderKind.make("github"),
           host: "github.com",
           repository: "owner/factory",
           canonicalKey: "github.com/owner/factory",
@@ -1150,7 +1155,7 @@ it.effect("uses the resolved repository when there is no differing origin", () =
         resolve: () =>
           Effect.succeed({
             canonicalKey: identity.canonicalKey,
-            provider: "github",
+            provider: SourceControlProviderKind.make("github"),
             rootPath: "/repo",
             locator: identity.locator,
           }),
@@ -1173,7 +1178,7 @@ it.effect("refuses an upstream-only project instead of importing upstream issues
         resolve: () =>
           Effect.succeed({
             canonicalKey: identity.canonicalKey,
-            provider: "github",
+            provider: SourceControlProviderKind.make("github"),
             rootPath: "/repo",
             locator: identity.locator,
           }),

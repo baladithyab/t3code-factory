@@ -250,6 +250,7 @@ function FactorySourcesWorkspace(props: {
   const [admitFailure, setAdmitFailure] = useState<FactoryFeedFailure | null>(null);
   const admitInFlight = useRef(false);
   const mounted = useRef(true);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to the mounted view that started them.
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -566,6 +567,7 @@ function FeedBindForm(props: {
   const { environmentId, projectId } = props;
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Moves DOM input focus when the sidebar requests source binding.
   useEffect(() => {
     if (props.focusSignal > 0) inputRef.current?.focus();
   }, [props.focusSignal]);

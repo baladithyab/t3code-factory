@@ -491,6 +491,7 @@ function FactoryAcceptedCommit(props: {
   const [failure, setFailure] = useState<string | null>(null);
   const inFlight = useRef(false);
   const mounted = useRef(true);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to the mounted view that started them.
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -694,6 +695,7 @@ function FactoryIssueBlockers(props: {
   const [revokeFailure, setRevokeFailure] = useState<FactoryFailure | null>(null);
   const inFlight = useRef(false);
   const mounted = useRef(true);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to the mounted view that started them.
   useEffect(() => {
     mounted.current = true;
     return () => {

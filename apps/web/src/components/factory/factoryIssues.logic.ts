@@ -568,15 +568,7 @@ function readinessVerdict(
   return { label: stale ? `${label} · stale` : label, tone, stale };
 }
 
-/**
- * Wording for observed blocker evidence. It never says "Ready": the line reports what was seen and
- * when, and nothing here gates starting work. A stale observation (or one whose time cannot be
- * read) is marked rather than hidden, and no longer reads as a positive signal.
- *
- * Overrides are the reviewer's own recorded decisions about single edges. Setting one needs
- * current, complete evidence, so a stale or partial observation locks new decisions until it is
- * observed again; revoking never needs fresh evidence.
- */
+/** Wording for observed blocker evidence. It never says "Ready": the line reports what was seen and when, and nothing here gates starting work. A stale observation (or one whose time cannot be read) is marked rather than hidden, and no longer reads as a positive signal.  Overrides are the reviewer's own recorded decisions about single edges. Setting one needs current, complete evidence, so a stale or partial observation locks new decisions until it is observed again; revoking never needs fresh evidence. */
 export function factoryReadinessPresentation(
   readiness: FactoryReadiness,
   now: number,

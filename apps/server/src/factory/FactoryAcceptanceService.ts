@@ -136,7 +136,7 @@ const make = Effect.gen(function* () {
         ? null
         : Option.getOrNull(
             yield* revParse(worktree, "HEAD").pipe(
-              Effect.catch(() => Effect.succeed(Option.none<string>())),
+              Effect.orElseSucceed(() => Option.none<string>()),
             ),
           );
     return {

@@ -433,12 +433,11 @@ export function ScheduledTasksManager(target: {
     setOpenedLinkTaskId(target.taskId);
     if (editor === null) setEditor({ environmentId: linkedEnvironmentId, task: linkedTask });
   }
-  const navigate = useNavigate({ from: "/settings/scheduled-tasks" });
   const closeEditor = () => {
     setEditor(null);
     if (target.taskId === undefined) return;
     void navigate({
-      to: "/settings/scheduled-tasks",
+      to: target.factory ? "/factory/workflows" : "/settings/scheduled-tasks",
       search: ({ taskId: _closed, ...rest }) => rest,
       replace: true,
     });

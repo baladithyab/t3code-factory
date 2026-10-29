@@ -1,3 +1,4 @@
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -33,7 +34,7 @@ import {
   WEBHOOK_FILTER_OPS,
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useFocusEffect, useNavigation, usePreventRemove } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { AppState, Platform, Pressable, TextInput as RNTextInput, View } from "react-native";
@@ -63,7 +64,6 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useEnvironments } from "../../state/environments";
 import { factoryCoordinatorSupportedAtom, factoryEnvironment } from "../../state/factory";
 import { environmentThreadShells } from "../../state/threads";
-import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { resolveNewTaskBranchLabel } from "../threads/new-task-context-presentation";
 import { RUNTIME_MODE_CHOICES } from "../threads/thread-settings-options";
@@ -616,8 +616,7 @@ export function SettingsScheduledTaskEditRouteScreen() {
 }
 
 function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }) {
-  const { editor, voiceOwnerKey, readEditor, setEditor, hasChanges, draftForEnvironment, startEditor } =
-    useScheduledTaskEditor();
+  const { editor, voiceOwnerKey, readEditor, setEditor, hasChanges } = useScheduledTaskEditor();
   const { availableTargets } = useSettingsEnvironmentFilter();
   const configs = useServerConfigs();
   const navigation = useNavigation();
@@ -1650,9 +1649,10 @@ function EnvironmentTasks({
   const visibleTasks = tasks.data?.tasks.filter((task) =>
     scheduledTaskInScope(task, projectIds, taskId),
   );
-  const { selectThreadRoute } = useAdaptiveWorkspaceLayout();
+  const selectDetail = useSelectWorkspaceDetail();
   const navigation = useNavigation();
   const deepLinkOpened = useRef<ScheduledTaskId | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Opens a loaded workflow deep link in the native navigator once.
   useEffect(() => {
     if (
       taskId === undefined ||
@@ -1721,7 +1721,8 @@ function EnvironmentTasks({
                   { text: "Close", style: "cancel" },
                   {
                     text: "Open thread",
-                    onPress: () => selectThreadRoute({ environmentId, threadId }),
+                    onPress: () =>
+                      selectDetail({ name: "Thread", params: { environmentId, threadId } }),
                   },
                 ]
               : [{ text: "Close" }],

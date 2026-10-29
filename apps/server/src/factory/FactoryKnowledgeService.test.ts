@@ -18,7 +18,6 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no synchronous hash, and the expected digests are computed inline inside assertions.
 import * as NodeCrypto from "node:crypto";
@@ -62,18 +61,16 @@ const harness = Effect.gen(function* () {
     Layer.succeed(ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(environmentId) }),
     Layer.mock(Projects.ProjectService)({
       getById: (id) =>
-        Effect.succeed(
-          Option.some({
-            id,
-            title: "Knowledge",
-            workspaceRoot: projectRoot,
-            defaultModelSelection: null,
-            scripts: [],
-            createdAt: at,
-            updatedAt: at,
-            deletedAt: null,
-          }),
-        ),
+        Effect.succeedSome({
+          id,
+          title: "Knowledge",
+          workspaceRoot: projectRoot,
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: at,
+          updatedAt: at,
+          deletedAt: null,
+        }),
     }),
     Layer.mock(Threads.ThreadManagementService)({
       getThreadShell: (id) => {
@@ -85,7 +82,7 @@ const harness = Effect.gen(function* () {
       assertProviderInstanceEnabled: () => Effect.void,
     }),
     Layer.mock(Receipts.CommandReceiptStoreV2)({
-      getByCommandId: () => Effect.succeed(Option.none()),
+      getByCommandId: () => Effect.succeedNone,
     }),
     Layer.mock(ThreadLaunch.ThreadLaunchService)({
       launch: (input) => {
@@ -104,7 +101,7 @@ const harness = Effect.gen(function* () {
     }),
     // Scratch is on offer: the data dir sits outside any work tree.
     Layer.mock(Folders.ManagedProjectFolders)({
-      scratchRoot: Effect.succeed(Option.some(path.join(baseDir, "scratch"))),
+      scratchRoot: Effect.succeedSome(path.join(baseDir, "scratch")),
       namedProjectsRoot: path.join(baseDir, "projects"),
     }),
   );

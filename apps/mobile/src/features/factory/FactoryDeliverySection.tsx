@@ -110,12 +110,7 @@ export function FailureNotice(props: {
 
 type Delivery = ReturnType<typeof useFactoryDelivery>;
 
-/**
- * Merging the published pull request. A separate single-use grant over the exact pull request
- * head the human was shown; the server pins GitHub's merge to that head, so a push after review
- * is refused rather than merged. GitHub branch protection still owns required checks and
- * reviews: this only shows them, it never decides them.
- */
+/** Merging the published pull request. A separate single-use grant over the exact pull request head the human was shown; the server pins GitHub's merge to that head, so a push after review is refused rather than merged. GitHub branch protection still owns required checks and reviews: this only shows them, it never decides them. */
 function MergeSection(props: {
   readonly delivery: Delivery;
   readonly displayName: string;
@@ -252,13 +247,7 @@ function MergeSection(props: {
   );
 }
 
-/**
- * Publishing a pull request for the accepted commit, then merging it. The human previews the
- * exact title, body, head, and base, then grants that one preview; the server holds the forge
- * credentials and does the push and the merge. Nothing here retries on its own: a lost response
- * is settled by an explicit Reconcile, which reads the host and never creates or merges. A host
- * that cannot publish gets one line saying so instead of the controls.
- */
+/** Publishing a pull request for the accepted commit, then merging it. The human previews the exact title, body, head, and base, then grants that one preview; the server holds the forge credentials and does the push and the merge. Nothing here retries on its own: a lost response is settled by an explicit Reconcile, which reads the host and never creates or merges. A host that cannot publish gets one line saying so instead of the controls. */
 export function FactoryDeliverySection(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;

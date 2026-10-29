@@ -1,3 +1,4 @@
+import { SourceControlProviderKind } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -58,7 +59,7 @@ const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "g
 const baseRef = "a".repeat(40);
 const identity: RepositoryIdentity = {
   canonicalKey: "github.com/owner/factory",
-  provider: "github",
+  provider: SourceControlProviderKind.make("github"),
   rootPath: "/repo",
   locator: {
     source: "git-remote",

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../lib/uuid";
 import { useAtomValue } from "@effect/atom-react";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -108,7 +109,7 @@ function NewBriefForm(props: {
           </Text>
         </View>
         {draft.inputs.map((entry, index) => (
-          <View key={index} className="gap-2 rounded-2xl border border-border-subtle p-3">
+          <View key={entry.key} className="gap-2 rounded-2xl border border-border-subtle p-3">
             <FieldLabel>Input {index + 1}</FieldLabel>
             <AppTextInput
               accessibilityLabel={`Input ${index + 1} label`}
@@ -156,7 +157,10 @@ function NewBriefForm(props: {
             setDraft((current) =>
               current.inputs.length >= limits.inputs
                 ? current
-                : { ...current, inputs: [...current.inputs, { label: "", content: "" }] },
+                : {
+                    ...current,
+                    inputs: [...current.inputs, { key: uuidv4(), label: "", content: "" }],
+                  },
             )
           }
         />

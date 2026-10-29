@@ -10,7 +10,6 @@ import {
   FactoryIssueError,
   FactoryReadinessOverrideId,
   FactoryFeedSourceId,
-  ProviderInstanceId,
   WsRpcGroup,
   type EnvironmentAuthorizationError,
   ProjectId,
@@ -818,6 +817,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
         namedProjectsRoot: process.cwd(),
       }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ProjectCoordinatorService.ProjectCoordinatorService)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({
         getDescriptor: Effect.succeed({
           environmentId: EnvironmentId.make("config-test"),
@@ -1018,6 +1018,7 @@ it.effect("routes all eight feed RPCs to the service without translating domain 
       }).pipe(Effect.andThen(Effect.fail(new FactoryFeedError({ reason: "candidate-changed" }))));
     const services = Layer.mergeAll(
       layerUnusedConfigRpcServices,
+      Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
       Layer.mock(ProjectCoordinatorService.ProjectCoordinatorService)({}),
       Layer.mock(ExternalLauncher.ExternalLauncher)({}),
       Layer.mock(ProviderRegistry.ProviderRegistry)({}),
@@ -1069,8 +1070,6 @@ it.effect("routes all eight feed RPCs to the service without translating domain 
               scopes: [],
             },
             {},
-            {},
-            yield* PreviewAutomationBroker.PreviewAutomationBroker,
             yield* ServerBrowser.ServerBrowser,
           ).pipe(Layer.provide(services)),
           RpcAuthorization.layer([
@@ -1130,6 +1129,7 @@ it.effect(
       const calls: unknown[] = [];
       const services = Layer.mergeAll(
         layerUnusedConfigRpcServices,
+        Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
         Layer.mock(ProjectCoordinatorService.ProjectCoordinatorService)({}),
         Layer.mock(ExternalLauncher.ExternalLauncher)({}),
         Layer.mock(ProviderRegistry.ProviderRegistry)({}),
@@ -1194,8 +1194,6 @@ it.effect(
                 scopes: [],
               },
               {},
-              {},
-              yield* PreviewAutomationBroker.PreviewAutomationBroker,
               yield* ServerBrowser.ServerBrowser,
             ).pipe(Layer.provide(services)),
             RpcAuthorization.layer(["orchestration:read", "orchestration:operate"]),
@@ -1259,6 +1257,7 @@ it.effect("routes research RPCs with trusted client attribution and domain refus
       );
     const services = Layer.mergeAll(
       layerUnusedConfigRpcServices,
+      Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
       Layer.mock(ProjectCoordinatorService.ProjectCoordinatorService)({}),
       Layer.mock(ExternalLauncher.ExternalLauncher)({}),
       Layer.mock(ProviderRegistry.ProviderRegistry)({}),
@@ -1304,8 +1303,6 @@ it.effect("routes research RPCs with trusted client attribution and domain refus
               scopes: [],
             },
             {},
-            {},
-            yield* PreviewAutomationBroker.PreviewAutomationBroker,
             yield* ServerBrowser.ServerBrowser,
           ).pipe(Layer.provide(services)),
           RpcAuthorization.layer([
@@ -1371,6 +1368,7 @@ it.effect("routes read-only claims and preserves domain refusals", () =>
     let refused = false;
     const services = Layer.mergeAll(
       layerUnusedConfigRpcServices,
+      Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
       Layer.mock(ProjectCoordinatorService.ProjectCoordinatorService)({}),
       Layer.mock(ExternalLauncher.ExternalLauncher)({}),
       Layer.mock(ProviderRegistry.ProviderRegistry)({}),
@@ -1407,8 +1405,6 @@ it.effect("routes read-only claims and preserves domain refusals", () =>
               scopes: [],
             },
             {},
-            {},
-            yield* PreviewAutomationBroker.PreviewAutomationBroker,
             yield* ServerBrowser.ServerBrowser,
           ).pipe(Layer.provide(services)),
           RpcAuthorization.layer(["orchestration:read"]),

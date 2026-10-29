@@ -342,10 +342,7 @@ function ProjectOverviewContent(props: {
           description="Browse this project's GitHub issues and start an isolated task."
           onPress={() => {
             openFactoryIssues(representative.environmentId, representative.id);
-            navigation.navigate("SettingsSheet", {
-              screen: "SettingsContent",
-              params: { screen: "SettingsFactoryIssues" },
-            });
+            navigation.navigate("SettingsFactoryIssues");
           }}
         />
       </SettingsSection>

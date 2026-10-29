@@ -15,13 +15,7 @@ export const FactoryReadinessOverrideId = Schema.String.pipe(
 export type FactoryReadinessOverrideId = typeof FactoryReadinessOverrideId.Type;
 export const FACTORY_READINESS_OVERRIDE_REASON_MAX_CHARS = 1024;
 
-/**
- * A human's visible, revocable decision about one edge. `force-not-ready` disputes a blocker the
- * tracker reports as accepted. `waive` retires a tombstone (deleted, inaccessible, moved or
- * unverified blocker) that nothing in the tracker can fix; it never applies to a blocker that is
- * open or closed without acceptance, which the tracker must resolve. An override binds to the
- * resolution the person saw and lapses when that resolution changes.
- */
+/** A human's visible, revocable decision about one edge. `force-not-ready` disputes a blocker the tracker reports as accepted. `waive` retires a tombstone (deleted, inaccessible, moved or unverified blocker) that nothing in the tracker can fix; it never applies to a blocker that is open or closed without acceptance, which the tracker must resolve. An override binds to the resolution the person saw and lapses when that resolution changes. */
 export const FactoryReadinessOverrideKind = Schema.Literals(["force-not-ready", "waive"]);
 export type FactoryReadinessOverrideKind = typeof FactoryReadinessOverrideKind.Type;
 
@@ -43,11 +37,7 @@ export type FactoryReadinessOverride = typeof FactoryReadinessOverride.Type;
 /** Observations older than this are shown as stale; clients age `observedAt` against it. */
 export const FACTORY_READINESS_TTL_MS = 10 * 60 * 1000;
 
-/**
- * How one direct blocker resolves. `accepted` is the tracker's own terminal-success signal
- * (closed with `state_reason: completed`, or a merged pull request); Factory keeps no
- * acceptance ledger of its own. Closed for any other reason never counts as accepted.
- */
+/** How one direct blocker resolves. `accepted` is the tracker's own terminal-success signal (closed with `state_reason: completed`, or a merged pull request); Factory keeps no acceptance ledger of its own. Closed for any other reason never counts as accepted. */
 export const FactoryReadinessEdgeResolution = Schema.Literals([
   "accepted",
   "open",

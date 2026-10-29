@@ -14,7 +14,6 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import { ChildProcessSpawner } from "effect/process";
 import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
@@ -88,23 +87,21 @@ const dependencies = (origin: string) =>
     issueTrackersLayer(),
     Layer.mock(Projects.ProjectService)({
       getById: (id) =>
-        Effect.succeed(
-          Option.some({
-            id,
-            title: "Factory",
-            workspaceRoot: id === caller ? "/second-repo" : "/owner-repo",
-            defaultModelSelection: null,
-            scripts: [],
-            createdAt: at,
-            updatedAt: at,
-            deletedAt: null,
-          }),
-        ),
+        Effect.succeedSome({
+          id,
+          title: "Factory",
+          workspaceRoot: id === caller ? "/second-repo" : "/owner-repo",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: at,
+          updatedAt: at,
+          deletedAt: null,
+        }),
     }),
     repositoryIdentitiesLayer(() =>
       Effect.succeed({
         canonicalKey: repository.canonicalKey,
-        provider: "github",
+        provider: SourceControlProviderKind.make("github"),
         rootPath: "/second-repo",
         locator: {
           source: "git-remote",
@@ -128,7 +125,7 @@ const dependencies = (origin: string) =>
       getThreadShell: (id) => Effect.succeed(id === "research" ? liveThreadShell(id) : null),
     }),
     Layer.mock(Receipts.CommandReceiptStoreV2)({
-      getByCommandId: () => Effect.succeed(Option.none()),
+      getByCommandId: () => Effect.succeedNone,
     }),
   );
 const layerFor = (origin: string) => Claims.layer.pipe(Layer.provideMerge(dependencies(origin)));

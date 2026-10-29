@@ -320,11 +320,8 @@ const layerThreadTitleRegenerationProvided = ThreadTitleRegenerationService.laye
     Layer.mergeAll(layerThreadManagementProvided, ProjectStore.layer, TextGeneration.layer),
   ),
 );
-// Built here rather than in server.ts because it needs the thread management this module
-// constructs, and the executor below needs it in turn. The startup recovery runs when it is built,
-// before the effect worker can claim a delivery. `PullRequestService` (for `merge-pr`) is left to
-// the caller: server.ts already builds the one instance its routes share, and this module has no
-// source control wiring of its own.
+// Recovery must finish before the effect worker claims deliveries; it shares this thread manager.
+// PullRequestService comes from the caller so merge and HTTP routes share one instance.
 const layerFactoryDeliveryProvided = FactoryDeliveryService.layerWithStartupRecovery.pipe(
   Layer.provide(
     Layer.mergeAll(

@@ -78,39 +78,37 @@ const make = Effect.gen(function* () {
   const reserve = Effect.fn("FactoryIssueLaunches.reserve")(function* (
     intent: FactoryLaunchIntent,
   ) {
-    const json = yield* encode(intent).pipe(Effect.mapError(persistenceError));
-    return yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const key = {
-            canonicalKey: intent.repository.canonicalKey,
-            issueNumber: intent.issue.number,
-          };
-          const current = yield* find(key);
-          if (Option.isSome(current)) {
-            if (current.value.intent.threadId !== intent.previousThreadId) return current.value;
-            // A replay of an earlier restart must not authorize yet another attempt.
-            const used = yield* sql`SELECT thread_id FROM factory_issue_launches
+    const json = yield* encode(intent);
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const key = {
+          canonicalKey: intent.repository.canonicalKey,
+          issueNumber: intent.issue.number,
+        };
+        const current = yield* find(key);
+        if (Option.isSome(current)) {
+          if (current.value.intent.threadId !== intent.previousThreadId) return current.value;
+          // A replay of an earlier restart must not authorize yet another attempt.
+          const used = yield* sql`SELECT thread_id FROM factory_issue_launches
           WHERE request_command_id = ${intent.requestCommandId}`;
-            if (used.length > 0) return current.value;
-            yield* sql`UPDATE factory_issue_launches SET superseded = 1
+          if (used.length > 0) return current.value;
+          yield* sql`UPDATE factory_issue_launches SET superseded = 1
           WHERE thread_id = ${intent.previousThreadId} AND superseded = 0`;
-          } else if (intent.previousThreadId !== null) {
-            return yield* new FactoryIssueError({ reason: "persistence-failure" });
-          }
-          yield* sql`INSERT INTO factory_issue_launches
+        } else if (intent.previousThreadId !== null) {
+          return yield* new FactoryIssueError({ reason: "persistence-failure" });
+        }
+        yield* sql`INSERT INTO factory_issue_launches
         (thread_id, canonical_key, issue_number, request_command_id, intent_json, origin_key)
         VALUES (${intent.threadId}, ${key.canonicalKey}, ${key.issueNumber}, ${intent.requestCommandId}, ${json},
           ${issueOriginKey(intent.repository.provider, key.canonicalKey, key.issueNumber)})
         ON CONFLICT DO NOTHING`;
-          const winner = yield* find(key);
-          if (Option.isNone(winner))
-            return yield* new FactoryIssueError({ reason: "persistence-failure" });
-          return winner.value;
-        }),
-      )
-      .pipe(Effect.mapError(persistenceError));
-  });
+        const winner = yield* find(key);
+        if (Option.isNone(winner))
+          return yield* new FactoryIssueError({ reason: "persistence-failure" });
+        return winner.value;
+      }),
+    );
+  }, Effect.mapError(persistenceError));
   const accept = Effect.fn("FactoryIssueLaunches.accept")((threadId: ThreadId) =>
     sql`UPDATE factory_issue_launches SET accepted = 1 WHERE thread_id = ${threadId}`.pipe(
       Effect.asVoid,

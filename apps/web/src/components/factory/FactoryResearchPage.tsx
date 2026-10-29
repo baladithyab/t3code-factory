@@ -214,6 +214,7 @@ function FactoryResearchWorkspace(props: {
   const [sealCommandId, setSealCommandId] = useState(() => CommandId.make(randomUUID()));
   const sealInFlight = useRef(false);
   const mounted = useRef(true);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to the mounted view that started them.
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -464,6 +465,7 @@ function FactoryResearchProtocolDetail(props: {
   const [failure, setFailure] = useState<FactoryResearchFailure | null>(null);
   const inFlight = useRef(false);
   const mounted = useRef(true);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keeps in-flight server commands tied to the mounted view that started them.
   useEffect(() => {
     mounted.current = true;
     return () => {

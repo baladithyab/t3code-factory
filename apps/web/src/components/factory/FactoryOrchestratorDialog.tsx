@@ -13,12 +13,7 @@ import {
   getCustomModelOptionsByInstance,
   resolveEffectiveDefaultModelSelection,
 } from "../../modelSelection";
-import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
-  isProviderInstancePickerReady,
-  sortProviderInstanceEntries,
-} from "../../providerInstances";
+import { isProviderInstancePickerReady, providerInstanceEntriesFor } from "../../providerInstances";
 import type { SidebarProjectGroupMember } from "../../sidebarProjectGrouping";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { getAntigravitySendBlockReason, resolveComposerInteractionMode } from "../ChatView.logic";
@@ -69,9 +64,7 @@ export function FactoryOrchestratorDialog(props: {
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(target.environmentId)) ??
     EMPTY_SERVER_PROVIDERS;
-  const entries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, target.id),
-  );
+  const entries = providerInstanceEntriesFor(providers, settings, target.id);
   const [picked, setPicked] = useState<ModelSelection | null>(null);
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>("approval-required");
   const [interactionMode, setInteractionMode] = useState<ProviderInteractionMode>("default");

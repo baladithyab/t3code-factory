@@ -212,12 +212,12 @@ it.effect(
         ...intent("b", null, ProjectId.make("project:other")),
         requestCommandId: a.requestCommandId,
       };
-      const results = yield* Effect.all(
-        [first.reserve(a), second.reserve(b)].map((operation) =>
+      const results = yield* Effect.forEach(
+        [first.reserve(a), second.reserve(b)],
+        (operation) =>
           operation.pipe(
             Effect.match({ onSuccess: (binding) => binding, onFailure: (error) => error }),
           ),
-        ),
         { concurrency: "unbounded" },
       );
       const winners = results.filter((result) => "intent" in result);
@@ -285,12 +285,12 @@ it.effect(
 );
 
 it.effect(
-  "migration 070 is empty and additive; legacy SQL and deletion leave coordinator provenance intact",
+  "migration 194 is empty and additive; legacy SQL and deletion leave coordinator provenance intact",
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql`PRAGMA foreign_keys = ON`;
-      yield* runMigrations({ toMigrationInclusive: 69 });
+      yield* runMigrations({ toMigrationInclusive: 193 });
       const original = intent("legacy-project");
       // These are the existing project/thread writes, unchanged by coordinator persistence.
       yield* sql`
@@ -303,11 +303,12 @@ it.effect(
         (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
       VALUES (${original.threadId}, ${projectId}, 'Legacy thread', 'codex', 'approval-required', 'default', ${original.createdAt}, ${original.createdAt}, '{}')
     `;
-      yield* runMigrations({ toMigrationInclusive: 70 });
+      yield* runMigrations({ toMigrationInclusive: 194 });
       assert.deepEqual(yield* sql`SELECT * FROM project_coordinators`, []);
-      assert.deepEqual(yield* sql`SELECT name FROM effect_sql_migrations WHERE migration_id = 70`, [
-        { name: "ProjectCoordinators" },
-      ]);
+      assert.deepEqual(
+        yield* sql`SELECT name FROM effect_sql_migrations WHERE migration_id = 194`,
+        [{ name: "ProjectCoordinators" }],
+      );
       yield* Effect.gen(function* () {
         const store = yield* Coordinators.ProjectCoordinators;
         const reserved = yield* store.reserve(original);

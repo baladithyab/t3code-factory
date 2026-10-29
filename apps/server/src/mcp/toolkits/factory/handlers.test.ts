@@ -23,7 +23,6 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Factory from "../../../factory/FactoryIssueService.ts";
 import * as Relations from "../../../factory/FactoryIssueRelations.ts";
@@ -535,24 +534,22 @@ it.effect("denies replay of a stored broader launch before any launch or binding
       Layer.mock(Factory.FactoryIssueService)({}),
       Layer.mock(Projects.ProjectService)({
         getById: () =>
-          Effect.succeed(
-            Option.some({
-              id: projectId,
-              title: "Target",
-              workspaceRoot: binding.intent.workspaceRoot,
-              defaultModelSelection: null,
-              scripts: [],
-              createdAt,
-              updatedAt: createdAt,
-              deletedAt: null,
-            }),
-          ),
+          Effect.succeedSome({
+            id: projectId,
+            title: "Target",
+            workspaceRoot: binding.intent.workspaceRoot,
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt,
+            updatedAt: createdAt,
+            deletedAt: null,
+          }),
       }),
       Layer.mock(Receipts.CommandReceiptStoreV2)({
-        getByCommandId: () => Effect.succeed(Option.none()),
+        getByCommandId: () => Effect.succeedNone,
       }),
       Layer.mock(Bindings.ProjectCoordinators)({
-        getByRequest: () => Effect.succeed(Option.some(binding)),
+        getByRequest: () => Effect.succeedSome(binding),
         reserve: () => {
           sideEffects += 1;
           return Effect.die("A denied replay reserved another binding");
@@ -1010,6 +1007,7 @@ it.effect(
       const prepared = {
         acceptance: {
           id: "acceptance",
+          originKey: FactoryOriginKey.make("knowledge:brief"),
           briefId: "brief",
           threadId,
           projectId,
@@ -1028,7 +1026,7 @@ it.effect(
           url: "https://github.com/owner/repo/issues/7",
         },
         destinationKey: artifactIntent.destinationKey,
-        attempt: "attempt-1",
+        attempt: "11111111-1111-4111-8111-111111111111",
         artifactSha256: "abc",
         artifactBytes: 10,
         body,
