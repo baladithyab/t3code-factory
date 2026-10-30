@@ -1,1 +1,2 @@
 20261029-baseBranch-live accepted commit fixture. Verification-authored after free Replay; Replay did not write this file.
+Second verification-authored fixture commit exercises stale-head rejection before any publication.
