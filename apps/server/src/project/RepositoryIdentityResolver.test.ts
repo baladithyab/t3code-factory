@@ -2,9 +2,16 @@
 import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import {
+  type RepositoryIdentity,
+  SourceControlProviderError,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProcessRunner from "../processRunner.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
@@ -20,6 +27,86 @@ const git = (cwd: string, args: ReadonlyArray<string>) =>
       args: ["-C", cwd, ...args],
     });
   }).pipe(Effect.provide(ProcessRunner.layer));
+
+it.effect("refines a supplied origin independently of the cached upstream identity", () =>
+  Effect.gen(function* () {
+    const refined: RepositoryIdentity[] = [];
+    const resolver = yield* RepositoryIdentityResolver.make({
+      refine: (identity) => {
+        refined.push(identity);
+        return Effect.succeed({ ...identity, provider: SourceControlProviderKind.make("gitlab") });
+      },
+    });
+    const primary = yield* resolver.resolve("/repo");
+    const origin = yield* resolver.resolveRemote({
+      rootPath: "/repo",
+      remoteName: "origin",
+      remoteUrl: "forge.example:Me/Sub/Project.git",
+    });
+    expect(primary?.canonicalKey).toBe("forge.example/team/project");
+    expect(origin).toEqual({
+      canonicalKey: "forge.example/me/sub/project",
+      locator: {
+        source: "git-remote",
+        remoteName: "origin",
+        remoteUrl: "forge.example:Me/Sub/Project.git",
+      },
+      rootPath: "/repo",
+      displayName: "me/sub/project",
+      owner: "me",
+      name: "project",
+      provider: SourceControlProviderKind.make("gitlab"),
+    });
+    expect(refined.map((identity) => identity.locator.remoteName)).toEqual(["upstream", "origin"]);
+    expect(yield* resolver.resolve("/repo")).toEqual(primary);
+  }).pipe(
+    Effect.provideService(ProcessRunner.ProcessRunner, {
+      run: ({ args }) =>
+        Effect.succeed({
+          code: ChildProcessSpawner.ExitCode(0),
+          stdout: args.includes("--show-toplevel")
+            ? "/repo\n"
+            : "upstream git@forge.example:team/project.git (fetch)\n",
+          stderr: "",
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdoutInvalidUtf8: false,
+          stderrInvalidUtf8: false,
+        }),
+    }),
+  ),
+);
+
+it.effect("retains the remote's detected identity when refinement fails", () =>
+  Effect.gen(function* () {
+    const resolver = yield* RepositoryIdentityResolver.make({
+      refine: () =>
+        Effect.fail(
+          new SourceControlProviderError({
+            provider: SourceControlProviderKind.make("gitlab"),
+            operation: "refine",
+            cwd: "/repo",
+            detail: "Test failure",
+          }),
+        ),
+    });
+    const identity = yield* resolver.resolveRemote({
+      rootPath: "/repo",
+      remoteName: "origin",
+      remoteUrl: "https://gitlab.example/me/project.git",
+    });
+    expect(identity?.canonicalKey).toBe("gitlab.example/me/project");
+    expect(identity?.provider).toBe("gitlab");
+    expect(
+      yield* resolver.resolveRemote({
+        rootPath: "/repo",
+        remoteName: "origin",
+        remoteUrl: "/local/project",
+      }),
+    ).toBeNull();
+  }).pipe(Effect.provide(Layer.mock(ProcessRunner.ProcessRunner)({}))),
+);
 
 it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
   it.effect("normalizes equivalent GitHub remotes into a stable repository identity", () =>

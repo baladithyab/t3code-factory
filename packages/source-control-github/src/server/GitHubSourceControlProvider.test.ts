@@ -1058,9 +1058,18 @@ it.effect.each([
         title: "PR",
         bodyFile,
       });
+      yield* provider.createChangeRequest({
+        ...input,
+        target: { owner: "me", repository: "web", refName: "reviewed-base" },
+        baseRefName: "reviewed-base",
+        headSelector: "me:feature",
+        title: "Reviewed destination",
+        bodyFile,
+      });
       assert.deepStrictEqual(targets, [
         `${host}/repos/${expected}`,
         `${host}/repos/${expected}/pulls`,
+        `${host}/repos/me/web/pulls`,
       ]);
     }).pipe(
       Effect.provide(layer),

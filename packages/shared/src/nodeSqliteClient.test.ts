@@ -343,13 +343,12 @@ const withFileClient = <A, E>(
     }).pipe(Effect.provide(SqliteClient.layer({ filename, readerWorker: true })));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
-it.effect("uses the writer when the reader cannot open the database", () =>
-  withFileClient((sql, filename) =>
+it.effect("uses the writer when the database cannot support a reader", () =>
+  withFileClient((sql) =>
     Effect.gen(function* () {
-      yield* sql`PRAGMA journal_mode = WAL`;
+      yield* sql`PRAGMA journal_mode = DELETE`;
       yield* sql`CREATE TABLE entries(name TEXT NOT NULL)`;
       yield* sql`INSERT INTO entries VALUES ('kept')`;
-      yield* (yield* FileSystem.FileSystem).remove(filename);
       const startedBefore = startedWorkers.length;
 
       assert.equal(yield* sql.withTransaction(countEntries(sql)).pipe(SqliteClient.readOnly), 1);

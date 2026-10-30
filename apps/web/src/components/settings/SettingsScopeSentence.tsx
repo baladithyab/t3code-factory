@@ -62,7 +62,7 @@ interface SettingsScopeMenuProps {
   readonly onChange: (next: SettingsScopeSearch) => void;
 }
 
-export function SettingsScopeSentence() {
+export function SettingsScopeSentence({ leadIn = "Applying settings for" }: { leadIn?: string }) {
   const scope = useOptionalSettingsScope();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { environments } = useEnvironments();
@@ -77,7 +77,7 @@ export function SettingsScopeSentence() {
   return (
     <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-3 text-sm text-muted-foreground sm:px-4">
       <span className="flex min-w-0 items-center gap-1.5">
-        <span className="shrink-0">Applying settings for</span>
+        <span className="shrink-0">{leadIn}</span>
         <ProjectScopeMenu {...props} />
       </span>
       <span className="flex min-w-0 items-center gap-1.5">
@@ -86,6 +86,7 @@ export function SettingsScopeSentence() {
         </span>
         <EnvironmentScopeMenu {...props} />
       </span>
+      <CheckoutScopeMenu {...props} />
     </p>
   );
 }
@@ -339,5 +340,60 @@ function ProjectScopeMenu({ value, groups, environments, onChange }: SettingsSco
         };
       })}
     />
+  );
+}
+
+function CheckoutScopeMenu({ value, groups, environments, onChange }: SettingsScopeMenuProps) {
+  const group = groups.find((candidate) => candidate.projectKey === value.project);
+  if (!value.checkout && (!group || group.memberProjects.length < 2)) return null;
+  const resolved = resolveSettingsScope(value, groups, environments);
+  const selected = resolved.kind === "checkout" ? resolved.checkout : null;
+  const members =
+    group?.memberProjects.filter(
+      (member) => value.machine === undefined || member.environmentId === value.machine,
+    ) ?? [];
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span className="shrink-0">in</span>
+      <ScopeMenu
+        ariaLabel="Checkout scope"
+        icon={null}
+        label={
+          selected?.workspaceRoot ?? (value.checkout ? "Unavailable checkout" : "All checkouts")
+        }
+        value={value.checkout ?? "all"}
+        onChange={(next) => {
+          if (next === "all") {
+            onChange({
+              ...(value.project === undefined ? {} : { project: value.project }),
+              ...(value.machine === undefined ? {} : { machine: value.machine }),
+            });
+            return;
+          }
+          const member = members.find((candidate) => candidate.physicalProjectKey === next);
+          if (!group || !member) return;
+          onChange({
+            project: group.projectKey,
+            machine: member.environmentId,
+            checkout: member.physicalProjectKey,
+          });
+        }}
+        searchLabel="Search checkouts"
+        allOption={{ value: "all", label: "All checkouts" }}
+        options={members.map((member) => {
+          const environment = environments.find(
+            (candidate) => candidate.environmentId === member.environmentId,
+          );
+          return {
+            value: member.physicalProjectKey,
+            label: member.workspaceRoot,
+            secondary: environment
+              ? settingsScopeEnvironmentLabel(environment, environments)
+              : (member.environmentLabel ?? member.environmentId),
+            offline: environment?.connection.phase !== "connected",
+          };
+        })}
+      />
+    </span>
   );
 }

@@ -468,4 +468,26 @@ const make = Effect.gen(function* () {
   });
 });
 
+/**
+ * A per-thread working folder for a knowledge task, claimed for any project. It sits beside the
+ * Scratch root under the data directory, never inside the project's checkout, and exists only
+ * where Scratch is offered (the data dir is outside any work tree, so the folder inherits no
+ * repository). Deriving the name from the thread id makes a retried launch land on the same folder.
+ */
+export const makeKnowledgeFolderClaim = Effect.gen(function* () {
+  const config = yield* ServerConfig.ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const folders = yield* ManagedProjectFolders;
+  const knowledgeRoot = path.resolve(config.baseDir, "knowledge");
+  return Effect.fn("ManagedProjectFolders.claimKnowledgeFolder")(function* (threadId: ThreadId) {
+    if (Option.isNone(yield* folders.scratchRoot)) return Option.none<string>();
+    const folder = path.join(knowledgeRoot, threadId.toLowerCase().replace(/[^a-z0-9]/g, ""));
+    yield* fileSystem
+      .makeDirectory(folder, { recursive: true })
+      .pipe(Effect.mapError((cause) => new ScratchFolderError({ folder, cause })));
+    return Option.some(folder);
+  });
+});
+
 export const layer = Layer.effect(ManagedProjectFolders, make);

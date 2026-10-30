@@ -553,6 +553,42 @@ const themeIconFixture = (source: Uint8Array) =>
     return { root, hicolorDir, appsDir, cachePath, pastSeconds, seedCache, rewriteCache };
   });
 
+// Encode only theme-icon basenames on disk so distinct Linux names stay distinct
+// on case-insensitive hosts. Bytes, timestamps, directories, and cache files still
+// use the real filesystem; callers and directory listings retain the exact IDs.
+const withCaseSensitiveThemeIcons = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const isThemeIconDirectory = (directory: string) =>
+      directory.endsWith(path.join("icons", "hicolor", "256x256", "apps"));
+    const backingPath = (filePath: string) =>
+      isThemeIconDirectory(path.dirname(filePath))
+        ? path.join(path.dirname(filePath), Buffer.from(path.basename(filePath)).toString("hex"))
+        : filePath;
+    const caseSensitiveFileSystem: FileSystem.FileSystem = {
+      ...fileSystem,
+      readFile: (filePath, ...options) => fileSystem.readFile(backingPath(filePath), ...options),
+      writeFile: (filePath, ...options) => fileSystem.writeFile(backingPath(filePath), ...options),
+      stat: (filePath, ...options) => fileSystem.stat(backingPath(filePath), ...options),
+      utimes: (filePath, ...options) => fileSystem.utimes(backingPath(filePath), ...options),
+      exists: (filePath) => fileSystem.exists(backingPath(filePath)),
+      readDirectory: (directory, ...options) =>
+        fileSystem
+          .readDirectory(directory, ...options)
+          .pipe(
+            Effect.map((names) =>
+              isThemeIconDirectory(directory)
+                ? names.map((name) => Buffer.from(name, "hex").toString())
+                : names,
+            ),
+          ),
+    };
+    return yield* effect.pipe(
+      Effect.provideService(FileSystem.FileSystem, caseSensitiveFileSystem),
+    );
+  });
+
 const iconCacheRuns = (run: ThemeIconRun) =>
   run.commands.filter(({ command }) => command === "gtk-update-icon-cache").length;
 
@@ -583,7 +619,7 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
       }
       assert.isFalse(yield* fileSystem.exists(fixture.cachePath));
       assert.equal(iconCacheRuns(run), 0);
-    }).pipe(Effect.scoped),
+    }).pipe(withCaseSensitiveThemeIcons, Effect.scoped),
   );
 
   it.effect("replaces same-length stale icons and refreshes an existing cache once", () =>
@@ -599,6 +635,8 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
       for (const target of [lower, upper]) {
         yield* fileSystem.utimes(target, fixture.pastSeconds, fixture.pastSeconds);
       }
+      assert.deepEqual([...(yield* fileSystem.readFile(lower))], [3, 2, 1]);
+      assert.deepEqual([...(yield* fileSystem.readFile(upper))], [1, 2, 3]);
       const run: ThemeIconRun = {
         root: fixture.root,
         commands: [],
@@ -606,16 +644,18 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
       };
 
       yield* registerWithRealFileSystem(run);
+      assert.equal(iconCacheRuns(run), 1);
       yield* registerWithRealFileSystem(run);
 
       assert.deepEqual([...(yield* fileSystem.readFile(lower))], [1, 2, 3]);
+      assert.deepEqual([...(yield* fileSystem.readFile(upper))], [1, 2, 3]);
       const upperInfo = yield* fileSystem.stat(upper);
       assert.equal(Option.getOrThrow(upperInfo.mtime).getTime(), fixture.pastSeconds * 1000);
       assert.deepEqual(
         run.commands.filter(({ command }) => command === "gtk-update-icon-cache"),
         [{ command: "gtk-update-icon-cache", args: ["-f", "-t", fixture.hicolorDir] }],
       );
-    }).pipe(Effect.scoped),
+    }).pipe(withCaseSensitiveThemeIcons, Effect.scoped),
   );
 
   it.effect("refreshes when this launch changed an icon even if the cache looks newer", () =>

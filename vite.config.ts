@@ -1,5 +1,7 @@
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Staged tasks run in lint-staged's Node callback, without an Effect runtime.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeURL from "node:url";
 import { remoteCacheUrl } from "./infra/task-cache/src/remoteCache.ts";
 import { cachedTestTasks } from "./scripts/lib/cached-tests.ts";
@@ -149,8 +151,44 @@ export default defineConfig({
       : {}),
   },
   staged: {
-    // In order, so lint reads the formatted file. CI lint failures cost a full round trip.
-    "*": ["vp fmt --no-error-on-unmatched-pattern", "vp lint --no-error-on-unmatched-pattern"],
+    "*": {
+      title: "Format and lint staged files",
+      task: async (files, { log }) => {
+        const batches: string[][] = [];
+        let batch: string[] = [];
+        let length = 0;
+        for (const file of files) {
+          // Leave room for Windows executable paths, wrappers and argument escaping.
+          const argumentLength = file.length * 2 + 3;
+          if (batch.length > 0 && length + argumentLength > 4_000) {
+            batches.push(batch);
+            batch = [];
+            length = 0;
+          }
+          batch.push(file);
+          length += argumentLength;
+        }
+        if (batch.length > 0) batches.push(batch);
+        for (const command of ["fmt", "lint"]) {
+          for (const paths of batches) {
+            await new Promise<void>((resolve, reject) => {
+              NodeChildProcess.execFile(
+                // oxlint-disable-next-line t3code/no-global-process-runtime -- The build-tool callback selects a host executable without an Effect runtime.
+                process.platform === "win32" ? "vp.exe" : "vp",
+                [command, "--no-error-on-unmatched-pattern", "--", ...paths],
+                { shell: false, windowsHide: true, maxBuffer: 10 * 1024 * 1024 },
+                (error, stdout, stderr) => {
+                  if (stdout) log(stdout);
+                  if (stderr) log(stderr);
+                  if (error) reject(error);
+                  else resolve();
+                },
+              );
+            });
+          }
+        }
+      },
+    },
     // knip checks the whole repo, so it takes no file list. Any code or manifest change can leave
     // a file, export, or dependency unused.
     "{*.{js,jsx,ts,tsx,mjs,cjs,mts,cts},package.json,knip.jsonc}": () => "vp run knip:check",

@@ -15,6 +15,25 @@ import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.factoryStartIssue]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryAdmitFeedCandidate]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factorySetIssueReadinessOverride]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryRevokeIssueReadinessOverride]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factorySealResearchProtocol]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryLaunchResearchRun]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryAdmitResearchImplementation]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryAcceptCommit]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryGrantDelivery]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryCreateKnowledgeBrief]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryStartKnowledgeTask]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryAcceptKnowledgeArtifact]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factoryReconcileDelivery]: AuthOrchestrationOperateScope,
+  // Binding causes server-side egress to a user-entered URL, like the OTLP endpoint check.
+  [WS_METHODS.factoryBindFeedSource]: AuthSettingsWriteScope,
+  [WS_METHODS.factoryUnbindFeedSource]: AuthSettingsWriteScope,
+  [WS_METHODS.factoryRefreshFeedSource]: AuthOrchestrationOperateScope,
+  [WS_METHODS.factorySetFeedCandidateDismissed]: AuthOrchestrationOperateScope,
+  [WS_METHODS.projectCoordinatorsEnsure]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   // Stopping a server signals its processes, as closing a terminal does.
   [WS_METHODS.previewStopLocalServer]: AuthTerminalOperateScope,
@@ -76,6 +95,16 @@ export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
+  if (
+    method === WS_METHODS.factoryStartIssue ||
+    method === WS_METHODS.factoryAdmitFeedCandidate ||
+    method === WS_METHODS.factoryLaunchResearchRun ||
+    method === WS_METHODS.factoryAdmitResearchImplementation ||
+    method === WS_METHODS.factoryAcceptCommit ||
+    method === WS_METHODS.factoryGrantDelivery ||
+    method === WS_METHODS.factoryReconcileDelivery
+  )
+    return [AuthOrchestrationOperateScope, AuthSourceControlWriteScope];
   if (method === WS_METHODS.gitPreparePullRequestThread && input !== undefined) {
     const payload = decodePrepareThread(input);
     if (payload.mode === "worktree" && payload.threadId !== undefined)

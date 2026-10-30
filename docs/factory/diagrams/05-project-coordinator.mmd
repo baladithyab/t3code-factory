@@ -1,0 +1,22 @@
+flowchart TD
+  accTitle: Every thread can orchestrate. One optional project role.
+  accDescr: Proposed UX: outcome threads can start directly. One ordinary thread may be designated to coordinate priorities and shared decisions for an explicit project scope. Dashed arrows mean optional coordination, not a prerequisite to launch an outcome. The current create/resume binding is checkout-local; arbitrary existing-thread assignment and revision-checked reassignment are proposed. Reassignment preserves active attempts. A role grants no extra authority.
+  scope --> coordinator
+  coordinator -.-> outcome_a
+  coordinator -.-> outcome_b
+  coordinator -.-> outcome_c
+  outcome_a --> tasks_a
+  outcome_b --> tasks_b
+  outcome_c --> tasks_c
+  tasks_a --> evidence
+  tasks_b --> evidence
+  tasks_c --> evidence
+  scope["Explicit project scope"]
+  coordinator["One designated ordinary thread"]
+  outcome_a["Outcome thread A"]
+  outcome_b["Outcome thread B"]
+  outcome_c["Outcome thread C"]
+  tasks_a["Own tasks / collaborators"]
+  tasks_b["Own tasks / collaborators"]
+  tasks_c["Own tasks / collaborators"]
+  evidence["Results + project decisions"]

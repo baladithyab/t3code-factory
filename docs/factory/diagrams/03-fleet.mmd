@@ -1,0 +1,19 @@
+flowchart TD
+  accTitle: Place the work; preserve its owner.
+  accDescr: Proposed shared placement and admission: harness/model, target environment, and provisioning are separate choices. Sandbox candidates share one category: Blaxel, Modal, Daytona, E2B, Baseten, and others. Capabilities differ; batch jobs are optional. Provisioning does not transfer ownership. Persist artifacts and reconcile uncertain attempts before retrying.
+  ready --> policy
+  policy --> reserve
+  reserve --> local
+  local --> attempt
+  attempt --> durable
+  durable --> result
+  reserve --> sandbox
+  sandbox --> attempt
+  ready["Ready task + requirements"]
+  policy["Capability / budget / locality"]
+  reserve["Select + reserve capacity"]
+  local["Local or linked T3 environment"]
+  attempt["Owned, observable attempt"]
+  durable["Persist artifacts + reconcile"]
+  result["Return evidence to thread"]
+  sandbox["Remote SandboxProvider"]

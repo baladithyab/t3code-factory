@@ -1,0 +1,20 @@
+flowchart TD
+  accTitle: A repeatable way to settle work.
+  accDescr: Proposed workflows reuse outcome threads and tasks. Manual, scheduled, and scoped event requests enter the same bounded execution loop. Filter and deduplicate events before model work. Dependency readiness drives parallel execution; phase names are presentation. Record explicit attempts or plan revisions for failures and new findings. No-op events stay quiet.
+  manual --> trigger
+  schedule --> trigger
+  signal --> trigger
+  trigger --> run
+  run --> ready
+  ready --> review
+  review --> next
+  next --> close
+  manual["Manual request"]
+  schedule["Schedule"]
+  signal["Scoped event / signal"]
+  trigger["Deduplicate + apply policy"]
+  run["Instantiate versioned plan"]
+  ready["Run independent ready tasks"]
+  review["Join + check criteria"]
+  next["Continue / ask / deliver"]
+  close["Settle run; retain evidence"]

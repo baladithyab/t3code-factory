@@ -1,0 +1,1013 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>T3Factory vision atlas</title>
+    <style>
+      :root {
+        font-family: var(--font-sans, Arial, sans-serif);
+        color: var(--foreground, #17334b);
+      }
+      body {
+        margin: 0;
+      }
+      h2 {
+        font-size: 20px;
+      }
+      p,
+      li {
+        line-height: 1.6;
+      }
+      a {
+        color: var(--primary, #164f84);
+      }
+      .tabs {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 18px 0 8px;
+      }
+      .tabs button {
+        font: inherit;
+        color: var(--foreground, #17334b);
+        padding: 8px 12px;
+        border: 1px solid var(--border, #bacad8);
+        border-radius: var(--radius, 6px);
+        background: var(--secondary, #edf3f8);
+        cursor: pointer;
+      }
+      .tabs button[aria-selected="true"] {
+        background: var(--primary, #164f84);
+        color: var(--primary-foreground, #fff);
+      }
+      section {
+        border: 1px solid var(--border, #cad6e1);
+        border-radius: var(--radius, 10px);
+        background: var(--card, #fff);
+        padding: 16px;
+        margin: 12px 0;
+      }
+      .muted {
+        color: var(--muted-foreground, #506477);
+        font-size: 14px;
+      }
+      .stories {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 12px;
+      }
+      .story {
+        background: var(--secondary, #edf3f8);
+        padding: 16px;
+        border-radius: var(--radius, 6px);
+      }
+      .story strong {
+        display: block;
+      }
+      .graph {
+        overflow-x: auto;
+      }
+      svg {
+        display: block;
+        width: 100%;
+        min-width: 650px;
+        height: auto;
+        max-height: 660px;
+      }
+      .formats {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      .view[hidden] {
+        display: none;
+      }
+      summary {
+        cursor: pointer;
+        font-weight: bold;
+      }
+      a:focus-visible,
+      button:focus-visible,
+      summary:focus-visible,
+      section:focus-visible {
+        outline: 3px solid var(--ring, #164f84);
+        outline-offset: 4px;
+      }
+      @media print {
+        .tabs {
+          display: none;
+        }
+        .view[hidden] {
+          display: block;
+        }
+        section {
+          break-before: page;
+          border: 0;
+        }
+        svg {
+          min-width: 0;
+          max-height: 800px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <p>
+      <strong>Launch a thread to settle an outcome.</strong> T3Factory brings agents, tools, and
+      compute together for software, research, and knowledge work in one experience.
+    </p>
+    <p class="muted">
+      Product direction reviewed 2026-10-29. These views are design illustrations, not a working
+      client or release checklist.
+    </p>
+    <p>
+      <a href="../vision.md">Read the vision</a> ·
+      <a href="../sources.md">Sources and evidence</a> ·
+      <a href="t3factory.drawio">Editable five-page draw.io</a> ·
+      <a href="diagrams.json">Canonical graph data</a>
+    </p>
+    <details>
+      <summary>Five people, the same thread experience</summary>
+      <div class="stories">
+        <p class="story">
+          <strong>Software engineer</strong>Ship a change with tests and review evidence.
+        </p>
+        <p class="story">
+          <strong>Research engineer</strong>Test a hypothesis with a reproducible baseline and
+          bounded experiments.
+        </p>
+        <p class="story">
+          <strong>Engineering manager</strong>Resolve release blockers and decide priorities.
+        </p>
+        <p class="story">
+          <strong>Solutions architect</strong>Compare architectures and produce editable diagrams.
+        </p>
+        <p class="story">
+          <strong>Forward deployed engineer</strong>Investigate, prototype, and explain a customer
+          solution.
+        </p>
+      </div>
+      <p class="muted">Illustrative examples only. No persona or work-type selector is required.</p>
+    </details>
+    <div class="tabs" role="tablist" aria-label="Architecture views">
+      <button
+        id="tab-01-one-experience"
+        role="tab"
+        aria-selected="true"
+        aria-controls="01-one-experience"
+        tabindex="0"
+      >
+        Experience
+      </button>
+      <button
+        id="tab-02-runtime"
+        role="tab"
+        aria-selected="false"
+        aria-controls="02-runtime"
+        tabindex="-1"
+      >
+        Runtime
+      </button>
+      <button
+        id="tab-03-fleet"
+        role="tab"
+        aria-selected="false"
+        aria-controls="03-fleet"
+        tabindex="-1"
+      >
+        Fleet
+      </button>
+      <button
+        id="tab-04-workflow"
+        role="tab"
+        aria-selected="false"
+        aria-controls="04-workflow"
+        tabindex="-1"
+      >
+        Workflows
+      </button>
+      <button
+        id="tab-05-project-coordinator"
+        role="tab"
+        aria-selected="false"
+        aria-controls="05-project-coordinator"
+        tabindex="-1"
+      >
+        Project coordinator
+      </button>
+    </div>
+    <section
+      id="01-one-experience"
+      class="view"
+      role="tabpanel"
+      tabindex="0"
+      aria-labelledby="tab-01-one-experience"
+    >
+      <h2>One thread. Many contributors. One outcome.</h2>
+      <p>
+        Proposed experience: one outcome can combine code, research, diagrams, and documents. Simple
+        requests can skip decomposition.
+      </p>
+      <div class="graph">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 900 900"
+          role="img"
+          aria-labelledby="01-one-experience-title 01-one-experience-desc"
+        >
+          <title id="01-one-experience-title">One thread. Many contributors. One outcome.</title>
+          <desc id="01-one-experience-desc">
+            Proposed experience: one outcome can combine code, research, diagrams, and documents.
+            Simple requests can skip decomposition. Dashed bidirectional links are addressed peer
+            messages. Independent tasks join into an evidence-bearing result. Completion,
+            acceptance, delivery, and settlement are separate; settlement is reversible.
+          </desc>
+          <defs>
+            <marker
+              id="arrow-01-one-experience"
+              markerWidth="8"
+              markerHeight="8"
+              refX="7"
+              refY="4"
+              orient="auto-start-reverse"
+            >
+              <path d="M0 0L8 4L0 8" fill="#54718b" />
+            </marker>
+          </defs>
+          <rect width="900" height="900" fill="#f6f8fb" />
+          <style>
+            text {
+              font-family: Arial, sans-serif;
+              fill: #17334b;
+            }
+          </style>
+          <path
+            d="M450 129 L450 152 L450 152 L450 175"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-01-one-experience)"
+          />
+          <path
+            d="M450 239 L450 262 L450 262 L450 285"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-01-one-experience)"
+          />
+          <path
+            d="M450 349 L450 382 L160 382 L160 415"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-01-one-experience)"
+          />
+          <path
+            d="M450 349 L450 382 L450 382 L450 415"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-01-one-experience)"
+          />
+          <path
+            d="M450 349 L450 382 L740 382 L740 415"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-01-one-experience)"
+          />
+          <path
+            d="M160 479 L160 517 L450 517 L450 555"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-01-one-experience)"
+          />
+          <path
+            d="M450 479 L450 517 L450 517 L450 555"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-01-one-experience)"
+          />
+          <path
+            d="M740 479 L740 517 L450 517 L450 555"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-01-one-experience)"
+          />
+          <path
+            d="M450 619 L450 642 L450 642 L450 665"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-01-one-experience)"
+          />
+          <path
+            d="M450 729 L450 752 L450 752 L450 775"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-01-one-experience)"
+          />
+          <path
+            d="M280 447 L330 447"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-01-one-experience)"
+            stroke-dasharray="5 4"
+            marker-start="url(#arrow-01-one-experience)"
+          />
+          <path
+            d="M570 447 L620 447"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-01-one-experience)"
+            stroke-dasharray="5 4"
+            marker-start="url(#arrow-01-one-experience)"
+          />
+          <rect x="330" y="65" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="103.0" text-anchor="middle" font-size="17">Describe an outcome</text>
+          <rect x="330" y="175" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="213.0" text-anchor="middle" font-size="17">
+            Ordinary outcome thread
+          </text>
+          <rect x="330" y="285" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="323.0" text-anchor="middle" font-size="17">
+            Visible plan + dependencies
+          </text>
+          <rect x="40" y="415" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="160.0" y="453.0" text-anchor="middle" font-size="17">Task A / agent</text>
+          <rect x="330" y="415" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="453.0" text-anchor="middle" font-size="17">Task B / agent</text>
+          <rect x="620" y="415" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="740.0" y="453.0" text-anchor="middle" font-size="17">Task C / agent</text>
+          <rect x="330" y="555" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="593.0" text-anchor="middle" font-size="17">
+            Reconcile + verify results
+          </text>
+          <rect x="330" y="665" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="703.0" text-anchor="middle" font-size="17">
+            Review outcome / decide
+          </text>
+          <rect x="330" y="775" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="813.0" text-anchor="middle" font-size="17">Settle or continue</text>
+        </svg>
+      </div>
+      <p>
+        Dashed bidirectional links are addressed peer messages. Independent tasks join into an
+        evidence-bearing result. Completion, acceptance, delivery, and settlement are separate;
+        settlement is reversible.
+      </p>
+      <p class="formats">
+        <a href="01-one-experience.svg">SVG</a><a href="01-one-experience.mmd">Mermaid</a>
+      </p>
+    </section>
+    <section
+      id="02-runtime"
+      class="view"
+      role="tabpanel"
+      tabindex="0"
+      aria-labelledby="tab-02-runtime"
+      hidden
+    >
+      <h2>Reasoning plans; durable services execute.</h2>
+      <p>
+        Proposed Factory composition on T3 V2: models propose plans; durable services validate
+        transitions and run accepted work.
+      </p>
+      <div class="graph">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 900 900"
+          role="img"
+          aria-labelledby="02-runtime-title 02-runtime-desc"
+        >
+          <title id="02-runtime-title">Reasoning plans; durable services execute.</title>
+          <desc id="02-runtime-desc">
+            Proposed Factory composition on T3 V2: models propose plans; durable services validate
+            transitions and run accepted work. Task dependencies are distinct from execution
+            lineage. V2 means the existing command/event/outbox engine. Peer discussion does not
+            change ownership or acceptance; typed service commands do.
+          </desc>
+          <defs>
+            <marker
+              id="arrow-02-runtime"
+              markerWidth="8"
+              markerHeight="8"
+              refX="7"
+              refY="4"
+              orient="auto-start-reverse"
+            >
+              <path d="M0 0L8 4L0 8" fill="#54718b" />
+            </marker>
+          </defs>
+          <rect width="900" height="900" fill="#f6f8fb" />
+          <style>
+            text {
+              font-family: Arial, sans-serif;
+              fill: #17334b;
+            }
+          </style>
+          <path
+            d="M450 129 L450 152 L450 152 L450 175"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-02-runtime)"
+          />
+          <path
+            d="M450 239 L450 262 L450 262 L450 285"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-02-runtime)"
+          />
+          <path
+            d="M450 349 L450 372 L450 372 L450 395"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-02-runtime)"
+          />
+          <path
+            d="M450 459 L450 492 L160 492 L160 525"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-02-runtime)"
+          />
+          <path
+            d="M450 459 L450 492 L450 492 L450 525"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-02-runtime)"
+          />
+          <path
+            d="M450 459 L450 492 L740 492 L740 525"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-02-runtime)"
+          />
+          <path
+            d="M160 589 L160 622 L450 622 L450 655"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-02-runtime)"
+          />
+          <path
+            d="M450 589 L450 622 L450 622 L450 655"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-02-runtime)"
+          />
+          <path
+            d="M740 589 L740 622 L450 622 L450 655"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-02-runtime)"
+          />
+          <path
+            d="M450 719 L450 747 L450 747 L450 775"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-02-runtime)"
+          />
+          <rect x="330" y="65" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="93.0" text-anchor="middle" font-size="17">Shared thread / plan /</text>
+          <text x="450.0" y="113.0" text-anchor="middle" font-size="17">artifacts</text>
+          <rect x="330" y="175" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="213.0" text-anchor="middle" font-size="17">
+            Coordinator proposes work
+          </text>
+          <rect x="330" y="285" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="323.0" text-anchor="middle" font-size="17">
+            Plan + task service commands
+          </text>
+          <rect x="330" y="395" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="423.0" text-anchor="middle" font-size="17">
+            V2 events / receipts /
+          </text>
+          <text x="450.0" y="443.0" text-anchor="middle" font-size="17">outbox</text>
+          <rect x="40" y="525" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="160.0" y="563.0" text-anchor="middle" font-size="17">
+            Task attempts + claims
+          </text>
+          <rect x="330" y="525" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="553.0" text-anchor="middle" font-size="17">Context + evidence</text>
+          <text x="450.0" y="573.0" text-anchor="middle" font-size="17">references</text>
+          <rect x="620" y="525" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="740.0" y="563.0" text-anchor="middle" font-size="17">Scoped peer messages</text>
+          <rect x="330" y="655" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="693.0" text-anchor="middle" font-size="17">
+            Existing harness adapters
+          </text>
+          <rect x="330" y="775" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="813.0" text-anchor="middle" font-size="17">
+            Results back to goal thread
+          </text>
+        </svg>
+      </div>
+      <p>
+        Task dependencies are distinct from execution lineage. V2 means the existing
+        command/event/outbox engine. Peer discussion does not change ownership or acceptance; typed
+        service commands do.
+      </p>
+      <p class="formats"><a href="02-runtime.svg">SVG</a><a href="02-runtime.mmd">Mermaid</a></p>
+    </section>
+    <section
+      id="03-fleet"
+      class="view"
+      role="tabpanel"
+      tabindex="0"
+      aria-labelledby="tab-03-fleet"
+      hidden
+    >
+      <h2>Place the work; preserve its owner.</h2>
+      <p>
+        Proposed shared placement and admission: harness/model, target environment, and provisioning
+        are separate choices.
+      </p>
+      <div class="graph">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 900 900"
+          role="img"
+          aria-labelledby="03-fleet-title 03-fleet-desc"
+        >
+          <title id="03-fleet-title">Place the work; preserve its owner.</title>
+          <desc id="03-fleet-desc">
+            Proposed shared placement and admission: harness/model, target environment, and
+            provisioning are separate choices. Sandbox candidates share one category: Blaxel, Modal,
+            Daytona, E2B, Baseten, and others. Capabilities differ; batch jobs are optional.
+            Provisioning does not transfer ownership. Persist artifacts and reconcile uncertain
+            attempts before retrying.
+          </desc>
+          <defs>
+            <marker
+              id="arrow-03-fleet"
+              markerWidth="8"
+              markerHeight="8"
+              refX="7"
+              refY="4"
+              orient="auto-start-reverse"
+            >
+              <path d="M0 0L8 4L0 8" fill="#54718b" />
+            </marker>
+          </defs>
+          <rect width="900" height="900" fill="#f6f8fb" />
+          <style>
+            text {
+              font-family: Arial, sans-serif;
+              fill: #17334b;
+            }
+          </style>
+          <path
+            d="M450 129 L450 152 L450 152 L450 175"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-03-fleet)"
+          />
+          <path
+            d="M450 239 L450 262 L450 262 L450 285"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-03-fleet)"
+          />
+          <path
+            d="M450 349 L450 387 L270 387 L270 425"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-03-fleet)"
+          />
+          <path
+            d="M270 489 L270 527 L450 527 L450 565"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-03-fleet)"
+          />
+          <path
+            d="M450 629 L450 657 L450 657 L450 685"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-03-fleet)"
+          />
+          <path
+            d="M450 749 L450 772 L450 772 L450 795"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-03-fleet)"
+          />
+          <path
+            d="M450 349 L450 387 L630 387 L630 425"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-03-fleet)"
+          />
+          <path
+            d="M630 489 L630 527 L450 527 L450 565"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-03-fleet)"
+          />
+          <rect x="330" y="65" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="103.0" text-anchor="middle" font-size="17">
+            Ready task + requirements
+          </text>
+          <rect x="330" y="175" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="203.0" text-anchor="middle" font-size="17">Capability / budget /</text>
+          <text x="450.0" y="223.0" text-anchor="middle" font-size="17">locality</text>
+          <rect x="330" y="285" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="323.0" text-anchor="middle" font-size="17">
+            Select + reserve capacity
+          </text>
+          <rect x="130" y="425" width="280" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="270.0" y="463.0" text-anchor="middle" font-size="17">
+            Local or linked T3 environment
+          </text>
+          <rect x="330" y="565" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="603.0" text-anchor="middle" font-size="17">
+            Owned, observable attempt
+          </text>
+          <rect x="330" y="685" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="713.0" text-anchor="middle" font-size="17">Persist artifacts +</text>
+          <text x="450.0" y="733.0" text-anchor="middle" font-size="17">reconcile</text>
+          <rect x="330" y="795" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="833.0" text-anchor="middle" font-size="17">
+            Return evidence to thread
+          </text>
+          <rect x="490" y="425" width="280" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="630.0" y="463.0" text-anchor="middle" font-size="17">
+            Remote SandboxProvider
+          </text>
+        </svg>
+      </div>
+      <p>
+        Sandbox candidates share one category: Blaxel, Modal, Daytona, E2B, Baseten, and others.
+        Capabilities differ; batch jobs are optional. Provisioning does not transfer ownership.
+        Persist artifacts and reconcile uncertain attempts before retrying.
+      </p>
+      <p class="formats"><a href="03-fleet.svg">SVG</a><a href="03-fleet.mmd">Mermaid</a></p>
+    </section>
+    <section
+      id="04-workflow"
+      class="view"
+      role="tabpanel"
+      tabindex="0"
+      aria-labelledby="tab-04-workflow"
+      hidden
+    >
+      <h2>A repeatable way to settle work.</h2>
+      <p>
+        Proposed workflows reuse outcome threads and tasks. Manual, scheduled, and scoped event
+        requests enter the same bounded execution loop.
+      </p>
+      <div class="graph">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 900 900"
+          role="img"
+          aria-labelledby="04-workflow-title 04-workflow-desc"
+        >
+          <title id="04-workflow-title">A repeatable way to settle work.</title>
+          <desc id="04-workflow-desc">
+            Proposed workflows reuse outcome threads and tasks. Manual, scheduled, and scoped event
+            requests enter the same bounded execution loop. Filter and deduplicate events before
+            model work. Dependency readiness drives parallel execution; phase names are
+            presentation. Record explicit attempts or plan revisions for failures and new findings.
+            No-op events stay quiet.
+          </desc>
+          <defs>
+            <marker
+              id="arrow-04-workflow"
+              markerWidth="8"
+              markerHeight="8"
+              refX="7"
+              refY="4"
+              orient="auto-start-reverse"
+            >
+              <path d="M0 0L8 4L0 8" fill="#54718b" />
+            </marker>
+          </defs>
+          <rect width="900" height="900" fill="#f6f8fb" />
+          <style>
+            text {
+              font-family: Arial, sans-serif;
+              fill: #17334b;
+            }
+          </style>
+          <path
+            d="M160 129 L160 167 L450 167 L450 205"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-04-workflow)"
+          />
+          <path
+            d="M450 129 L450 167 L450 167 L450 205"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-04-workflow)"
+          />
+          <path
+            d="M740 129 L740 167 L450 167 L450 205"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-04-workflow)"
+          />
+          <path
+            d="M450 269 L450 297 L450 297 L450 325"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-04-workflow)"
+          />
+          <path
+            d="M450 389 L450 417 L450 417 L450 445"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-04-workflow)"
+          />
+          <path
+            d="M450 509 L450 537 L450 537 L450 565"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-04-workflow)"
+          />
+          <path
+            d="M450 629 L450 657 L450 657 L450 685"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-04-workflow)"
+          />
+          <path
+            d="M450 749 L450 772 L450 772 L450 795"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-04-workflow)"
+          />
+          <rect x="40" y="65" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="160.0" y="103.0" text-anchor="middle" font-size="17">Manual request</text>
+          <rect x="330" y="65" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="103.0" text-anchor="middle" font-size="17">Schedule</text>
+          <rect x="620" y="65" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="740.0" y="103.0" text-anchor="middle" font-size="17">Scoped event / signal</text>
+          <rect x="330" y="205" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="243.0" text-anchor="middle" font-size="17">
+            Deduplicate + apply policy
+          </text>
+          <rect x="330" y="325" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="363.0" text-anchor="middle" font-size="17">
+            Instantiate versioned plan
+          </text>
+          <rect x="330" y="445" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="483.0" text-anchor="middle" font-size="17">
+            Run independent ready tasks
+          </text>
+          <rect x="330" y="565" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="603.0" text-anchor="middle" font-size="17">Join + check criteria</text>
+          <rect x="330" y="685" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="723.0" text-anchor="middle" font-size="17">
+            Continue / ask / deliver
+          </text>
+          <rect x="330" y="795" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="833.0" text-anchor="middle" font-size="17">
+            Settle run; retain evidence
+          </text>
+        </svg>
+      </div>
+      <p>
+        Filter and deduplicate events before model work. Dependency readiness drives parallel
+        execution; phase names are presentation. Record explicit attempts or plan revisions for
+        failures and new findings. No-op events stay quiet.
+      </p>
+      <p class="formats"><a href="04-workflow.svg">SVG</a><a href="04-workflow.mmd">Mermaid</a></p>
+    </section>
+    <section
+      id="05-project-coordinator"
+      class="view"
+      role="tabpanel"
+      tabindex="0"
+      aria-labelledby="tab-05-project-coordinator"
+      hidden
+    >
+      <h2>Every thread can orchestrate. One optional project role.</h2>
+      <p>
+        Proposed UX: outcome threads can start directly. One ordinary thread may be designated to
+        coordinate priorities and shared decisions for an explicit project scope.
+      </p>
+      <div class="graph">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 900 850"
+          role="img"
+          aria-labelledby="05-project-coordinator-title 05-project-coordinator-desc"
+        >
+          <title id="05-project-coordinator-title">
+            Every thread can orchestrate. One optional project role.
+          </title>
+          <desc id="05-project-coordinator-desc">
+            Proposed UX: outcome threads can start directly. One ordinary thread may be designated
+            to coordinate priorities and shared decisions for an explicit project scope. Dashed
+            arrows mean optional coordination, not a prerequisite to launch an outcome. The current
+            create/resume binding is checkout-local; arbitrary existing-thread assignment and
+            revision-checked reassignment are proposed. Reassignment preserves active attempts. A
+            role grants no extra authority.
+          </desc>
+          <defs>
+            <marker
+              id="arrow-05-project-coordinator"
+              markerWidth="8"
+              markerHeight="8"
+              refX="7"
+              refY="4"
+              orient="auto-start-reverse"
+            >
+              <path d="M0 0L8 4L0 8" fill="#54718b" />
+            </marker>
+          </defs>
+          <rect width="900" height="850" fill="#f6f8fb" />
+          <style>
+            text {
+              font-family: Arial, sans-serif;
+              fill: #17334b;
+            }
+          </style>
+          <path
+            d="M370 97 L530 97"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-05-project-coordinator)"
+          />
+          <path
+            d="M680 129 L680 214.5 L160 214.5 L160 300"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-05-project-coordinator)"
+            stroke-dasharray="5 4"
+          />
+          <path
+            d="M680 129 L680 214.5 L450 214.5 L450 300"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-05-project-coordinator)"
+            stroke-dasharray="5 4"
+          />
+          <path
+            d="M680 129 L680 214.5 L740 214.5 L740 300"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-05-project-coordinator)"
+            stroke-dasharray="5 4"
+          />
+          <path
+            d="M160 364 L160 417 L160 417 L160 470"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-05-project-coordinator)"
+          />
+          <path
+            d="M450 364 L450 417 L450 417 L450 470"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-05-project-coordinator)"
+          />
+          <path
+            d="M740 364 L740 417 L740 417 L740 470"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-05-project-coordinator)"
+          />
+          <path
+            d="M160 534 L160 614.5 L450 614.5 L450 695"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-05-project-coordinator)"
+          />
+          <path
+            d="M450 534 L450 614.5 L450 614.5 L450 695"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-05-project-coordinator)"
+          />
+          <path
+            d="M740 534 L740 614.5 L450 614.5 L450 695"
+            fill="none"
+            stroke="#54718b"
+            stroke-width="2"
+            marker-end="url(#arrow-05-project-coordinator)"
+          />
+          <rect x="70" y="65" width="300" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="220.0" y="103.0" text-anchor="middle" font-size="17">
+            Explicit project scope
+          </text>
+          <rect x="530" y="65" width="300" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="680.0" y="103.0" text-anchor="middle" font-size="17">
+            One designated ordinary thread
+          </text>
+          <rect x="40" y="300" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="160.0" y="338.0" text-anchor="middle" font-size="17">Outcome thread A</text>
+          <rect x="330" y="300" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="338.0" text-anchor="middle" font-size="17">Outcome thread B</text>
+          <rect x="620" y="300" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="740.0" y="338.0" text-anchor="middle" font-size="17">Outcome thread C</text>
+          <rect x="40" y="470" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="160.0" y="508.0" text-anchor="middle" font-size="17">
+            Own tasks / collaborators
+          </text>
+          <rect x="330" y="470" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="508.0" text-anchor="middle" font-size="17">
+            Own tasks / collaborators
+          </text>
+          <rect x="620" y="470" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="740.0" y="508.0" text-anchor="middle" font-size="17">
+            Own tasks / collaborators
+          </text>
+          <rect x="300" y="695" width="300" height="64" rx="8" fill="#e9f1f8" stroke="#527896" />
+          <text x="450.0" y="733.0" text-anchor="middle" font-size="17">
+            Results + project decisions
+          </text>
+        </svg>
+      </div>
+      <p>
+        Dashed arrows mean optional coordination, not a prerequisite to launch an outcome. The
+        current create/resume binding is checkout-local; arbitrary existing-thread assignment and
+        revision-checked reassignment are proposed. Reassignment preserves active attempts. A role
+        grants no extra authority.
+      </p>
+      <p class="formats">
+        <a href="05-project-coordinator.svg">SVG</a><a href="05-project-coordinator.mmd">Mermaid</a>
+      </p>
+    </section>
+    <footer>
+      <p class="muted">
+        All formats derive from the same graph model. SVG geometry is generated directly; Mermaid
+        renderers choose their own layout. The draw.io pages contain editable native shapes and
+        connectors. See the vision for lifecycle and authority decisions.
+      </p>
+    </footer>
+    <script>
+      const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+      function selectTab(index, focus) {
+        tabs.forEach((tab, i) => {
+          const selected = i === index;
+          tab.setAttribute("aria-selected", String(selected));
+          tab.tabIndex = selected ? 0 : -1;
+          document.getElementById(tab.getAttribute("aria-controls")).hidden = !selected;
+        });
+        if (focus) tabs[index].focus();
+      }
+      tabs.forEach((tab, index) => {
+        tab.addEventListener("click", () => selectTab(index, false));
+        tab.addEventListener("keydown", (event) => {
+          let next;
+          if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+          if (event.key === "ArrowLeft") next = (index + tabs.length - 1) % tabs.length;
+          if (event.key === "Home") next = 0;
+          if (event.key === "End") next = tabs.length - 1;
+          if (next !== undefined) {
+            event.preventDefault();
+            selectTab(next, true);
+          }
+        });
+      });
+      const initial = tabs.findIndex(
+        (tab) => "#" + tab.getAttribute("aria-controls") === location.hash,
+      );
+      if (initial >= 0) selectTab(initial, false);
+    </script>
+  </body>
+</html>

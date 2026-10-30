@@ -1,3 +1,4 @@
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -9,6 +10,7 @@ import type {
   EnvironmentId,
   ProjectId,
   ScheduledTask,
+  ScheduledTaskId,
   ScheduledTaskUpsertInput,
 } from "@t3tools/contracts";
 import {
@@ -32,7 +34,7 @@ import {
   WEBHOOK_FILTER_OPS,
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useFocusEffect, useNavigation, usePreventRemove } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { AppState, Platform, Pressable, TextInput as RNTextInput, View } from "react-native";
@@ -55,12 +57,16 @@ import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { usePreparedConnection } from "../../state/session";
 import { buildModelOptions } from "../../lib/modelOptions";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { useProjects, useEnvironmentServerConfig } from "../../state/entities";
+import { useProjects, useEnvironmentServerConfig, useServerConfigs } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useEnvironments } from "../../state/environments";
+import { factoryCoordinatorSupportedAtom, factoryEnvironment } from "../../state/factory";
+import { environmentThreadShells } from "../../state/threads";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { resolveNewTaskBranchLabel } from "../threads/new-task-context-presentation";
+import { RUNTIME_MODE_CHOICES } from "../threads/thread-settings-options";
 import { useVoiceInputController } from "../voice-input/useVoiceInputController";
 import { ScheduledTaskPromptField } from "./components/ScheduledTaskPromptField";
 import {
@@ -71,6 +77,8 @@ import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
 import {
+  createFactoryDraft,
+  createDraft,
   editDraft,
   scheduledTaskDefaultModel,
   scheduleFromDraft,
@@ -81,7 +89,9 @@ import { useScheduledTaskEditor } from "./scheduled-task-editor";
 import {
   discardScheduledTaskEditor,
   markScheduledTaskEditorSaved,
+  moveScheduledTaskEditor,
   scheduledTaskEditorSessionAtom,
+  scheduledTaskInScope,
 } from "./scheduled-task-editor-state";
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
@@ -360,7 +370,7 @@ function PickerRow(props: {
   );
 }
 
-export function SettingsScheduledTasksRouteScreen() {
+function useScheduledTasksNow() {
   const [now, setNow] = useState(Date.now);
   useFocusEffect(() => {
     const updateNow = () => setNow(Date.now());
@@ -374,6 +384,121 @@ export function SettingsScheduledTasksRouteScreen() {
       subscription.remove();
     };
   });
+  return now;
+}
+
+export function FactoryScheduledTasksScreen({
+  environmentId,
+  projectId,
+  taskId,
+  onWorkflowOpened,
+}: {
+  readonly environmentId: EnvironmentId | null;
+  readonly projectId: ProjectId | null;
+  readonly taskId?: ScheduledTaskId;
+  readonly onWorkflowOpened?: (taskId: ScheduledTaskId) => void;
+}) {
+  const now = useScheduledTasksNow();
+  const insets = useSafeAreaInsets();
+  const { environments } = useEnvironments();
+  const { availableTargets } = useSettingsEnvironmentFilter();
+  const projects = useProjects();
+  const configs = useServerConfigs();
+  const { startEditor } = useScheduledTaskEditor();
+  const navigation = useNavigation<NativeStackNavigationProp<ScheduledTaskRoutes>>();
+  const scopedEnvironments = environments.filter(
+    (environment) => environmentId === null || environment.environmentId === environmentId,
+  );
+  const invalidScope =
+    (environmentId !== null && scopedEnvironments.length === 0) ||
+    (projectId !== null &&
+      (environmentId === null ||
+        !projects.some(
+          (project) => project.id === projectId && project.environmentId === environmentId,
+        ))) ||
+    (taskId !== undefined && environmentId === null);
+  if (invalidScope) {
+    return (
+      <Text className="p-4 text-base text-danger-foreground">
+        This workflow scope is unavailable. Choose its exact environment and project.
+      </Text>
+    );
+  }
+  return (
+    <ScrollView
+      className="flex-1"
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerClassName="gap-5 px-5 pt-4"
+      contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
+    >
+      <Text className="text-sm text-foreground-muted">
+        Scheduled agent prompts; latest dispatch only, not a dependency graph or historical run
+        timeline. New workflows start paused and supervised.
+      </Text>
+      {scopedEnvironments.length === 0 ? (
+        <Text className="text-base text-foreground-muted">
+          Connect an environment to manage workflows.
+        </Text>
+      ) : null}
+      {scopedEnvironments.map((environment) => {
+        const target = availableTargets.find(
+          (entry) => entry.environmentId === environment.environmentId,
+        );
+        if (!target) {
+          return (
+            <SettingsSection key={environment.environmentId} title={environment.label}>
+              <Text className="p-4 text-base text-foreground-muted">
+                Environment disconnected. Workflow counts and dispatch state are unavailable.
+              </Text>
+            </SettingsSection>
+          );
+        }
+        return (
+          <EnvironmentTasks
+            key={`${target.environmentId}:${projectId ?? "all"}:${taskId ?? "all"}`}
+            environment={target}
+            now={now}
+            projectIds={projectId === null ? null : [projectId]}
+            taskId={taskId}
+            onCreate={() => {
+              const project =
+                projects.find(
+                  (entry) => entry.environmentId === target.environmentId && entry.id === projectId,
+                ) ?? null;
+              startEditor({
+                environmentId: target.environmentId,
+                environmentLabel: target.label,
+                factory: true,
+                environmentScope: target.environmentId,
+                ...(projectId === null ? {} : { projectScope: projectId }),
+                draft: createFactoryDraft(
+                  projectId,
+                  scheduledTaskDefaultModel(configs.get(target.environmentId) ?? null, project),
+                ),
+              });
+              navigation.navigate("SettingsScheduledTaskEdit");
+            }}
+            onEdit={(task) => {
+              startEditor({
+                environmentId: target.environmentId,
+                environmentLabel: target.label,
+                factory: true,
+                environmentScope: target.environmentId,
+                projectScope: task.projectId,
+                draft: editDraft(task),
+              });
+              navigation.navigate("SettingsScheduledTaskEdit");
+              onWorkflowOpened?.(task.id);
+            }}
+          />
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+export function SettingsScheduledTasksRouteScreen() {
+  const now = useScheduledTasksNow();
   const { availableTargets, selectedTargets, selectedProjectKey, projectGroups } =
     useSettingsEnvironmentFilter();
   const selectedGroup = projectGroups.find((group) => group.key === selectedProjectKey);
@@ -476,13 +601,24 @@ export function SettingsScheduledTaskNewRouteScreen() {
 }
 
 export function SettingsScheduledTaskEditRouteScreen() {
-  return <SettingsScheduledTaskEditorScreen title="Edit scheduled task" />;
+  const { editor } = useScheduledTaskEditor();
+  return (
+    <SettingsScheduledTaskEditorScreen
+      title={
+        editor?.factory
+          ? editor.draft.task
+            ? "Edit workflow"
+            : "New workflow"
+          : "Edit scheduled task"
+      }
+    />
+  );
 }
 
 function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }) {
-  const { editor, voiceOwnerKey, readEditor, setEditor, hasChanges, draftForEnvironment } =
-    useScheduledTaskEditor();
+  const { editor, voiceOwnerKey, readEditor, setEditor, hasChanges } = useScheduledTaskEditor();
   const { availableTargets } = useSettingsEnvironmentFilter();
+  const configs = useServerConfigs();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const [saving, setSaving] = useState(false);
@@ -587,6 +723,8 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
                 ?.label ?? editor.environmentLabel
             }
             availableTargets={availableTargets}
+            projectScope={editor.projectScope}
+            environmentLocked={editor.environmentScope !== undefined}
             draft={editor.draft}
             saving={saving}
             setSaving={setSaving}
@@ -611,17 +749,15 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
             }}
             onChangeEnvironment={(target) => {
               if (target.environmentId === editor.environmentId) return;
-              setEditor({
-                environmentId: target.environmentId,
-                environmentLabel: target.label,
-                draft: {
-                  ...draftForEnvironment(target.environmentId),
-                  title: editor.draft.title,
-                  prompt: editor.draft.prompt,
-                  schedule: editor.draft.schedule,
-                  enabled: editor.draft.enabled,
-                },
-              });
+              const next = moveScheduledTaskEditor(
+                editor,
+                { environmentId: target.environmentId, environmentLabel: target.label },
+                createDraft(
+                  null,
+                  scheduledTaskDefaultModel(configs.get(target.environmentId) ?? null, null),
+                ),
+              );
+              if (next) setEditor(next);
             }}
           />
         ) : (
@@ -640,6 +776,8 @@ function TaskForm({
   environmentId,
   environmentLabel,
   availableTargets,
+  projectScope,
+  environmentLocked,
   draft,
   saving,
   setSaving,
@@ -652,6 +790,8 @@ function TaskForm({
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
   readonly availableTargets: readonly SettingsTarget[];
+  readonly projectScope?: ProjectId;
+  readonly environmentLocked: boolean;
   readonly draft: Draft;
   readonly saving: boolean;
   readonly setSaving: (saving: boolean) => void;
@@ -668,6 +808,46 @@ function TaskForm({
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
   const config = useEnvironmentServerConfig(environmentId);
   const modelOptions = buildModelOptions(config, null, undefined, draft.projectId);
+  const supportsCoordinator = useAtomValue(factoryCoordinatorSupportedAtom(environmentId));
+  const coordinatorQuery = useEnvironmentQuery(
+    supportsCoordinator && draft.projectId !== null
+      ? factoryEnvironment.coordinatorsGet({ environmentId, input: { projectId: draft.projectId } })
+      : null,
+  );
+  const coordinator = coordinatorQuery.error ? null : coordinatorQuery.data?.coordinator;
+  const threadShells = useAtomValue(environmentThreadShells.threadShellsAtom);
+  const boundThread = threadShells.find(
+    (thread) => thread.environmentId === environmentId && thread.id === draft.threadId,
+  );
+  const coordinatorThread = coordinator
+    ? threadShells.find(
+        (thread) =>
+          thread.environmentId === environmentId &&
+          thread.id === coordinator.threadId &&
+          thread.projectId === draft.projectId &&
+          thread.deletedAt === null &&
+          thread.archivedAt === null,
+      )
+    : undefined;
+  const canBindCoordinator =
+    coordinator?.current === true &&
+    coordinatorThread !== undefined &&
+    (coordinator.status === "idle" ||
+      coordinator.status === "running" ||
+      coordinator.status === "preparing");
+  const coordinatorUnavailableReason = !draft.projectId
+    ? "Choose a project to select its orchestrator."
+    : !supportsCoordinator
+      ? "This environment does not support project orchestrators."
+      : coordinatorQuery.error
+        ? `Project orchestrator unavailable: ${coordinatorQuery.error}`
+        : !coordinatorQuery.data
+          ? "Loading project orchestrator…"
+          : !coordinator
+            ? "No project orchestrator exists. Create one in the Factory Orchestrator section."
+            : !canBindCoordinator
+              ? `Project orchestrator unavailable for binding (${coordinator.status}).`
+              : null;
   const canOperate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
   );
@@ -677,13 +857,22 @@ function TaskForm({
   });
   const submissionPending = useRef(false);
   const [timePickerOpen, setTimePickerOpen] = useState(false);
-  const taskMissing =
+  const liveTask = tasks.data?.tasks.find((task) => task.id === draft.task?.id);
+  const ownerChanged =
     draft.task !== null &&
-    tasks.data !== null &&
-    !tasks.data.tasks.some((task) => task.id === draft.task?.id);
+    liveTask !== undefined &&
+    (liveTask.threadId !== draft.task.threadId || liveTask.projectId !== draft.task.projectId);
+  const taskMissing = draft.task !== null && tasks.data !== null && liveTask === undefined;
   const environmentUnavailable = !availableTargets.some(
     (target) => target.environmentId === environmentId,
   );
+  const taskUnavailable = draft.task !== null && (tasks.error !== null || !tasks.isSuccess);
+  const bindingUnavailable =
+    draft.threadId !== null &&
+    (!boundThread ||
+      boundThread.projectId !== draft.projectId ||
+      boundThread.deletedAt !== null ||
+      boundThread.archivedAt !== null);
 
   const failure = (title: string, result: AtomCommandResult<unknown, unknown>) => {
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -698,7 +887,10 @@ function TaskForm({
       saving ||
       dictationPending ||
       taskMissing ||
-      environmentUnavailable
+      environmentUnavailable ||
+      taskUnavailable ||
+      bindingUnavailable ||
+      ownerChanged
     )
       return;
     // Preserve signatures edited on other clients by sending the task's current value.
@@ -748,6 +940,10 @@ function TaskForm({
       Dialog.alert("Project unavailable", "Choose a project in this environment.");
       return;
     }
+    if (projectScope !== undefined && draft.projectId !== projectScope) {
+      Dialog.alert("Project changed", "Reopen the workflow in its exact project scope.");
+      return;
+    }
     const input: ScheduledTaskUpsertInput = {
       ...(draft.task ? { id: draft.task.id, requireExisting: true } : {}),
       title: draft.title.trim(),
@@ -756,7 +952,7 @@ function TaskForm({
       modelSelection: draft.modelSelection,
       schedule,
       enabled: draft.enabled,
-      threadId: draft.task?.threadId ?? null,
+      threadId: draft.threadId,
       workspaceStrategy:
         draft.workspace === "root"
           ? { type: "root" }
@@ -768,7 +964,7 @@ function TaskForm({
                 startFromOrigin: draft.startFromOrigin,
               },
       runtimeMode: draft.runtimeMode,
-      interactionMode: draft.task?.interactionMode ?? "default",
+      interactionMode: draft.interactionMode,
       creationSource: draft.task?.creationSource ?? "mobile",
     };
     submissionPending.current = true;
@@ -800,6 +996,17 @@ function TaskForm({
             This environment is disconnected. Reconnect before saving.
           </Text>
         ) : null}
+        {taskUnavailable ? (
+          <Text className="px-1 text-base text-danger-foreground">
+            {tasks.error ?? "Loading the current workflow before saving…"}
+          </Text>
+        ) : null}
+        {ownerChanged ? (
+          <Text className="px-1 text-base text-danger-foreground">
+            This workflow's project or bound thread changed elsewhere. Reopen it to review the
+            current binding before saving.
+          </Text>
+        ) : null}
         <SettingsSection>
           <SelectRow
             label="Runs on"
@@ -812,7 +1019,12 @@ function TaskForm({
               />
             }
             actions={
-              draft.task || saving || dictationPending
+              draft.task ||
+              draft.threadId ||
+              environmentLocked ||
+              projectScope ||
+              saving ||
+              dictationPending
                 ? []
                 : availableTargets.map((target) => ({
                     id: target.environmentId,
@@ -848,14 +1060,18 @@ function TaskForm({
               projects.find((project) => project.id === draft.projectId)?.title ??
               (projects.length ? "Choose project" : "No projects available")
             }
-            actions={projects.map((project) => ({
-              id: project.id,
-              title: project.title,
-              state: project.id === draft.projectId ? "on" : undefined,
-            }))}
+            actions={
+              draft.threadId || projectScope
+                ? []
+                : projects.map((project) => ({
+                    id: project.id,
+                    title: project.title,
+                    state: project.id === draft.projectId ? "on" : undefined,
+                  }))
+            }
             onSelect={(id) => {
               const project = projects.find((item) => item.id === id);
-              if (!project) return;
+              if (!project || draft.threadId || projectScope) return;
               const keepsExplicitModel =
                 draft.modelSelectionIsExplicit &&
                 (draft.modelSelection === null ||
@@ -879,74 +1095,207 @@ function TaskForm({
             label="Model"
             borderTop
             value={
-              modelOptions.find(
-                (option) =>
-                  option.selection.instanceId === draft.modelSelection?.instanceId &&
-                  option.selection.model === draft.modelSelection?.model,
-              )?.label ??
-              draft.modelSelection?.model ??
-              (modelOptions.length ? "Choose model" : "No models available")
+              draft.threadId
+                ? (boundThread?.modelSelection.model ?? "Bound thread provider unavailable")
+                : (modelOptions.find(
+                    (option) =>
+                      option.selection.instanceId === draft.modelSelection?.instanceId &&
+                      option.selection.model === draft.modelSelection?.model,
+                  )?.label ??
+                  draft.modelSelection?.model ??
+                  (modelOptions.length ? "Choose model" : "No models available"))
             }
             onPress={() => navigation.navigate("SettingsScheduledTaskModel")}
-            disabled={saving || dictationPending || environmentUnavailable}
+            disabled={
+              draft.threadId !== null || saving || dictationPending || environmentUnavailable
+            }
           />
         </SettingsSection>
 
-        <SettingsSection title="Workspace">
+        <SettingsSection title="Delivery">
           <SelectRow
             label="Run in"
             value={
-              draft.workspace === "worktree"
-                ? "New worktree"
-                : draft.workspace === "root"
-                  ? "Project checkout"
-                  : "Specific checkout"
+              draft.threadId === null
+                ? "New thread each run"
+                : draft.threadId === coordinator?.threadId
+                  ? "Current project orchestrator"
+                  : `Bound thread: ${boundThread?.title ?? draft.threadId}`
             }
             actions={[
               {
-                id: "worktree",
-                title: "New worktree",
-                state: draft.workspace === "worktree" ? "on" : undefined,
+                id: "direct",
+                title: "New thread each run",
+                state: draft.threadId === null ? "on" : undefined,
               },
-              {
-                id: "root",
-                title: "Project checkout",
-                state: draft.workspace === "root" ? "on" : undefined,
-              },
-              {
-                id: "existing_worktree",
-                title: "Specific checkout",
-                state: draft.workspace === "existing_worktree" ? "on" : undefined,
-              },
+              ...(canBindCoordinator
+                ? [
+                    {
+                      id: "coordinator",
+                      title: "Current project orchestrator",
+                      state: draft.threadId === coordinator?.threadId ? ("on" as const) : undefined,
+                    },
+                  ]
+                : []),
+              ...(draft.task?.threadId
+                ? [
+                    {
+                      id: "preserved",
+                      title: `Original bound thread: ${draft.task.threadId}`,
+                      state: draft.threadId === draft.task.threadId ? ("on" as const) : undefined,
+                    },
+                  ]
+                : []),
             ]}
             onSelect={(id) => {
-              if (id === "worktree" || id === "root" || id === "existing_worktree")
-                setDraft({ ...draft, workspace: id });
+              if (id === "direct") setDraft({ ...draft, threadId: null });
+              if (id === "coordinator" && canBindCoordinator && coordinator) {
+                setDraft({
+                  ...draft,
+                  threadId: coordinator.threadId,
+                  modelSelection: draft.modelSelection ?? coordinator.modelSelection,
+                });
+              }
+              if (id === "preserved" && draft.task?.threadId) {
+                setDraft({
+                  ...draft,
+                  projectId: draft.task.projectId,
+                  threadId: draft.task.threadId,
+                });
+              }
             }}
           />
-          {draft.workspace === "worktree" ? (
-            <PickerRow
-              label="Base branch"
-              value={resolveNewTaskBranchLabel({
-                branchName: draft.baseRef,
-                startFromOrigin: draft.startFromOrigin,
-                workspaceMode: "worktree",
-              })}
-              borderTop
-              disabled={!draft.projectId || saving || dictationPending || environmentUnavailable}
-              onPress={() => navigation.navigate("SettingsScheduledTaskBranch")}
-            />
+          {coordinatorUnavailableReason ? (
+            <Text className="px-4 pb-3 text-sm text-foreground-muted">
+              {coordinatorUnavailableReason}
+            </Text>
           ) : null}
-          {draft.workspace === "existing_worktree" ? (
-            <FormField
-              label="Checkout path"
-              disabled={saving}
-              value={draft.checkoutPath}
-              borderTop
-              onChange={(checkoutPath) => setDraft({ ...draft, checkoutPath })}
-            />
+          {supportsCoordinator && draft.projectId ? (
+            <Button label="Refresh orchestrator" onPress={coordinatorQuery.refresh} />
+          ) : null}
+          <Text className="px-4 pb-3 text-sm text-foreground-muted">
+            Bound delivery queues a prompt in the selected thread, using its current provider and
+            model, not the stored new-thread model. Deleting that thread removes its bound
+            workflows. Choose New thread each run to deliberately unbind before changing project or
+            environment.
+          </Text>
+          {bindingUnavailable ? (
+            <Text className="px-4 pb-3 text-sm text-danger-foreground">
+              The bound thread is unavailable in this project. Reconnect or explicitly unbind/rebind
+              before saving. The saved binding has not been cleared.
+            </Text>
           ) : null}
         </SettingsSection>
+
+        {draft.threadId === null ? (
+          <>
+            <SettingsSection title="Permissions">
+              <SelectRow
+                label="Runtime"
+                value={
+                  RUNTIME_MODE_CHOICES.find((choice) => choice.mode === draft.runtimeMode)?.label ??
+                  draft.runtimeMode
+                }
+                actions={RUNTIME_MODE_CHOICES.map((choice) => ({
+                  id: choice.mode,
+                  title: choice.label,
+                  state: draft.runtimeMode === choice.mode ? "on" : undefined,
+                }))}
+                onSelect={(id) => {
+                  const choice = RUNTIME_MODE_CHOICES.find((choice) => choice.mode === id);
+                  if (choice) setDraft({ ...draft, runtimeMode: choice.mode });
+                }}
+              />
+              <SelectRow
+                label="Interaction"
+                borderTop
+                value={draft.interactionMode === "plan" ? "Plan" : "Default"}
+                actions={[
+                  {
+                    id: "default",
+                    title: "Default",
+                    state: draft.interactionMode === "default" ? "on" : undefined,
+                  },
+                  {
+                    id: "plan",
+                    title: "Plan",
+                    state: draft.interactionMode === "plan" ? "on" : undefined,
+                  },
+                ]}
+                onSelect={(id) => {
+                  if (id === "default" || id === "plan")
+                    setDraft({ ...draft, interactionMode: id });
+                }}
+              />
+            </SettingsSection>
+
+            <SettingsSection title="Workspace">
+              <SelectRow
+                label="Checkout"
+                value={
+                  draft.workspace === "worktree"
+                    ? "New worktree"
+                    : draft.workspace === "root"
+                      ? "Project checkout"
+                      : "Specific checkout"
+                }
+                actions={[
+                  {
+                    id: "worktree",
+                    title: "New worktree",
+                    state: draft.workspace === "worktree" ? "on" : undefined,
+                  },
+                  {
+                    id: "root",
+                    title: "Project checkout",
+                    state: draft.workspace === "root" ? "on" : undefined,
+                  },
+                  {
+                    id: "existing_worktree",
+                    title: "Specific checkout",
+                    state: draft.workspace === "existing_worktree" ? "on" : undefined,
+                  },
+                ]}
+                onSelect={(id) => {
+                  if (id === "worktree" || id === "root" || id === "existing_worktree")
+                    setDraft({ ...draft, workspace: id });
+                }}
+              />
+              {draft.workspace === "worktree" ? (
+                <PickerRow
+                  label="Base branch"
+                  value={resolveNewTaskBranchLabel({
+                    branchName: draft.baseRef,
+                    startFromOrigin: draft.startFromOrigin,
+                    workspaceMode: "worktree",
+                  })}
+                  borderTop
+                  disabled={
+                    !draft.projectId || saving || dictationPending || environmentUnavailable
+                  }
+                  onPress={() => navigation.navigate("SettingsScheduledTaskBranch")}
+                />
+              ) : null}
+              {draft.workspace === "existing_worktree" ? (
+                <FormField
+                  label="Checkout path"
+                  disabled={saving}
+                  value={draft.checkoutPath}
+                  borderTop
+                  onChange={(checkoutPath) => setDraft({ ...draft, checkoutPath })}
+                />
+              ) : null}
+            </SettingsSection>
+          </>
+        ) : (
+          <Text className="px-2 text-sm text-foreground-muted">
+            Bound delivery keeps the thread's current workspace, runtime and interaction modes.
+            {boundThread
+              ? ` Current modes: ${boundThread.runtimeMode} / ${boundThread.interactionMode}.`
+              : ""}{" "}
+            Stored new-thread settings are preserved if you later unbind.
+          </Text>
+        )}
 
         <SettingsSection title="Schedule">
           <View className="px-4 py-3">
@@ -1161,7 +1510,15 @@ function TaskForm({
         tone="primary"
         fullWidth
         loading={saving}
-        disabled={!canOperate || dictationPending || taskMissing || environmentUnavailable}
+        disabled={
+          !canOperate ||
+          dictationPending ||
+          taskMissing ||
+          environmentUnavailable ||
+          taskUnavailable ||
+          bindingUnavailable ||
+          ownerChanged
+        }
         onPress={() => void save()}
         label={saving ? "Saving…" : draft.task ? "Save changes" : "Create task"}
       />
@@ -1181,6 +1538,9 @@ function WebhookScheduleDetails({
   readonly disabled: boolean;
 }) {
   const [rotating, setRotating] = useState(false);
+  const canOperate = useAtomValue(
+    serverEnvironment.rotateScheduledTaskWebhookToken.permissionAtom(environmentId),
+  );
   const rotate = useAtomCommand(serverEnvironment.rotateScheduledTaskWebhookToken, {
     label: "scheduled task rotate webhook token",
     reportFailure: false,
@@ -1188,7 +1548,7 @@ function WebhookScheduleDetails({
   const preparedConnection = usePreparedConnection(environmentId);
   const httpBaseUrl =
     preparedConnection._tag === "Some" ? preparedConnection.value.httpBaseUrl : null;
-  const webhook = task?.schedule.type === "webhook" ? task.webhook : undefined;
+  const webhook = canOperate && task?.schedule.type === "webhook" ? task.webhook : undefined;
   const resolved = webhook ? webhookAddress(webhook, httpBaseUrl) : null;
   return (
     <View className="gap-2 border-t border-border-subtle px-4 py-3">
@@ -1198,7 +1558,13 @@ function WebhookScheduleDetails({
         }
       </Text>
       {task === null || resolved === null ? (
-        <Text className="text-sm text-foreground-muted">Save the task to get its webhook URL.</Text>
+        <Text className="text-sm text-foreground-muted">
+          {!canOperate
+            ? "Webhook URLs require operate permission."
+            : task === null
+              ? "Save the task to get its webhook URL."
+              : "The webhook URL is unavailable in this connection."}
+        </Text>
       ) : (
         <>
           <Pressable
@@ -1206,7 +1572,11 @@ function WebhookScheduleDetails({
             accessibilityLabel="Copy webhook URL"
             accessibilityHint="Copies the URL to the clipboard"
             disabled={!resolved.copyable}
-            onPress={() => void tryCopyTextWithHaptic(resolved.address)}
+            onPress={() => {
+              if (readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) {
+                void tryCopyTextWithHaptic(resolved.address);
+              }
+            }}
             className="gap-1 active:opacity-70"
           >
             <Text textRole="body" className="text-foreground">
@@ -1261,20 +1631,44 @@ function EnvironmentTasks({
   environment,
   now,
   projectIds,
+  taskId,
+  onCreate,
   onEdit,
 }: {
   readonly environment: SettingsTarget;
   readonly now: number;
   readonly projectIds: readonly ProjectId[] | null;
+  readonly taskId?: ScheduledTaskId;
+  readonly onCreate?: () => void;
   readonly onEdit: (task: ScheduledTask) => void;
 }) {
   const environmentId = environment.environmentId;
   const tasks = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
-  const visibleTasks = tasks.data?.tasks.filter(
-    (task) => projectIds === null || projectIds.includes(task.projectId),
+  const visibleTasks = tasks.data?.tasks.filter((task) =>
+    scheduledTaskInScope(task, projectIds, taskId),
   );
+  const selectDetail = useSelectWorkspaceDetail();
+  const navigation = useNavigation();
+  const deepLinkOpened = useRef<ScheduledTaskId | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Opens a loaded workflow deep link in the native navigator once.
+  useEffect(() => {
+    if (
+      taskId === undefined ||
+      deepLinkOpened.current === taskId ||
+      tasks.error ||
+      !tasks.isSuccess ||
+      !navigation.isFocused()
+    )
+      return;
+    const task = tasks.data?.tasks.find((entry) => scheduledTaskInScope(entry, projectIds, taskId));
+    if (!task) return;
+    onEdit(task);
+    deepLinkOpened.current = taskId;
+  }, [navigation, onEdit, projectIds, taskId, tasks.data, tasks.error, tasks.isSuccess]);
+  const pendingAction = useRef(false);
+  const [pendingTaskId, setPendingTaskId] = useState<ScheduledTaskId | null>(null);
   const canOperate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
   );
@@ -1296,15 +1690,56 @@ function EnvironmentTasks({
     }
   };
 
-  const act = async (task: ScheduledTask, action: "run" | "toggle" | "delete") => {
-    if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
-    const result =
-      action === "run"
-        ? await runNow({ environmentId, input: { id: task.id } })
-        : action === "toggle"
+  const act = (task: ScheduledTask, action: "run" | "toggle" | "delete") => {
+    if (
+      !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
+      pendingAction.current ||
+      tasks.error ||
+      !tasks.isSuccess
+    )
+      return;
+    pendingAction.current = true;
+    setPendingTaskId(task.id);
+    // React Compiler cannot lower try/finally; the promise still releases the guard on rejection.
+    return (async () => {
+      if (action === "run") {
+        if (task.schedule.type === "webhook") return;
+        const result = await runNow({ environmentId, input: { id: task.id } });
+        if (result._tag === "Failure") {
+          failure("Could not dispatch task", result);
+        } else if (result.value.task.lastRunStatus === "failed") {
+          Dialog.alert(
+            "Dispatch failed",
+            result.value.task.lastRunError ?? "The prompt was not dispatched.",
+          );
+        } else {
+          const threadId = result.value.threadId;
+          Dialog.alert(
+            "Dispatch accepted",
+            "The prompt was dispatched or queued. This is not confirmation that the agent finished.",
+            threadId
+              ? [
+                  { text: "Close", style: "cancel" },
+                  {
+                    text: "Open thread",
+                    onPress: () =>
+                      selectDetail({ name: "Thread", params: { environmentId, threadId } }),
+                  },
+                ]
+              : [{ text: "Close" }],
+          );
+        }
+        return;
+      }
+      const result =
+        action === "toggle"
           ? await setEnabled({ environmentId, input: { id: task.id, enabled: !task.enabled } })
           : await remove({ environmentId, input: { id: task.id } });
-    failure(`Could not ${action === "toggle" ? "update" : action} task`, result);
+      failure(`Could not ${action === "toggle" ? "update" : "delete"} task`, result);
+    })().finally(() => {
+      pendingAction.current = false;
+      setPendingTaskId(null);
+    });
   };
 
   return (
@@ -1320,13 +1755,34 @@ function EnvironmentTasks({
         />
       }
     >
+      {onCreate ? (
+        <View className="gap-2 p-4">
+          <Button
+            label="New workflow"
+            disabled={!canOperate || pendingTaskId !== null}
+            onPress={onCreate}
+          />
+          {!canOperate ? (
+            <Text className="text-sm text-foreground-muted">
+              Read-only: workflow changes and dispatch require operate permission.
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
       {tasks.error ? (
-        <Text className="p-4 text-base text-danger-foreground">{tasks.error}</Text>
+        <View className="gap-2 p-4">
+          <Text className="text-base text-danger-foreground">{tasks.error}</Text>
+          <Button label="Retry workflows" onPress={tasks.refresh} />
+        </View>
       ) : !tasks.data ? (
         <Text className="p-4 text-base text-foreground-muted">Loading tasks…</Text>
       ) : visibleTasks?.length === 0 ? (
         <Text className="p-4 text-base text-foreground-muted">
-          {projectIds === null ? "No scheduled tasks yet." : "No tasks in this project."}
+          {taskId !== undefined
+            ? "This workflow is unavailable in the selected scope. No other workflow has been opened."
+            : projectIds === null
+              ? "No scheduled tasks yet."
+              : "No tasks in this project."}
         </Text>
       ) : (
         visibleTasks?.map((task, index) => (
@@ -1357,9 +1813,20 @@ function EnvironmentTasks({
                     ? ` · ${formatNextScheduledTaskRun(task.nextRunAt, now)}`
                     : ""}
               </Text>
+              <Text className="text-sm text-foreground-muted">
+                {task.runCount} dispatch attempt{task.runCount === 1 ? "" : "s"}
+                {task.lastRunAt ? ` · Latest: ${new Date(task.lastRunAt).toLocaleString()}` : ""}
+                {task.lastRunStatus === "never"
+                  ? " · Never dispatched"
+                  : task.lastRunStatus === "failed"
+                    ? " · Dispatch failed"
+                    : task.lastRunStatus === "running"
+                      ? " · Dispatching"
+                      : " · Dispatch accepted"}
+              </Text>
               {task.lastRunError ? (
                 <Text className="text-sm text-danger-foreground" numberOfLines={2}>
-                  Last run failed: {task.lastRunError}
+                  Latest dispatch failed: {task.lastRunError}
                 </Text>
               ) : null}
             </Pressable>
@@ -1369,15 +1836,24 @@ function EnvironmentTasks({
                 {
                   id: "toggle",
                   title: task.enabled ? "Pause" : "Resume",
-                  attributes: { disabled: !canOperate },
+                  attributes: { disabled: !canOperate || pendingTaskId !== null },
                 },
                 ...(task.schedule.type === "webhook"
                   ? []
-                  : [{ id: "run", title: "Run now", attributes: { disabled: !canOperate } }]),
+                  : [
+                      {
+                        id: "run",
+                        title: "Run now",
+                        attributes: { disabled: !canOperate || pendingTaskId !== null },
+                      },
+                    ]),
                 {
                   id: "delete",
                   title: "Delete",
-                  attributes: { destructive: true, disabled: !canOperate },
+                  attributes: {
+                    destructive: true,
+                    disabled: !canOperate || pendingTaskId !== null,
+                  },
                 },
               ]}
               onPressAction={({ nativeEvent }) => {

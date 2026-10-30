@@ -1,0 +1,26 @@
+flowchart TD
+  accTitle: One thread. Many contributors. One outcome.
+  accDescr: Proposed experience: one outcome can combine code, research, diagrams, and documents. Simple requests can skip decomposition. Dashed bidirectional links are addressed peer messages. Independent tasks join into an evidence-bearing result. Completion, acceptance, delivery, and settlement are separate; settlement is reversible.
+  intent --> thread
+  thread --> plan
+  plan --> a
+  plan --> b
+  plan --> c
+  a --> join
+  b --> join
+  c --> join
+  join --> review
+  review --> settle
+  a <--> b
+  linkStyle 10 stroke-dasharray:5 4
+  b <--> c
+  linkStyle 11 stroke-dasharray:5 4
+  intent["Describe an outcome"]
+  thread["Ordinary outcome thread"]
+  plan["Visible plan + dependencies"]
+  a["Task A / agent"]
+  b["Task B / agent"]
+  c["Task C / agent"]
+  join["Reconcile + verify results"]
+  review["Review outcome / decide"]
+  settle["Settle or continue"]

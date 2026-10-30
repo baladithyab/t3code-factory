@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 900" role="img" aria-labelledby="03-fleet-title 03-fleet-desc">
+<title id="03-fleet-title">Place the work; preserve its owner.</title>
+<desc id="03-fleet-desc">Proposed shared placement and admission: harness/model, target environment, and provisioning are separate choices. Sandbox candidates share one category: Blaxel, Modal, Daytona, E2B, Baseten, and others. Capabilities differ; batch jobs are optional. Provisioning does not transfer ownership. Persist artifacts and reconcile uncertain attempts before retrying.</desc>
+<defs><marker id="arrow-03-fleet" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0 0L8 4L0 8" fill="#54718b"/></marker></defs>
+<rect width="900" height="900" fill="#f6f8fb"/>
+<style>text{font-family:Arial,sans-serif;fill:#17334b}</style>
+<path d="M450 129 L450 152 L450 152 L450 175" fill="none" stroke="#54718b" stroke-width="2" marker-end="url(#arrow-03-fleet)"/>
+<path d="M450 239 L450 262 L450 262 L450 285" fill="none" stroke="#54718b" stroke-width="2" marker-end="url(#arrow-03-fleet)"/>
+<path d="M450 349 L450 387 L270 387 L270 425" fill="none" stroke="#54718b" stroke-width="2" marker-end="url(#arrow-03-fleet)"/>
+<path d="M270 489 L270 527 L450 527 L450 565" fill="none" stroke="#54718b" stroke-width="2" marker-end="url(#arrow-03-fleet)"/>
+<path d="M450 629 L450 657 L450 657 L450 685" fill="none" stroke="#54718b" stroke-width="2" marker-end="url(#arrow-03-fleet)"/>
+<path d="M450 749 L450 772 L450 772 L450 795" fill="none" stroke="#54718b" stroke-width="2" marker-end="url(#arrow-03-fleet)"/>
+<path d="M450 349 L450 387 L630 387 L630 425" fill="none" stroke="#54718b" stroke-width="2" marker-end="url(#arrow-03-fleet)"/>
+<path d="M630 489 L630 527 L450 527 L450 565" fill="none" stroke="#54718b" stroke-width="2" marker-end="url(#arrow-03-fleet)"/>
+<rect x="330" y="65" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896"/>
+<text x="450.0" y="103.0" text-anchor="middle" font-size="17">Ready task + requirements</text>
+<rect x="330" y="175" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896"/>
+<text x="450.0" y="203.0" text-anchor="middle" font-size="17">Capability / budget /</text>
+<text x="450.0" y="223.0" text-anchor="middle" font-size="17">locality</text>
+<rect x="330" y="285" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896"/>
+<text x="450.0" y="323.0" text-anchor="middle" font-size="17">Select + reserve capacity</text>
+<rect x="130" y="425" width="280" height="64" rx="8" fill="#e9f1f8" stroke="#527896"/>
+<text x="270.0" y="463.0" text-anchor="middle" font-size="17">Local or linked T3 environment</text>
+<rect x="330" y="565" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896"/>
+<text x="450.0" y="603.0" text-anchor="middle" font-size="17">Owned, observable attempt</text>
+<rect x="330" y="685" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896"/>
+<text x="450.0" y="713.0" text-anchor="middle" font-size="17">Persist artifacts +</text>
+<text x="450.0" y="733.0" text-anchor="middle" font-size="17">reconcile</text>
+<rect x="330" y="795" width="240" height="64" rx="8" fill="#e9f1f8" stroke="#527896"/>
+<text x="450.0" y="833.0" text-anchor="middle" font-size="17">Return evidence to thread</text>
+<rect x="490" y="425" width="280" height="64" rx="8" fill="#e9f1f8" stroke="#527896"/>
+<text x="630.0" y="463.0" text-anchor="middle" font-size="17">Remote SandboxProvider</text>
+</svg>

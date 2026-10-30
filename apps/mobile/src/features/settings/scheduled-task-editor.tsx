@@ -46,7 +46,7 @@ export function useScheduledTaskEditor() {
     [configs, projects, selectedGroup],
   );
   // Direct links can open the new-task form before environments have connected.
-  const defaultEditor = useMemo(
+  const defaultEditor = useMemo<ScheduledTaskEditor | null>(
     () =>
       defaultTarget
         ? {

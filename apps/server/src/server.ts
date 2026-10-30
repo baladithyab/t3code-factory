@@ -1,3 +1,23 @@
+import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
+import * as IssueTrackerProviderRegistry from "./factory/IssueTrackerProviderRegistry.ts";
+import * as FactoryIssueLaunches from "./persistence/FactoryIssueLaunches.ts";
+import * as FactoryIssueRelations from "./factory/FactoryIssueRelations.ts";
+import * as FactoryIssueRelationStore from "./persistence/FactoryIssueRelationStore.ts";
+import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
+import * as FactoryFeedStore from "./persistence/FactoryFeedStore.ts";
+import * as FactoryResearchService from "./factory/FactoryResearchService.ts";
+import * as FactoryResearchStore from "./persistence/FactoryResearchStore.ts";
+import * as FactoryClaimsService from "./factory/FactoryClaimsService.ts";
+import * as FactoryAcceptanceService from "./factory/FactoryAcceptanceService.ts";
+import * as FactoryKnowledgeService from "./factory/FactoryKnowledgeService.ts";
+import * as FactoryDeliveryService from "./factory/FactoryDeliveryService.ts";
+import * as FactoryAcceptanceStore from "./persistence/FactoryAcceptanceStore.ts";
+import * as FactoryKnowledgeStore from "./persistence/FactoryKnowledgeStore.ts";
+import * as FactoryDeliveryStore from "./persistence/FactoryDeliveryStore.ts";
+import * as FeedFetch from "./factory/FeedFetch.ts";
+import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
+import * as ProjectCoordinators from "./persistence/ProjectCoordinators.ts";
+import * as FactoryCommandReceipts from "./orchestration-v2/CommandReceiptStore.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Random from "effect/Random";
@@ -186,6 +206,7 @@ import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsag
 import * as UsageService from "./usage/UsageService.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
+import * as EffectOutbox from "./orchestration-v2/EffectOutbox.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
@@ -522,6 +543,10 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),
   Layer.provide(layerGitWorkflow),
+  // The delivery service merges through the same instance the routes use, so its merge
+  // invalidates the caches clients read.
+  Layer.provide(layerPullRequestService),
+  Layer.provide(RuntimeLayer.layerProjectService),
   Layer.provide(
     RunFinalizationService.layerObserver.pipe(
       Layer.provide(ProjectionStoreV2.layer),
@@ -628,6 +653,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
+  Layer.provideMerge(IssueTrackerProviderRegistry.layer),
   Layer.provideMerge(layerServerSettings),
   Layer.provideMerge(layerSourceControlProviderRegistry),
   Layer.provideMerge(layerGit),
@@ -746,6 +772,38 @@ const layerMakeRoutes = Layer.mergeAll(
     RemoteDelegation.RemoteDelegation.pipe(Effect.flatMap((remote) => remote.start())),
   ),
 ).pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      FactoryIssueService.layer,
+      FactoryIssueRelations.layer,
+      FactoryFeedService.layer,
+      FactoryResearchService.layer,
+      FactoryClaimsService.layer,
+      FactoryAcceptanceService.layer,
+      FactoryKnowledgeService.layer,
+      FactoryDeliveryService.layer.pipe(
+        Layer.provide(Layer.merge(FactoryAcceptanceService.layer, FactoryKnowledgeService.layer)),
+      ),
+      ProjectCoordinatorService.layer,
+    ).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          FactoryIssueLaunches.layer,
+          FactoryIssueRelationStore.layer,
+          FactoryFeedStore.layer,
+          FactoryResearchStore.layer,
+          FactoryAcceptanceStore.layer,
+          FactoryKnowledgeStore.layer,
+          FactoryDeliveryStore.layer,
+          // The same instance the effect worker drains, so a grant wakes it.
+          EffectOutbox.layer,
+          FeedFetch.layer,
+          ProjectCoordinators.layer,
+          FactoryCommandReceipts.layerFromApplicationReceipts,
+        ),
+      ),
+    ),
+  ),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),

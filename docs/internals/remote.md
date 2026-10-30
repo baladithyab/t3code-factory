@@ -184,3 +184,20 @@ auth and platform-managed discovery are skipped and only saved environments (pai
 connect. This is possible because the desktop renderer is not served by the backend: the `t3code://`
 scheme serves the bundled client from disk (Vite in development) and API traffic always goes to the
 environment's own URL.
+
+## Factory claims stay in one environment
+
+A Factory claim, the durable record behind an admitted issue, feed item, or research run, belongs
+to the environment whose database holds it. That environment owns admission, the active session,
+checkpoints, result acceptance, cancellation, and recovery. A claim never migrates; moving work
+is a new attempt in another environment while the old claim stays visible. Placement therefore
+means only which environment receives the admit request, and T3 Connect and SSH stay client routes
+rather than dispatchers. Remote dispatch, AO placement, and Blaxel provisioning are not supported
+and no capability advertises them; Blaxel qualifies only as the host of a full T3 environment,
+and AO keeps its own sessions. Clients compare claims across environments with the read-only
+`factory.listClaims` under the `factoryClaims` capability, which reports each claim's
+`admittedBy` as provenance; a conflict is displayed, never merged or locked. The capacity policy,
+recorded here and enforced today only by provider enablement, Scratch refusal, and mode ceilings,
+counts live sessions rather than model requests: an environment that cannot run work now refuses
+the admission instead of queuing it or sending it elsewhere, a session in an uncertain state
+counts as occupied, and a resume is never refused for capacity.

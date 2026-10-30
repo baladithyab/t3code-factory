@@ -98,6 +98,7 @@ const ACTION_ICONS: Record<string, AppSymbolName> = {
   terminal: "terminal",
   review: PullRequestGlyph.pullRequest,
   copyThreadReference: "link",
+  factory: "list.number",
 };
 
 function itemIcon(item: CommandPaletteItem): AppSymbolName {
@@ -345,6 +346,25 @@ export function CommandPalette(props: {
         title: "Archived threads",
         searchTerms: ["restore", "history"],
         run: () => openSettings(navigation, "SettingsArchive"),
+      },
+      {
+        key: "factory",
+        kind: "action",
+        title: "Factory",
+        searchTerms: [
+          "overview",
+          "github",
+          "issues",
+          "inbox",
+          "task",
+          "repository",
+          "workflows",
+          "schedule",
+          "automations",
+          "orchestrator",
+          "coordinator",
+        ],
+        run: () => navigation.navigate("SettingsFactoryIssues"),
       },
     ];
     if (canTriage) {

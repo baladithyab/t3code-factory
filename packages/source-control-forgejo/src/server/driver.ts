@@ -16,6 +16,7 @@ const makeInstance = Effect.all({
   sourceControl: ForgejoSourceControlProvider.make,
   discovery: ForgejoSourceControlProvider.makeDiscovery,
   pullRequests: ForgejoPullRequestProvider.make,
+  issues: Effect.succeed(null),
 });
 
 export const driver = defineSourceControlDriver({

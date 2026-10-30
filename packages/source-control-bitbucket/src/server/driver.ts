@@ -22,6 +22,7 @@ const makeInstance = Effect.all({
   sourceControl: BitbucketSourceControlProvider.make,
   discovery: BitbucketSourceControlProvider.makeDiscovery,
   pullRequests: BitbucketPullRequestProvider.make,
+  issues: Effect.succeed(null),
 });
 
 export const driver = defineSourceControlDriver({

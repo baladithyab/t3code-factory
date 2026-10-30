@@ -3,10 +3,12 @@ import type {
   ModelSelection,
   ServerConfig,
   ProjectId,
+  ProviderInteractionMode,
   RuntimeMode,
   ScheduledTask,
   ScheduledTaskUpsertSchedule,
   ScheduledTaskWebhookSignature,
+  ThreadId,
 } from "@t3tools/contracts";
 
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
@@ -185,6 +187,7 @@ export function scheduleFromDraft(draft: ScheduleDraft): ScheduledTaskUpsertSche
 type Workspace = "worktree" | "root" | "existing_worktree";
 export type ScheduledTaskDraft = {
   readonly task: ScheduledTask | null;
+  readonly threadId: ThreadId | null;
   readonly title: string;
   readonly prompt: string;
   readonly projectId: ProjectId | null;
@@ -197,6 +200,7 @@ export type ScheduledTaskDraft = {
   readonly enabled: boolean;
   readonly startFromOrigin: boolean;
   readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
 };
 
 function draftSignature(draft: ScheduledTaskDraft): string {
@@ -204,6 +208,7 @@ function draftSignature(draft: ScheduledTaskDraft): string {
     draft.title,
     draft.prompt,
     draft.projectId,
+    draft.threadId,
     draft.modelSelection?.instanceId,
     draft.modelSelection?.model,
     [...(draft.modelSelection?.options ?? [])]
@@ -224,6 +229,7 @@ function draftSignature(draft: ScheduledTaskDraft): string {
     draft.enabled,
     draft.startFromOrigin,
     draft.runtimeMode,
+    draft.interactionMode,
   ]);
 }
 
@@ -240,6 +246,7 @@ export function createDraft(
 ): ScheduledTaskDraft {
   return {
     task: null,
+    threadId: null,
     title: "",
     prompt: "",
     projectId,
@@ -252,12 +259,25 @@ export function createDraft(
     enabled: true,
     startFromOrigin: true,
     runtimeMode: "full-access",
+    interactionMode: "default",
+  };
+}
+
+export function createFactoryDraft(
+  projectId: ProjectId | null,
+  modelSelection: ModelSelection | null,
+): ScheduledTaskDraft {
+  return {
+    ...createDraft(projectId, modelSelection),
+    enabled: false,
+    runtimeMode: "approval-required",
   };
 }
 
 export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
   return {
     task,
+    threadId: task.threadId,
     title: task.title,
     prompt: task.prompt,
     projectId: task.projectId,
@@ -276,5 +296,6 @@ export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
         ? (task.workspaceStrategy.startFromOrigin ?? false)
         : true,
     runtimeMode: task.runtimeMode,
+    interactionMode: task.interactionMode,
   };
 }

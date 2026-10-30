@@ -1,16 +1,32 @@
-# T3 Code
+# T3 Factory
 
-T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+T3 Factory (`t3factory`) is a fork of [T3 Code](https://github.com/pingdotgg/t3code) for
+project-scoped issue and feed intake, scheduled agent prompts, and an explicit project orchestrator.
+It retains T3 Code's provider-backed threads and web, Electron desktop, and native mobile clients.
+Upstream T3 Code is developed by T3 Tools; its attribution and license remain unchanged.
 
-Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, and Google Antigravity. If they're set up on your computer, T3 Code can control them.
+Open **Factory** for Overview, Issues, Sources, Workflows, and Orchestrator. Use **Sessions** or
+**New thread** for ordinary conversations. The [Factory guide](./docs/user/source-control.md#factory)
+explains scope selection, reviewed issue and feed-item starts, orchestrator orientation, and
+workflow dispatch limits.
 
-## "Wait, what are you selling me?"
+Fork work is tracked in [this repository's issues](https://github.com/baladithyab/t3code-factory/issues),
+including [the Factory UX specification](https://github.com/baladithyab/t3code-factory/issues/29).
+Inspiration sources, research, and parity evidence remain in
+[the source register](https://github.com/baladithyab/t3code-factory/issues/1),
+[research](https://github.com/baladithyab/t3code-factory/issues/27), and
+[the design decision](https://github.com/baladithyab/t3code-factory/issues/28).
+Those references do not imply feature parity or source reuse.
 
-Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
+The [T3 Factory vision](./docs/factory/vision.md) describes a shared thread-first experience
+for software, research, and knowledge work, with editable SVG, Mermaid, and draw.io diagrams.
+It distinguishes existing capabilities from proposed orchestration and sandbox extensions.
 
-We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the editor that you want.
+## Upstream installation
 
-## Installation
+The commands and releases below install upstream T3 Code, not this fork.
+To work on this fork, use the source setup below and the
+[development guide](./docs/operations/development.md).
 
 > [!WARNING]
 > T3 Code currently supports Codex, Claude, Cursor, Grok Build, OpenCode, and Antigravity. Install and authenticate at least one provider before use:
@@ -96,9 +112,8 @@ See [Nix installation](./docs/user/install.md#nix-nixpkgs) for NixOS configurati
 
 ## Some notes
 
-We are very very early in this project. Expect bugs.
-
-We are (mostly) not accepting contributions yet. Small fixes may be considered. Big features will not be.
+This fork's issue tracker records Factory work. The upstream project has its own contribution
+policy; read [CONTRIBUTING.md](./CONTRIBUTING.md) before proposing an upstream change.
 
 ## Documentation
 
@@ -113,13 +128,13 @@ Full docs live in [docs/](./docs). There's no docs site yet.
 - [Remote access from a phone or another machine](./docs/user/remote-access.md)
 - [Connect Claude Code, Codex, ChatGPT and other agents over MCP](./docs/user/outside-agents.md)
 - [Keeping app and server in sync](./docs/user/updating.md)
-- [Source control integrations](./docs/user/source-control.md)
+- [Factory and source control](./docs/user/source-control.md)
 - Multiple accounts: [Codex](./docs/user/providers-codex.md) · [Claude](./docs/user/providers-claude.md)
 - [Run T3 Code as a background service](./docs/user/background-service.md)
 
 Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
 
-## If you REALLY want to contribute still.... read this first
+## Source setup and upstream support
 
 ### Install `vp`
 
@@ -147,6 +162,6 @@ vp i
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before reporting a bug or opening a PR.
 
-Have a feature request? Start an [Ideas discussion](https://github.com/pingdotgg/t3code/discussions/categories/ideas).
+For upstream feature requests, start an [Ideas discussion](https://github.com/pingdotgg/t3code/discussions/categories/ideas).
 
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+For upstream support, join the [Discord](https://discord.gg/jn4EGJjrvv).

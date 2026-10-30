@@ -1,4 +1,4 @@
-# Source control
+# Factory and source control
 
 T3 Code integrates with GitHub, GitLab, Forgejo, Gitea, Bitbucket, Azure DevOps, and GitCafe to clone
 and publish repositories, create pull requests, and review changes.
@@ -141,6 +141,480 @@ HTTPS URL.
 For a local Git repository without a remote, **Publish Repository** creates a hosted repository,
 adds it as `origin`, and pushes your commits. If there are no commits yet, it creates the remote;
 make your first commit before pushing.
+
+## Factory
+
+Open **Factory** in the sidebar or command palette. Its sections are **Overview**, **Issues**,
+**Briefs**, **Sources**, **Research**, **Workflows**, and **Orchestrator**. **Sessions** and **New thread** still open
+ordinary conversations; you do not need an orchestrator to use them.
+
+### Choose the scope
+
+Factory can show all environments, one environment, a project across its checkouts, or one
+exact checkout. An environment is the server and machine that own the files, credentials, and
+provider processes. A project record belongs to that environment and points to a workspace
+directory. The same repository can have several project records and checkouts.
+
+On web and desktop, the URL preserves this selection with `project`, `machine`, and `checkout`.
+`machine` selects the environment; `project` selects the grouped project; `checkout` selects
+one physical member of that group. Selecting only a project can still include several
+environments or several checkouts on one machine. Check the environment and full workspace
+path before starting work. A removed or invalid selection is unavailable, not a request to
+use the first project or all projects. Reset it or choose another valid target.
+
+Overview shows the selected projects' environments and paths, thread and running counts,
+scheduled workflow counts and latest dispatch, and orchestrator state. Loading, offline,
+unsupported, and denied environments are not empty projects. Opening a checkout narrows the
+scope. Opening a workflow selects its owning environment, checkout, and exact definition;
+a missing or out-of-scope workflow link does not open a different workflow.
+
+Issues requires a single checkout. At a broader scope, choose a checkout before browsing;
+Factory does not combine its GitHub pages into a global issue queue. Orchestrator creation
+also requires a single checkout. Workflows can list definitions across the selected scope,
+but every definition has one owning environment and project.
+
+### Start a task from an issue
+
+Open **Factory → Issues**, choose a checkout, and check the repository and host shown above the
+list. Factory issue intake supports GitHub and GitLab, read through the project's configured
+`origin`, not its `upstream`. A missing or unsupported origin is an error, not a fallback to
+another repository. GitLab needs the `glab` CLI signed in to that host; nested groups
+(`group/subgroup/project`) work, and issue numbers are the project-local `#iid`. A self-managed
+host is recognized when `gitlab` or `github` is one of its DNS labels (`gitlab.example.com`),
+or the matching CLI (`glab` or `gh`) is signed in to that host. A GitLab origin on a non-default
+port is addressed through the checkout's own `glab` login (checked against a ported `gitlab.com`
+remote; a self-managed port depends on how that host is configured in `glab`). Use **Open**, **Closed**, or **All**, the page controls,
+and **Refresh** to browse issues. Reading the inbox never starts work or changes an issue.
+
+What the rest of the page offers depends on what the host can express. GitLab projects today get
+the inbox and **Start task** only: the Blockers block says the host does not expose blocking
+relationships and readiness stays unknown, Sub-issues is absent, and publishing or merging from
+the task is not offered. Nothing is silently assumed; a missing capability is shown, never
+treated as "ready" or "mergeable".
+
+On web and desktop, use **Table** to compare source and task state, or **Board** to group by
+local task state. The view choice stays in the URL. Each view shows only the current filtered
+issue page, not every task in the project; choose **All** to include closed-issue tasks.
+These views do not evaluate prerequisites or verification. The native mobile inbox remains
+a list.
+
+Choose **Start task**, select a model, and optionally enter a local branch, tag, or commit.
+Leaving the base ref empty uses the project's current local HEAD. The server resolves that
+ref to a fixed commit and starts a separate Git worktree; it does not fetch, rebase, or copy
+uncommitted changes from the project checkout. Commit the source you want workers to receive
+before using Factory to develop this project itself.
+
+For PR delivery, use a named branch with an existing fetched ref on `origin`. Factory keeps the
+fixed launch commit and the host base branch separately; review both in the delivery preview.
+An attached HEAD uses its branch's origin destination. Tags, commit IDs, detached HEAD, and
+branches tracking another remote can start work but cannot authorize PR delivery. Older tasks that did not save a host
+base branch need a new task from a named origin branch; re-accepting a commit cannot restore it.
+
+When Factory develops its own code, keep its host server outside automatic source restarts.
+A restart interrupts running agents, including when a check only rewrites a watched
+configuration file.
+
+The confirmation shows the complete issue title and description as text, not rendered Markdown.
+Backslashes and control or formatting characters are shown as escapes; no source text is omitted.
+Row details can be a preview, so review the confirmation before starting. If the title or
+description changed, new work is refused: close the confirmation, refresh the inbox and review
+the issue again. A refresh never silently replaces the snapshot in an open confirmation.
+
+Tasks default to approval-required mode. Project-configured worktree setup scripts still run
+on the environment's machine; approval mode is not an OS or network sandbox. Starting a task
+does not authorize publishing, pushing, opening a pull request, merging, or releasing.
+For a GitHub task, review the linked thread's commit, then use **Accept this commit** in its
+issue details. Prepare and review the pull request before granting publication; merging needs
+its own preview and grant. Each grant is bound to the accepted commit. If the head moves,
+review and re-accept it first. A lost host response leaves the delivery unknown: **Reconcile**
+reads the host's result without sending again. Commit acceptance, delivery grants and
+reconciliation need both operate and source-control write permission on the owning environment.
+
+There is one current task per repository and issue in each environment, including across
+multiple project checkouts. **Open thread** returns to that task's owning project rather
+than starting another worker. **Resume launch** retains the original model, modes, prompt,
+and base commit. For failed workspace preparation, open the thread and use its setup retry.
+Archived task threads remain readable without unarchiving. A deleted thread requires an
+explicit new-attempt confirmation; closed issues cannot start new attempts.
+
+GitHub issue state and linked thread state are independent. Closing an issue does not stop
+an existing worker, and completing a worker does not close the issue. To stop work, open
+the linked thread and use its normal stop controls. Factory does not automatically write
+task results back to GitHub issues.
+
+Listing and reading an issue need `orchestration:read`; starting also needs
+`orchestration:operate` and `source-control:write`. Agents can use `factory_list_issues`,
+`factory_read_issue` and `factory_start_issue` under their existing permissions. Pass the returned
+`repository.canonicalKey` as `expectedRepositoryKey` when starting; a changed origin is refused
+instead of silently retargeting the task.
+
+For example, call `factory_list_issues` with a registered project ID:
+
+```json
+{
+  "projectId": "<project-id>",
+  "state": "open",
+  "page": 1
+}
+```
+
+Check the returned repository and the selected issue's `task`. For an existing task,
+follow its status and owning project/thread rather than creating a duplicate. Use
+`factory_read_issue` with `projectId` and `issueNumber` to retrieve one complete issue instead
+of reviewing a large page of descriptions. Review the full title and body. Do not authorize from
+a truncated result; this tool has no partial-content paging.
+
+For an explicitly authorized new task, pass parameters like these to `factory_start_issue`:
+
+```json
+{
+  "commandId": "<unique-command-id>",
+  "projectId": "<project-id>",
+  "expectedRepositoryKey": "github.com/<owner>/<repository>",
+  "expectedIssueRevision": "<returned-issue-revision>",
+  "issueNumber": 17,
+  "modelSelection": {
+    "instanceId": "<provider-instance-id>",
+    "model": "<model-id>"
+  },
+  "runtimeMode": "approval-required",
+  "interactionMode": "default"
+}
+```
+
+Replace the repository key with the exact `repository.canonicalKey` returned by the read or
+list, pass the selected issue's `revision` as `expectedIssueRevision`, and use its issue number.
+New tasks and confirmed deleted-task restarts reject changed title or body content. Do not
+silently substitute a new revision after an error: retrieve and review the updated issue.
+
+Choose provider/model IDs from `orchestrator_capabilities`; the supervised example uses
+`approval-required`, and MCP cannot exceed the caller's runtime authority. Reuse `commandId`
+when retrying the same request. Omitting `baseRef` uses local HEAD.
+
+An existing reservation is not a new admission. Start can return `resumed: true` for the
+already-admitted task, including when another caller won a concurrent start. It retains the
+saved prompt and settings; the live issue revision is not revalidated on that path. This also
+preserves reservations made before content-revision checking was added. A revision identifies
+content, not a human approval or permission to execute.
+
+### See observed blockers on an issue
+
+Choose **Details** on an open issue to see **Blockers**, read from the issue's "blocked by" links
+on GitHub. Factory asks GitHub when you expand Details, not for each row, and **Refresh** in
+that block asks again. The line says what was seen and when, such as "No unresolved blockers
+observed 3m ago · basis: source" or "Blocked: 2 unresolved blockers", and adds "stale" after
+10 minutes. "Readiness unknown" gives the first reason GitHub's answer could not settle it, such
+as a partial list, a missing sign-in, a rate limit, or an inaccessible blocker; it never means
+zero blockers. Closed issues show nothing, and the native mobile inbox does not show this block.
+
+A blocker counts as accepted only when GitHub shows it closed as completed, or as a merged pull
+request. Blockers that are open, deleted, or closed as not planned, as a duplicate, or without a
+reason count as unresolved. The table lists each blocker's state, resolution, and whether GitHub
+still lists the link; a link removed on GitHub stays visible but is not counted. Factory keeps no
+acceptance list of its own and never writes to GitHub.
+
+This is observed evidence, not a gate. It never enables, disables, or blocks **Start task**,
+**Resume launch**, or `factory_start_issue`, and it is not permission to start work. Reading it
+needs `orchestration:read` and records the blockers seen in this server's local database. Agents
+can read the same evidence with the read-only `factory_read_issue_readiness`.
+
+#### Dispute or waive one blocker
+
+Beside each blocker, **Dispute** or **Waive** records your own decision about that one blocker.
+It needs `orchestration:operate` and a current, complete observation; a stale or partial one asks
+you to **Refresh** first. Both ask for a reason of up to 1024 characters, which is shown beside
+the blocker and kept afterwards. The decision is tied to the blocker as you saw it. If the
+blocker changed in the meantime, the dialog stays open with the error and cannot be sent again:
+close it, refresh, and review the blocker again.
+
+- **Dispute** is offered on a blocker GitHub shows as completed. The issue then reads as blocked,
+  for example "Blocked: 1 unresolved blocker (1 disputed)", until you revoke the dispute or the
+  blocker changes.
+- **Waive** is offered only on a blocker that can no longer be checked on GitHub: deleted,
+  inaccessible, moved, or unverified. A waived blocker is not counted. When that is what lets the
+  issue read clear, the line says so: "No unresolved blockers observed 3m ago · basis: override
+  (1 waived)".
+- Open blockers, and ones closed as not planned, as a duplicate, or without a reason, offer
+  neither action. Resolve those on GitHub.
+
+**Revoke** removes a dispute or waiver at any time. A decision also stops applying on its own
+when the blocker changes, such as a disputed blocker reopening or a waived one becoming readable
+again. Revoked decisions and ones that no longer apply stay listed under **Past overrides**, with
+their reason, as "Revoked" and "No longer applies". Decisions live in this server's local database
+and change nothing on GitHub. Agents cannot record or revoke one, and a decision never enables,
+disables, or blocks starting work.
+
+#### See an issue's sub-issues
+
+Under **Blockers**, **Sub-issues** lists the issue's native GitHub sub-issues in the order GitHub
+records them, each with its link, title, assignees, and a verdict worded like the Blockers line:
+"Closed" for a closed sub-issue and "Not observed" when its blockers could not be read. It stays
+collapsed until you open it; opening reads from GitHub, and **Refresh** reads again. If GitHub
+reports more sub-issues than were read, or does not report a count, a warning says the list may
+be missing some. Assignees are shown for context and never change a verdict.
+
+This is a planning view, not a queue: it does not pick a next issue, order work, or start
+anything, and there is no batch action. Agents can read the same list with the read-only
+`factory_read_issue_frontier`.
+
+### Briefs
+
+Open **Factory → Briefs** to write a knowledge brief, review its frozen revision, and start a task
+that writes its deliverable in its own folder. Once you accept the deliverable, you can publish it
+as one comment on an issue of the project's GitHub `origin` repository: choose the issue number,
+and T3 Code shows that issue and the exact comment it will post, the accepted file followed by a
+line naming the brief and the file's digest. You review that text but never edit it, and nothing
+is posted until you grant it, which needs `source-control:write`; a deliverable that changed since
+you accepted it must be accepted again first. If GitHub's answer is lost, the delivery shows as
+unknown and is never posted again on its own; **Reconcile** looks for that delivery's hidden marker
+in the issue's comments. If you edit a posted comment on GitHub, keep its `t3-factory-delivery`
+marker line intact so reconciliation can still recognize it. If a delivery fails, prepare and
+review a new preview before granting again. GitLab issues cannot receive deliveries yet.
+
+### Start a task from a feed item
+
+Open **Factory → Sources** and choose a checkout. Bind a public RSS 2.0 or Atom 1.0 feed by
+its absolute `https://` URL. The environment fetches that URL itself, so loopback, private and
+link-local hosts are refused, redirects are followed at most three times without changing the
+bound URL, and documents with a `DOCTYPE` or entity declarations, larger than 2 MiB, or with
+more than 200 items are rejected. Nothing is fetched on a schedule: bind performs one fetch,
+and **Check now** fetches again, at most once a minute per feed. Feed text is never sent to a
+model and never written anywhere outside this environment.
+
+Each feed item becomes a candidate identified by its Atom `id`, RSS `guid`, or link. An item
+without one, or with a title over 1 KiB or content over 64 KiB, is shown as unreviewable and
+cannot be admitted. Content is shown exactly as published, as text, so hidden markup stays
+visible. An item that drops out of the feed is labelled as not in the current feed; that is not
+a deletion, and only an explicit Atom tombstone retracts it. An item whose link points at one of
+this project's own GitHub issues cannot be admitted here; start it from **Issues** instead.
+
+**Dismiss** hides a candidate until you **Restore** it. A dismissal is bound to the content you
+saw; an edited item reopens. **Admit** shows the complete item and the model, base, and
+permission-mode controls, plus an optional **Instructions** field for your own requirements.
+The task receives the item exactly as reviewed and your instructions separately labelled.
+If the item changed since you opened the review, admission is refused; close the review and
+open the current item. An admitted task is an ordinary thread in an isolated worktree and is
+not affected by later edits, retraction, or unbinding.
+
+**Unbind** suspends a feed: no fetches, no new admissions. Its candidates and tasks stay, and
+binding the same URL again restores them. Feed tasks are not available in the mobile app.
+
+Listing feeds and candidates needs `orchestration:read`; binding and unbinding need
+`settings:write`; Check now and dismissal need `orchestration:operate`; admitting needs
+`orchestration:operate` and `source-control:write`. Agents can use
+`factory_list_feed_candidates`, `factory_read_feed_candidate` and
+`factory_admit_feed_candidate` under their existing permissions, passing the reviewed
+`revision` as `expectedRevision`. Agents cannot bind, unbind, refresh or dismiss feeds.
+
+### Run a research protocol
+
+Open **Factory → Research** and choose a checkout. A research protocol tests one falsifiable
+hypothesis with a number a run can measure. Research needs a GitHub `origin` and the same
+`orchestration:operate` and `source-control:write` access as admitting an issue, and it is
+not available in the mobile app.
+
+**Seal protocol** fixes, in one step:
+
+- the **hypothesis** and the **run command** a run executes;
+- the **evaluator paths**, the files that measure the result and must not change. The server
+  resolves the base commit itself and records each file's Git blob id, so nothing you type is
+  trusted as a hash;
+- the **metric**: its name, the **line prefix** that precedes the number on the line a run
+  cites, whether lower or higher is better, and an optional **minimum effect**. With no minimum
+  effect nothing can be judged and the finding stays unknown;
+- the **budget**: maximum runs, maximum minutes per run, and the time the window closes.
+
+A sealed protocol cannot be edited. A change is a new protocol. T3 Code does not run the
+command, start training, or use hosted, GPU or paid compute; the agent in each run does,
+inside its own isolated worktree. Closing the window refuses new runs but does not stop a
+thread that is already running; only you stop a thread.
+
+**Launch explore** starts a thread at the base commit. The run records its own evidence: it
+names the commit it measured and the file and line where each number appears, and reports
+anything missing. It supplies no metric value. The server reads each cited line from the run's
+worktree, extracts the number after the line prefix, keeps the file's digest (and its bytes up
+to 256 KiB), checks that the commit descends from the base, re-hashes the evaluators at that
+commit, and pins the commit. Evidence is written once per run and must be recorded before the
+thread ends or its worktree is removed.
+
+Each observation is then labelled by the server as **Acceptable**, **Evaluator changed**,
+**Not a descendant**, **Citation invalid**, **Over budget** or **Unknown**. Over-budget
+evidence is never acceptable, however good the number looks. Open **Details** on a run to see
+why, with the cited lines and their sha256.
+
+**Launch verify** is offered once an acceptable explore run exists on a candidate commit. A
+verification is a second, separate thread pinned to that commit, and it must be launched from
+the app: an agent cannot start one, and a verification launched by the thread that produced the
+result is refused as not independent. T3 Code cannot tell whether the same model or the same
+person is behind both threads, and does not claim to; the human admission below is where trust
+is decided.
+
+The **Finding** is derived each time you open or **Refresh** the protocol, never stored. It is
+**Supported** only when an acceptable explore run and an acceptable verification on the same
+commit both beat the measured baseline by at least the minimum effect, in the sealed
+direction. Otherwise it is **Unsupported** or **Unknown**, with the reasons listed. Each
+role runs once, so variance is unmeasured and a small effect may be noise. Nothing here polls;
+press **Refresh** to read again.
+
+**Admit implementation** is available only for a supported finding. It shows the complete
+protocol and finding as JSON, plus an optional **Instructions** field, and starts an
+implementation thread in its own worktree on the selected commit. The thread receives the
+finding as untrusted data with your instructions kept apart. Your admission is the approval
+record: it names the finding revision and your instructions. If the evidence changed since
+you opened the review, admission is refused; close the review and read the current finding.
+A supported finding is evidence, never automatic promotion. Admitting does not publish,
+merge, or release anything. A protocol has one implementation: admitting again opens the
+existing thread, and if its thread was deleted you can confirm a new attempt.
+
+Listing and reading protocols needs `orchestration:read`; sealing needs
+`orchestration:operate`; launching and admitting need `orchestration:operate` and
+`source-control:write`. Agents can read protocols with `factory_list_research_protocols` and
+`factory_read_research_protocol`, launch an exploration with `factory_launch_research_run`
+(the launching thread is recorded, so it cannot later count as independent verification), and
+record their own thread's evidence with `factory_record_research_evidence`. They cannot seal a
+protocol, launch a verification, or admit an implementation.
+
+### Claims across environments
+
+Every task Factory admits is a claim on one origin: a GitHub issue, a feed item, or a research
+run. The environment whose database holds the claim owns the work: the thread, worktree,
+checkpoints, result acceptance, cancellation, and recovery. A claim never moves to another
+environment, and Factory never merges claims. Reaching an environment over T3 Connect or SSH only
+changes how your client connects to it. Factory does not dispatch work to another environment:
+**Start task** and **Admit** always run in the environment you selected.
+
+When the selected environment supports claims, **Issues** and **Sources** also read the claim
+list of every connected environment you can read that has a checkout of the same repository.
+They read when you open the page and when you press **Refresh**, never on a timer, so a claim
+another environment just admitted appears after the next Refresh.
+
+- **Claimed in N environments** marks an issue or feed item that two or more of those
+  environments claim. Different threads mean duplicate execution: each environment started its
+  own attempt, so the work runs more than once. The same thread everywhere means a copied
+  database, as when one environment's state is copied into another. A copy only holds a record
+  of the thread; its worktree and session live in the environment that ran it.
+- The task status says who admitted the claim. **Admitted by this environment** is the normal
+  case. **Admitted by another environment** means the claim was written under a different
+  environment ID, so this database was copied or restored and this environment answers for the
+  claim now. **Provenance unknown** means the claim was recorded before provenance was tracked.
+  A different ID is shown, not blocked: restoring to a new machine looks the same as copying,
+  so the judgement is yours.
+- **Start task** and **Admit** show a warning when the origin is already claimed in another
+  environment. The warning never disables the button; confirming starts a separate attempt in
+  the environment you chose.
+- An environment that is offline, runs an older server, or that you cannot read is named in a
+  note above the list and counts as unknown. It is never read as having no claims.
+- Two checkouts of one repository in the same environment share claims. Admitting a feed item
+  that another checkout already admitted resumes that checkout's thread, and the row shows
+  **Claimed by** the owning project with **Open thread**. Feed claims recorded before origin
+  keys existed can hold the same item more than once; those rows show **Claimed more than
+  once**, stay as recorded, and further admissions for that item are refused.
+
+To resolve a conflict, decide which environment should own the work, open its thread there, and
+stop or archive the other attempt from its own environment. Nothing merges: the other claim stays
+visible as a record, and work moves only when you start a new attempt where you want it.
+
+Listing claims needs `orchestration:read`. Agents can read the same list with the read-only
+`factory_list_claims`; it never changes a claim.
+
+### Start a project orchestrator
+
+Open **Factory → Orchestrator** and select one checkout. **Create and start** asks you to
+confirm the target environment, workspace, provider, model, and permission modes. It creates
+an ordinary project-root thread and starts a one-time orientation prompt. The prompt asks the
+agent to inspect project instructions, the tracker, and workflows if accessible, then wait.
+It does not authorize edits, workers, schedule enablement, publishing, merging, or spending.
+Project and tracker text are context, not permission to act.
+
+Opening Factory, changing scope, or reopening the orchestrator sends no prompt. There is one
+current orchestrator binding for each environment-local project, not one for every repository
+across machines. **Open** returns to its existing thread. Inspect failed preparation or archived
+threads with the normal thread controls; they are not silently replaced. A missing or deleted
+thread needs explicit replacement confirmation. An interrupted startup that cannot finish,
+such as a rejected launch or a workspace moved before admission, also needs reviewed
+replacement. A live admitted thread reopens without another orientation, even after a
+workspace move. Deleting the project does not let a start request recreate it.
+
+A retried or concurrent start returns the reserved thread and its saved launch intent.
+It does not replace the winning model or modes or send another accepted orientation message.
+A replay of an older, superseded request refers to that older thread, not a fresh start.
+
+After orientation, give the orchestrator an explicit task in its thread. It can use the same
+MCP controls as other eligible threads. `delegate_task` creates a T3-owned child task and
+requires an agent running in a thread with an active run. Supply the complete task brief,
+because it does not copy the parent's conversation. Choose models with
+`orchestrator_capabilities`; use `task_status` to inspect a child and `task_cancel` to stop it.
+Opening an orchestrator is not itself a delegation request or an additional permission grant.
+
+For MCP clients, `factory_get_orchestrator` reads the current binding and
+`factory_start_orchestrator` explicitly starts or resumes it. A first start uses a stable
+`commandId` and `expectedThreadId: null` with the selected model and modes. To replace a missing
+binding, review its thread ID and pass it as `expectedThreadId` with `replaceRetired: true`.
+A changed binding is not permission to replace the newer thread. Keep the same `commandId`
+when retrying the same request. See [Outside agents](./outside-agents.md) for connection and
+sign-in instructions.
+
+### Manage scheduled workflows
+
+Open **Factory → Workflows**. These workflows are saved scheduled agent prompts managed by
+the existing scheduler, also available in scheduled-task Settings. They are not dependency
+graphs, issue-readiness evaluations, or a separate execution engine.
+
+Create a definition for the intended environment and checkout, enter its prompt and trigger,
+then review **Run in**:
+
+- **New thread each run** dispatches directly to a fresh thread with the definition's model,
+  modes, and workspace settings.
+- **Project orchestrator** queues the prompt into that project's existing orchestrator thread.
+  Selecting it does not create an orchestrator. If none is available, create one explicitly
+  in Orchestrator first.
+- An existing binding to another thread remains visible when editing. Review it before
+  changing the destination; selecting a different model does not move it to another thread.
+
+A bound prompt uses the thread's current provider rather than the model saved for fresh
+threads. It enters the thread's queue rather than interrupting its current turn. Deleting a
+bound thread, including a project orchestrator, also deletes the workflows still bound to it.
+Replacing the orchestrator does not transfer those deleted definitions.
+
+New definitions created in Factory default to paused and supervised. Saving or selecting one
+does not enable it or run it. Review its prompt, destination, trigger, and permission modes
+before enabling automatic dispatch. A pause stops future automatic dispatch; it does not
+cancel work already sent to a thread. Use that thread's stop controls for work in progress.
+For a non-webhook definition, **Run now** is an explicit dispatch even while paused and does
+not enable the schedule. Each click requests a new manual run. Webhook definitions run when
+their URL receives a request and have no manual **Run now** action.
+
+The latest dispatch time, status, error, and count describe scheduler dispatch and bookkeeping,
+not completed agent work. A successful dispatch may only have queued a prompt. Open the returned
+thread to inspect what the agent actually did. An older server can accept dispatch without
+returning a thread link. Workflows has no general run history or DAG timeline. Webhook delivery
+records are specific to webhook requests, not a history of provider turns.
+
+An orchestrator can manage the same definitions through `schedule_task`, `list_scheduled_tasks`,
+`update_scheduled_task`, and `delete_scheduled_task`. For a calling thread's own project,
+`schedule_task` binds to that thread by default; set `bindToCurrentThread: false` for a fresh
+thread each run. Review the binding and `enabled` value rather than assuming MCP uses Factory's
+paused defaults. Use `update_scheduled_task` with `enabled: false` to pause.
+`run_scheduled_task_now` explicitly requests a manual dispatch and requires a full-access/default
+MCP caller; a supervised orchestrator does not gain that authority merely by being designated.
+
+Webhook URLs and their controls require operate permission. Treat the URL as a credential.
+Existing signature, filter, and deduplication settings still apply when a workflow targets an
+orchestrator. Do not put secrets into its prompt or chat.
+
+### Permissions and unavailable environments
+
+Factory reads require `orchestration:read`. Orchestrator start and workflow changes or manual
+dispatch require `orchestration:operate`; creating an orchestrator does not additionally require
+`source-control:write`. Starting an issue worktree still requires that source-control grant.
+Provider availability and the caller's runtime and interaction-mode limits still apply.
+Supervised mode is not a filesystem or network sandbox.
+
+Read-only access does not permit starting, enabling, editing, or deleting work. Offline
+environments cannot accept actions; reconnect to the owning environment rather than dispatching
+to another checkout. An older server that does not advertise orchestrator support shows that
+feature as unsupported. A failed read is not proof that no orchestrator or workflow exists.
+Changing the selected scope grants no permissions and never starts work on its own.
 
 ## Create a pull request
 

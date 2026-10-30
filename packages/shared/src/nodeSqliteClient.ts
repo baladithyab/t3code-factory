@@ -200,17 +200,18 @@ const { DatabaseSync } = require("node:sqlite");
 let db;
 try {
   // A read-only open cannot be undone by SQL, unlike PRAGMA query_only.
-  const next = new DatabaseSync(workerData.filename, {
+  db = new DatabaseSync(workerData.filename, {
     readOnly: true,
     allowExtension: workerData.allowExtension,
   });
-  next.exec("PRAGMA busy_timeout = 5000;");
+  db.exec("PRAGMA busy_timeout = 5000;");
   // Without WAL a reader's shared lock blocks the writer's commits, so refuse.
-  const mode = String(next.prepare("PRAGMA journal_mode").get().journal_mode).toLowerCase();
+  const mode = String(db.prepare("PRAGMA journal_mode").get().journal_mode).toLowerCase();
   if (mode !== "wal") throw new Error("database uses journal_mode " + mode + ", not wal");
-  db = next;
   parentPort.postMessage({ type: "ready" });
 } catch (error) {
+  db?.close();
+  db = undefined;
   parentPort.postMessage({ type: "unavailable", message: String(error && error.message ? error.message : error) });
 }
 const statements = new Map();
@@ -226,7 +227,12 @@ const prepare = (sql, cached) => {
   statements.set(sql, statement);
   return statement;
 };
-parentPort.on("message", ({ id, sql, params, cached, values, raw, safeIntegers }) => {
+parentPort.on("message", ({ type, id, sql, params, cached, values, raw, safeIntegers }) => {
+  if (type === "close") {
+    db?.close();
+    parentPort.close();
+    return;
+  }
   let operation = "open";
   try {
     if (db === undefined) throw new Error("database reader is unavailable");
@@ -306,6 +312,7 @@ const makeReader = Effect.fnUntraced(function* (
         readonly worker: NodeWorkerThreads.Worker;
         readonly connection: Connection;
         readonly started: Promise<ReaderStartup>;
+        ready: boolean;
       }
     | undefined;
   let nextRequestId = 0;
@@ -343,6 +350,7 @@ const makeReader = Effect.fnUntraced(function* (
     };
     worker.on("message", (reply: ReaderReply | ReaderStartup) => {
       if ("type" in reply) {
+        if (current?.worker === worker) current.ready = reply.type === "ready";
         announce(reply);
         if (pending.size === 0) worker.unref();
         return;
@@ -425,13 +433,25 @@ const makeReader = Effect.fnUntraced(function* (
         return Stream.die(new UnsupportedNodeSqliteOperationError());
       },
     });
-    current = { worker, connection, started };
+    current = { worker, connection, started, ready: false };
     return current;
   };
 
   yield* Effect.addFinalizer(() =>
     Effect.promise(async () => {
-      await current?.worker.terminate();
+      const reader = current;
+      if (reader === undefined) return;
+      if (!reader.ready) {
+        await reader.worker.terminate();
+        return;
+      }
+      // Close SQLite inside the worker before its isolate is torn down.
+      await new Promise<void>((resolve) => {
+        reader.worker.once("exit", () => resolve());
+        reader.worker.ref();
+        // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
+        reader.worker.postMessage({ type: "close" });
+      });
     }),
   );
 

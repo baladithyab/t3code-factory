@@ -18,6 +18,7 @@ const makeInstance = Effect.all({
   sourceControl: GitCafeSourceControlProvider.make,
   discovery: GitCafeSourceControlProvider.makeDiscovery,
   pullRequests: GitCafePullRequestProvider.make,
+  issues: Effect.succeed(null),
 });
 
 export const driver = defineSourceControlDriver({

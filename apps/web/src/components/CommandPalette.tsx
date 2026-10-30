@@ -57,6 +57,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   CornerLeftUpIcon,
+  FactoryIcon,
   FileSearchIcon,
   FolderGit2Icon,
   FolderIcon,
@@ -103,6 +104,7 @@ import { useClientSettings } from "../hooks/useSettings";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
+import { useFactoryFeedsSupported, useFactoryResearchSupported } from "../state/factory";
 import { filesystemEnvironment, useFilesystemReadAccess } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
@@ -429,6 +431,8 @@ function OpenCommandPaletteDialog(props: {
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
+  const factoryFeedsSupported = useFactoryFeedsSupported();
+  const factoryResearchSupported = useFactoryResearchSupported();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const paletteRouteTarget = useThreadRouteTarget();
@@ -1489,6 +1493,75 @@ function OpenCommandPaletteDialog(props: {
       icon: <PullRequestGlyph.pullRequest className={ITEM_ICON_CLASS} />,
       run: async () => {
         await navigate({ to: "/pull-requests", search: readPullRequestListPreferences() });
+      },
+    });
+  }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:factory",
+    searchTerms: ["factory", "overview", "projects", "workspaces", "automation"],
+    title: "Open Factory",
+    icon: <FactoryIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/factory", search: { state: "open", view: "list" } });
+    },
+  });
+
+  for (const section of [
+    {
+      to: "/factory/issues",
+      value: "action:factory-issues",
+      title: "Open Factory issues",
+      searchTerms: ["factory", "issues", "github", "tasks", "inbox", "backlog"],
+    },
+    {
+      to: "/factory/workflows",
+      value: "action:factory-workflows",
+      title: "Open Factory workflows",
+      searchTerms: ["factory", "workflows", "scheduled", "tasks", "automation", "prompts"],
+    },
+    {
+      to: "/factory/orchestrator",
+      value: "action:factory-orchestrator",
+      title: "Open Factory orchestrator",
+      searchTerms: ["factory", "orchestrator", "coordinator", "delegation", "project"],
+    },
+  ] as const) {
+    actionItems.push({
+      kind: "action",
+      value: section.value,
+      searchTerms: [...section.searchTerms],
+      title: section.title,
+      icon: <FactoryIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: section.to, search: { state: "open", view: "list" } });
+      },
+    });
+  }
+
+  if (factoryFeedsSupported) {
+    actionItems.push({
+      kind: "action",
+      value: "action:factory-sources",
+      searchTerms: ["factory", "sources", "feeds", "rss", "atom", "candidates", "tasks"],
+      title: "Open Factory sources",
+      icon: <FactoryIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/factory/sources", search: { state: "open", view: "list" } });
+      },
+    });
+  }
+
+  if (factoryResearchSupported) {
+    actionItems.push({
+      kind: "action",
+      value: "action:factory-research",
+      searchTerms: ["factory", "research", "protocol", "experiment", "hypothesis", "evidence"],
+      title: "Open Factory research",
+      icon: <FactoryIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/factory/research", search: { state: "open", view: "list" } });
       },
     });
   }

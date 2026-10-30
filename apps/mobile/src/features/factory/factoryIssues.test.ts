@@ -1,0 +1,1086 @@
+import {
+  EnvironmentAuthorizationError,
+  EnvironmentId,
+  FactoryAcceptanceError,
+  FactoryDeliveryError,
+  FactoryIssueError,
+  FactoryOriginKey,
+  ProjectId,
+  ProviderInstanceId,
+  SourceControlProviderKind,
+  ThreadId,
+  type FactoryAcceptance,
+  type FactoryArtifactDeliveryIntent,
+  type FactoryArtifactDeliveryPrepareResult,
+  type FactoryCommitDeliveryIntent,
+  type FactoryCommitDeliveryPrepareResult,
+  type FactoryDeliveryPullRequest,
+  type FactoryIssue,
+  type FactoryIssueCapabilities,
+  type FactoryIssueListResult,
+  type FactoryIssueTask,
+  type FactoryRepository,
+} from "@t3tools/contracts";
+import { describe, expect, it } from "vite-plus/test";
+
+import {
+  applyFactoryIssuePage,
+  describeFactoryAcceptanceFailure,
+  describeFactoryArtifactDeliveryFailure,
+  describeFactoryDeliveryFailure,
+  describeFactoryFailure,
+  describeFactoryMergeFailure,
+  EMPTY_FACTORY_ISSUE_PAGES,
+  FACTORY_ARTIFACT_ALREADY_DELIVERING,
+  FACTORY_ARTIFACT_CHANGED,
+  FACTORY_ARTIFACT_NOT_ACCEPTED,
+  FACTORY_ARTIFACT_PAYLOAD_CHANGED,
+  FACTORY_DELIVERY_ALREADY_DELIVERING,
+  FACTORY_DELIVERY_HEAD_MOVED,
+  FACTORY_DELIVERY_PAYLOAD_CHANGED,
+  FACTORY_MERGE_ALREADY_MERGED,
+  FACTORY_MERGE_ALREADY_MERGING,
+  factoryMergeDraft,
+  FACTORY_MERGE_METHOD_CHANGED,
+  factoryMergeNotMergeable,
+  FACTORY_MERGE_NOT_PUBLISHED,
+  FACTORY_MERGE_PR_HEAD_MOVED,
+  factoryAcceptanceView,
+  factoryArtifactDeliveryStatusView,
+  factoryArtifactDestinationText,
+  factoryArtifactGrantBlocker,
+  factoryDeliveryStatusView,
+  factoryIssueCommentUnsupportedText,
+  isFactoryCommitIntent,
+  isFactoryArtifactIntent,
+  isFactoryArtifactPrepareResult,
+  isFactoryArtifactReconcilable,
+  liveFactoryArtifactIntent,
+  parseFactoryIssueNumber,
+  factoryDeliveryDefaultPayload,
+  factoryDeliveryGrantBlocker,
+  factoryMergeGrantBlocker,
+  factoryMergeabilityLabel,
+  factoryPublishUnsupportedText,
+  factoryPullRequestHeadView,
+  factoryIssueAction,
+  factoryIssueStartKey,
+  factoryRepositoryLabel,
+  safeFactoryIssueBody,
+  safeFactoryIssueText,
+  safeFactoryIssueUrl,
+} from "./factoryIssues";
+
+const repository: FactoryRepository = {
+  provider: SourceControlProviderKind.make("github"),
+  host: "github.com",
+  repository: "owner/name",
+  canonicalKey: "github.com/owner/name",
+  url: "https://github.com/owner/name",
+};
+
+function task(status: FactoryIssueTask["status"]): FactoryIssueTask {
+  return {
+    projectId: ProjectId.make("project-1"),
+    threadId: ThreadId.make("thread-1"),
+    status,
+    baseRef: "0123456789abcdef",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+  };
+}
+
+function issue(overrides: Partial<FactoryIssue> = {}): FactoryIssue {
+  return {
+    number: 1,
+    revision: "a".repeat(64),
+    title: "Fix it",
+    body: null,
+    state: "open",
+    url: "https://github.com/owner/name/issues/1",
+    labels: [],
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    task: null,
+    ...overrides,
+  };
+}
+
+const githubCapabilities: FactoryIssueCapabilities = {
+  provider: SourceControlProviderKind.make("github"),
+  displayName: "GitHub",
+  blockedBy: "listing-with-total",
+  subIssues: true,
+  closeAcceptance: "close-reason",
+  publish: true,
+  headPinnedMerge: true,
+  issueComment: true,
+};
+
+const gitlabCapabilities: FactoryIssueCapabilities = {
+  provider: SourceControlProviderKind.make("gitlab"),
+  displayName: "GitLab",
+  blockedBy: "none",
+  subIssues: false,
+  closeAcceptance: "none",
+  publish: false,
+  headPinnedMerge: false,
+  issueComment: false,
+};
+
+function page(issues: FactoryIssue[], nextPage: number | null): FactoryIssueListResult {
+  return {
+    repository,
+    capabilities: githubCapabilities,
+    issues,
+    nextPage,
+    fetchedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+describe("applyFactoryIssuePage", () => {
+  it("replaces everything on the first page", () => {
+    const loaded = applyFactoryIssuePage(EMPTY_FACTORY_ISSUE_PAGES, 1, page([issue()], 2));
+    const refreshed = applyFactoryIssuePage(loaded, 1, page([issue({ number: 9 })], null));
+    expect(refreshed.issues.map((entry) => entry.number)).toEqual([9]);
+    expect(refreshed.nextPage).toBeNull();
+  });
+
+  it("appends later pages and keeps an empty page continuable", () => {
+    const first = applyFactoryIssuePage(
+      EMPTY_FACTORY_ISSUE_PAGES,
+      1,
+      page([issue({ number: 1 }), issue({ number: 2 })], 2),
+    );
+    const empty = applyFactoryIssuePage(first, 2, page([], 3));
+    expect(empty.issues).toHaveLength(2);
+    expect(empty.nextPage).toBe(3);
+    const third = applyFactoryIssuePage(empty, 3, page([issue({ number: 3 })], null));
+    expect(third.issues.map((entry) => entry.number)).toEqual([1, 2, 3]);
+  });
+
+  it("keeps the earliest position of an issue repeated on a later page with newer data", () => {
+    const first = applyFactoryIssuePage(
+      EMPTY_FACTORY_ISSUE_PAGES,
+      1,
+      page([issue({ number: 1 }), issue({ number: 2 })], 2),
+    );
+    const second = applyFactoryIssuePage(
+      first,
+      2,
+      page([issue({ number: 1, task: task("running") }), issue({ number: 3 })], null),
+    );
+    expect(second.issues.map((entry) => entry.number)).toEqual([1, 2, 3]);
+    expect(second.issues[0]?.task?.status).toBe("running");
+  });
+
+  it("replaces loaded rows when the project origin changes between pages", () => {
+    const first = applyFactoryIssuePage(EMPTY_FACTORY_ISSUE_PAGES, 1, page([issue()], 2));
+    const second = applyFactoryIssuePage(first, 2, {
+      ...page([issue({ number: 9, url: "https://github.com/other/repository/issues/9" })], 3),
+      repository: {
+        ...repository,
+        repository: "other/repository",
+        canonicalKey: "github.com/other/repository",
+        url: "https://github.com/other/repository",
+      },
+    });
+    expect(second.repository?.canonicalKey).toBe("github.com/other/repository");
+    expect(second.issues.map((entry) => entry.number)).toEqual([9]);
+  });
+});
+
+describe("applyFactoryIssuePage capabilities", () => {
+  it("takes the capabilities of the page, so a changed host replaces them", () => {
+    const first = applyFactoryIssuePage(EMPTY_FACTORY_ISSUE_PAGES, 1, page([issue()], 2));
+    expect(first.capabilities).toEqual(githubCapabilities);
+    const gitlabRepository: FactoryRepository = {
+      provider: SourceControlProviderKind.make("gitlab"),
+      host: "gitlab.com",
+      repository: "group/project",
+      canonicalKey: "gitlab.com/group/project",
+      url: "https://gitlab.com/group/project",
+    };
+    const second = applyFactoryIssuePage(first, 2, {
+      ...page([issue({ number: 9 })], null),
+      repository: gitlabRepository,
+      capabilities: gitlabCapabilities,
+    });
+    expect(second.capabilities).toEqual(gitlabCapabilities);
+    expect(second.issues.map((entry) => entry.number)).toEqual([9]);
+  });
+});
+
+describe("factoryIssueAction", () => {
+  it("starts an open issue with no task", () => {
+    expect(factoryIssueAction(issue()).kind).toBe("start");
+  });
+
+  it("never starts new work for a closed issue", () => {
+    expect(factoryIssueAction(issue({ state: "closed" })).kind).toBe("unavailable");
+  });
+
+  it("opens an existing task even when the issue is closed", () => {
+    for (const status of ["preparing", "running", "idle", "failed", "archived"] as const) {
+      const action = factoryIssueAction(issue({ state: "closed", task: task(status) }));
+      expect(action.kind).toBe("open");
+    }
+  });
+
+  it("requires an explicit new attempt for a deleted task", () => {
+    expect(factoryIssueAction(issue({ task: task("missing") })).kind).toBe("restart");
+    expect(factoryIssueAction(issue({ state: "closed", task: task("missing") })).kind).toBe(
+      "unavailable",
+    );
+  });
+
+  it("resumes the same reserved launch after the issue closes", () => {
+    expect(factoryIssueAction(issue({ state: "closed", task: task("launching") })).kind).toBe(
+      "resume",
+    );
+  });
+});
+
+describe("factoryIssueStartKey", () => {
+  it("reuses a retry identity only for the same reviewed revision", () => {
+    const input = {
+      environmentId: "environment-1",
+      projectId: "project-1",
+      expectedRepositoryKey: repository.canonicalKey,
+      issueNumber: 1,
+      expectedIssueRevision: "a".repeat(64),
+      restartDeleted: false,
+      previousThreadId: null,
+    };
+    const commands = new Map([[factoryIssueStartKey(input), "original-command"]]);
+    expect(commands.get(factoryIssueStartKey({ ...input }))).toBe("original-command");
+    expect(
+      commands.get(factoryIssueStartKey({ ...input, expectedIssueRevision: "b".repeat(64) })),
+    ).toBeUndefined();
+  });
+
+  it("does not replay the attempt for a different deleted thread", () => {
+    const input = {
+      environmentId: "environment-1",
+      projectId: "project-1",
+      expectedRepositoryKey: repository.canonicalKey,
+      issueNumber: 1,
+      expectedIssueRevision: "a".repeat(64),
+      restartDeleted: true,
+      previousThreadId: "deleted-thread-1",
+    };
+    expect(factoryIssueStartKey(input)).not.toBe(
+      factoryIssueStartKey({ ...input, previousThreadId: "deleted-thread-2" }),
+    );
+  });
+});
+
+describe("safeFactoryIssueText", () => {
+  it("removes controls and bidirectional overrides but keeps newlines", () => {
+    expect(safeFactoryIssueText("a\u202Eb\u0000c\r\nd")).toBe("abc\nd");
+  });
+
+  it("collapses runs of blank lines and bounds the length", () => {
+    expect(safeFactoryIssueText("a\n\n\n\n\nb")).toBe("a\n\nb");
+    expect(safeFactoryIssueText("x".repeat(50), 10)).toBe(`${"x".repeat(10)}…`);
+  });
+
+  it("treats a blank body as no body", () => {
+    expect(safeFactoryIssueBody(null)).toBeNull();
+    expect(safeFactoryIssueBody("  \n\u202E ")).toBeNull();
+    expect(safeFactoryIssueBody("hello")).toBe("hello");
+  });
+});
+
+describe("safeFactoryIssueUrl", () => {
+  it("only accepts https", () => {
+    expect(safeFactoryIssueUrl("https://github.com/o/n/issues/1")).toBe(
+      "https://github.com/o/n/issues/1",
+    );
+    expect(safeFactoryIssueUrl("javascript:alert(1)")).toBeNull();
+    expect(safeFactoryIssueUrl("http://github.com/o/n")).toBeNull();
+    expect(safeFactoryIssueUrl("not a url")).toBeNull();
+  });
+});
+
+describe("describeFactoryFailure", () => {
+  it("maps typed reasons to actionable kinds", () => {
+    expect(
+      describeFactoryFailure(new FactoryIssueError({ reason: "authentication" }), "x").kind,
+    ).toBe("auth");
+    expect(
+      describeFactoryFailure(new FactoryIssueError({ reason: "unsupported-provider" }), "x").kind,
+    ).toBe("unsupported");
+    expect(
+      describeFactoryFailure(new FactoryIssueError({ reason: "rate-limited" }), "x").kind,
+    ).toBe("retry");
+    expect(
+      describeFactoryFailure(new FactoryIssueError({ reason: "missing-repository" }), "x").kind,
+    ).toBe("repository");
+  });
+
+  it("distinguishes changed source from failures that can retry the same review", () => {
+    expect(
+      describeFactoryFailure(new FactoryIssueError({ reason: "issue-changed" }), "x").kind,
+    ).toBe("changed");
+    expect(
+      describeFactoryFailure(new FactoryIssueError({ reason: "launch-failure" }), "x").kind,
+    ).toBe("retry");
+  });
+
+  it("names the host in sign-in and rate-limit titles only when it is known", () => {
+    const auth = new FactoryIssueError({ reason: "authentication" });
+    const limited = new FactoryIssueError({ reason: "rate-limited" });
+    expect(describeFactoryFailure(auth, "x", "GitLab").title).toBe("GitLab sign-in required");
+    expect(describeFactoryFailure(limited, "x", "GitLab").title).toBe("GitLab rate limit reached");
+    expect(describeFactoryFailure(auth, "x").title).toBe("Sign-in required");
+    expect(describeFactoryFailure(limited, "x").title).toBe("Rate limit reached");
+  });
+
+  it("reports authorization failures as not permitted", () => {
+    const failure = describeFactoryFailure(
+      new EnvironmentAuthorizationError({
+        message: "nope",
+        requiredScope: "orchestration:read",
+      }),
+      "x",
+    );
+    expect(failure.kind).toBe("auth");
+  });
+});
+
+describe("factoryRepositoryLabel", () => {
+  it("omits github.com and shows other hosts", () => {
+    expect(factoryRepositoryLabel(repository)).toBe("owner/name");
+    expect(factoryRepositoryLabel({ ...repository, host: "ghe.example.com" })).toBe(
+      "ghe.example.com/owner/name",
+    );
+  });
+});
+
+describe("factoryAcceptanceView", () => {
+  const acceptance: FactoryAcceptance = {
+    id: "acceptance-1",
+    originKey: FactoryOriginKey.make("github:github.com/owner/name#1"),
+    threadId: ThreadId.make("thread-1"),
+    projectId: ProjectId.make("project-1"),
+    headSha: "a".repeat(40),
+    baseRef: "main",
+    baseSha: "b".repeat(40),
+    acceptedAt: "2026-01-01T00:00:00.000Z",
+    acceptedBy: EnvironmentId.make("environment-1"),
+    evidenceRefs: [],
+  };
+
+  it("offers the live head when nothing is accepted", () => {
+    expect(
+      factoryAcceptanceView({ acceptance: null, liveHeadSha: "c".repeat(40), current: false }),
+    ).toEqual({ kind: "none", liveHeadSha: "c".repeat(40) });
+  });
+
+  it("reports a moved head only when the live head was observed", () => {
+    expect(
+      factoryAcceptanceView({ acceptance, liveHeadSha: "c".repeat(40), current: false }).kind,
+    ).toBe("moved");
+    expect(factoryAcceptanceView({ acceptance, liveHeadSha: null, current: false }).kind).toBe(
+      "unverifiable",
+    );
+    expect(
+      factoryAcceptanceView({ acceptance, liveHeadSha: acceptance.headSha, current: true }).kind,
+    ).toBe("current");
+  });
+});
+
+describe("describeFactoryAcceptanceFailure", () => {
+  it("asks the reviewer to look again when the head moved", () => {
+    expect(
+      describeFactoryAcceptanceFailure(new FactoryAcceptanceError({ reason: "head-moved" })),
+    ).toMatchObject({
+      kind: "changed",
+      detail: "The head moved while you were reviewing. Refresh and review again.",
+    });
+  });
+
+  it("points a write-once conflict at Re-accept", () => {
+    expect(
+      describeFactoryAcceptanceFailure(new FactoryAcceptanceError({ reason: "already-accepted" }))
+        .detail,
+    ).toContain("Re-accept at current head");
+  });
+
+  it("reports authorization failures as not permitted", () => {
+    expect(
+      describeFactoryAcceptanceFailure(
+        new EnvironmentAuthorizationError({
+          message: "nope",
+          requiredScope: "orchestration:operate",
+        }),
+      ).kind,
+    ).toBe("auth");
+  });
+});
+
+describe("factory delivery", () => {
+  const headSha = "a".repeat(40);
+  const payload = {
+    title: "Fix it",
+    body: "Issue: https://github.com/owner/name/issues/1",
+    draft: true,
+  };
+  const acceptance: FactoryAcceptance = {
+    id: "acceptance-1",
+    originKey: FactoryOriginKey.make("github:github.com/owner/name#1"),
+    threadId: ThreadId.make("thread-1"),
+    projectId: ProjectId.make("project-1"),
+    headSha,
+    baseRef: "main",
+    baseSha: "b".repeat(40),
+    acceptedAt: "2026-01-01T00:00:00.000Z",
+    acceptedBy: EnvironmentId.make("environment-1"),
+    evidenceRefs: [],
+  };
+  const prepared: FactoryCommitDeliveryPrepareResult = {
+    acceptance,
+    current: true,
+    repository,
+    baseRef: "main",
+    headSha,
+    payload,
+    payloadDigest: "d".repeat(64),
+    existing: null,
+    pullRequest: null,
+  };
+  function intent(
+    overrides: Partial<FactoryCommitDeliveryIntent> = {},
+  ): FactoryCommitDeliveryIntent {
+    return {
+      id: "intent-1",
+      originKey: acceptance.originKey,
+      threadId: acceptance.threadId,
+      projectId: acceptance.projectId,
+      kind: "publish-pr",
+      acceptanceId: acceptance.id,
+      repository,
+      baseRef: "main",
+      baseSha: acceptance.baseSha,
+      headSha,
+      payload,
+      payloadDigest: prepared.payloadDigest,
+      grantedBy: acceptance.acceptedBy,
+      grantedAt: "2026-01-01T00:00:00.000Z",
+      requestCommandId: "command-1",
+      status: "pending",
+      remote: null,
+      failure: null,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+  const grantable = {
+    permitted: true,
+    acceptedHeadSha: headSha,
+    acceptanceCurrent: true,
+    liveIntent: null,
+    prepared,
+    draft: payload,
+  };
+
+  it("prefills a draft from the issue title and a link to it", () => {
+    expect(
+      factoryDeliveryDefaultPayload({
+        number: 1,
+        title: "  Fix it‮ ",
+        url: "https://github.com/owner/name/issues/1",
+      }),
+    ).toEqual(payload);
+    expect(
+      factoryDeliveryDefaultPayload({ number: 7, title: " ", url: "javascript:alert(1)" }),
+    ).toEqual({ title: "Issue #7", body: "Issue #7", draft: true });
+  });
+
+  it("grants only the exact current preview", () => {
+    expect(factoryDeliveryGrantBlocker(grantable)).toBeNull();
+    // A trailing space is trimmed by the server, so it is not an edit.
+    expect(
+      factoryDeliveryGrantBlocker({ ...grantable, draft: { ...payload, title: "Fix it " } }),
+    ).toBeNull();
+    expect(factoryDeliveryGrantBlocker({ ...grantable, prepared: null })).toBe(
+      "Prepare a preview before granting.",
+    );
+  });
+
+  it("refuses a grant whose preview no longer matches the acceptance", () => {
+    expect(factoryDeliveryGrantBlocker({ ...grantable, acceptedHeadSha: "c".repeat(40) })).toBe(
+      FACTORY_DELIVERY_HEAD_MOVED,
+    );
+    expect(
+      factoryDeliveryGrantBlocker({ ...grantable, prepared: { ...prepared, current: false } }),
+    ).toBe(FACTORY_DELIVERY_HEAD_MOVED);
+    expect(factoryDeliveryGrantBlocker({ ...grantable, acceptanceCurrent: false })).toBe(
+      "Publishing needs a current accepted commit.",
+    );
+  });
+
+  it("refuses a grant after the title, body, or draft flag was edited", () => {
+    for (const draft of [
+      { ...payload, title: "Other" },
+      { ...payload, body: "" },
+      { ...payload, draft: false },
+    ]) {
+      expect(factoryDeliveryGrantBlocker({ ...grantable, draft })).toBe(
+        FACTORY_DELIVERY_PAYLOAD_CHANGED,
+      );
+    }
+  });
+
+  it("allows one live intent per task, but a failed one can be granted again", () => {
+    for (const status of ["pending", "sending", "unknown"] as const) {
+      expect(factoryDeliveryGrantBlocker({ ...grantable, liveIntent: intent({ status }) })).toBe(
+        FACTORY_DELIVERY_ALREADY_DELIVERING,
+      );
+    }
+    expect(
+      factoryDeliveryGrantBlocker({ ...grantable, liveIntent: intent({ status: "confirmed" }) }),
+    ).toBe("A pull request was already published for this task.");
+    expect(
+      factoryDeliveryGrantBlocker({
+        ...grantable,
+        prepared: { ...prepared, existing: intent({ status: "failed" }) },
+      }),
+    ).toBeNull();
+    expect(factoryDeliveryGrantBlocker({ ...grantable, permitted: false })).toContain(
+      "isn't permitted",
+    );
+  });
+
+  it("describes each intent status without inventing a link", () => {
+    const { displayName } = githubCapabilities;
+    expect(factoryDeliveryStatusView(intent({ status: "sending" }), displayName).text).toBe(
+      "Publishing…",
+    );
+    expect(
+      factoryDeliveryStatusView(
+        intent({
+          status: "confirmed",
+          remote: { number: 12, url: "https://github.com/owner/name/pull/12" },
+        }),
+        displayName,
+      ),
+    ).toEqual({
+      kind: "confirmed",
+      text: "Published pull request #12",
+      link: { label: "Open pull request #12", url: "https://github.com/owner/name/pull/12" },
+    });
+    expect(
+      factoryDeliveryStatusView(
+        intent({ status: "confirmed", remote: { number: 12, url: "http://example.com" } }),
+        displayName,
+      ),
+    ).toMatchObject({ text: "Published pull request #12", link: null });
+    expect(
+      factoryDeliveryStatusView(intent({ status: "failed", failure: "boom" }), displayName).text,
+    ).toBe("boom");
+    expect(factoryDeliveryStatusView(intent({ status: "unknown" }), displayName).text).toBe(
+      "The server lost the response. Reconcile to check GitHub.",
+    );
+  });
+
+  it("names the host of the repository in host-specific copy", () => {
+    expect(factoryDeliveryStatusView(intent({ status: "unknown" }), "GitLab").text).toBe(
+      "The server lost the response. Reconcile to check GitLab.",
+    );
+    expect(factoryMergeabilityLabel("unknown", "GitLab")).toBe(
+      "GitLab has not decided mergeability yet",
+    );
+    expect(factoryMergeabilityLabel("conflicting", "GitLab")).toBe("Has merge conflicts");
+    expect(factoryMergeDraft("GitLab")).toBe(
+      "The pull request is a draft. Mark it ready for review on GitLab, then prepare again.",
+    );
+    expect(factoryMergeNotMergeable("GitLab")).toBe(
+      "GitLab reports the pull request cannot be merged right now.",
+    );
+  });
+
+  it("maps refusals to the next step a person can take", () => {
+    const { displayName } = githubCapabilities;
+    for (const reason of ["head-moved", "acceptance-stale"] as const) {
+      expect(
+        describeFactoryDeliveryFailure(new FactoryDeliveryError({ reason }), displayName).detail,
+      ).toBe(FACTORY_DELIVERY_HEAD_MOVED);
+    }
+    expect(
+      describeFactoryDeliveryFailure(
+        new FactoryDeliveryError({ reason: "payload-changed" }),
+        displayName,
+      ).detail,
+    ).toBe(FACTORY_DELIVERY_PAYLOAD_CHANGED);
+    expect(
+      describeFactoryDeliveryFailure(
+        new FactoryDeliveryError({ reason: "already-delivering" }),
+        displayName,
+      ).detail,
+    ).toBe(FACTORY_DELIVERY_ALREADY_DELIVERING);
+    expect(
+      describeFactoryDeliveryFailure(
+        new EnvironmentAuthorizationError({
+          message: "nope",
+          requiredScope: "source-control:write",
+        }),
+        displayName,
+      ).kind,
+    ).toBe("auth");
+  });
+
+  it("maps capability-unsupported to the host's own one-line text", () => {
+    const error = new FactoryDeliveryError({ reason: "capability-unsupported" });
+    expect(factoryPublishUnsupportedText("GitLab")).toBe(
+      "Publishing from GitLab is not supported yet.",
+    );
+    expect(describeFactoryDeliveryFailure(error, "GitLab")).toEqual({
+      kind: "unsupported",
+      title: "Not supported",
+      detail: "Publishing from GitLab is not supported yet.",
+    });
+    expect(describeFactoryMergeFailure(error, "GitLab")).toEqual({
+      kind: "unsupported",
+      title: "Not supported",
+      detail: "Publishing from GitLab is not supported yet.",
+    });
+  });
+
+  describe("merge", () => {
+    const pullRequest: FactoryDeliveryPullRequest = {
+      number: 12,
+      url: "https://github.com/owner/name/pull/12",
+      headSha,
+      state: "open",
+      mergeability: "mergeable",
+      isDraft: false,
+      checksSummary: "3 passed",
+      mergeMethods: ["merge", "squash", "rebase"],
+    };
+    const mergePrepared: FactoryCommitDeliveryPrepareResult = {
+      ...prepared,
+      payload: { mergeMethod: "squash" },
+      pullRequest,
+    };
+    const mergeGrantable = {
+      permitted: true,
+      acceptedHeadSha: headSha,
+      acceptanceCurrent: true,
+      liveIntent: null,
+      prepared: mergePrepared,
+      mergeMethod: "squash" as const,
+      displayName: githubCapabilities.displayName,
+    };
+    const withPullRequest = (overrides: Partial<typeof pullRequest> | { headSha: null }) => ({
+      ...mergeGrantable,
+      prepared: { ...mergePrepared, pullRequest: { ...pullRequest, ...overrides } },
+    });
+
+    it("grants only the exact pull request head and method last prepared", () => {
+      expect(factoryMergeGrantBlocker(mergeGrantable)).toBeNull();
+      expect(factoryMergeGrantBlocker({ ...mergeGrantable, prepared: null })).toBe(
+        "Prepare a merge preview before granting.",
+      );
+      expect(factoryMergeGrantBlocker({ ...mergeGrantable, mergeMethod: "rebase" })).toBe(
+        FACTORY_MERGE_METHOD_CHANGED,
+      );
+      // A publish preview can never stand in for a merge preview.
+      expect(factoryMergeGrantBlocker({ ...mergeGrantable, prepared })).toBe(
+        FACTORY_MERGE_NOT_PUBLISHED,
+      );
+    });
+
+    it("refuses when the pull request head is not the accepted commit", () => {
+      expect(factoryMergeGrantBlocker(withPullRequest({ headSha: "c".repeat(40) }))).toBe(
+        FACTORY_MERGE_PR_HEAD_MOVED,
+      );
+      expect(factoryMergeGrantBlocker(withPullRequest({ headSha: null }))).toBe(
+        FACTORY_MERGE_PR_HEAD_MOVED,
+      );
+      expect(factoryMergeGrantBlocker({ ...mergeGrantable, acceptedHeadSha: "c".repeat(40) })).toBe(
+        FACTORY_DELIVERY_HEAD_MOVED,
+      );
+      expect(factoryMergeGrantBlocker({ ...mergeGrantable, acceptanceCurrent: false })).toBe(
+        "Merging needs a current accepted commit.",
+      );
+    });
+
+    it("states what GitHub would refuse before the tap", () => {
+      expect(factoryMergeGrantBlocker(withPullRequest({ isDraft: true }))).toBe(
+        factoryMergeDraft("GitHub"),
+      );
+      expect(factoryMergeGrantBlocker(withPullRequest({ mergeability: "conflicting" }))).toBe(
+        factoryMergeNotMergeable("GitHub"),
+      );
+      // Unknown mergeability is GitHub still computing; branch protection decides at merge.
+      expect(factoryMergeGrantBlocker(withPullRequest({ mergeability: "unknown" }))).toBeNull();
+      expect(factoryMergeGrantBlocker(withPullRequest({ state: "merged" }))).toBe(
+        FACTORY_MERGE_ALREADY_MERGED,
+      );
+      expect(factoryMergeGrantBlocker({ ...mergeGrantable, permitted: false })).toContain(
+        "isn't permitted to merge",
+      );
+    });
+
+    it("allows one live merge per task, but a failed one can be granted again", () => {
+      const merging = intent({ kind: "merge-pr", payload: { mergeMethod: "squash" } });
+      for (const status of ["pending", "sending", "unknown"] as const) {
+        expect(
+          factoryMergeGrantBlocker({ ...mergeGrantable, liveIntent: { ...merging, status } }),
+        ).toBe(FACTORY_MERGE_ALREADY_MERGING);
+      }
+      expect(
+        factoryMergeGrantBlocker({
+          ...mergeGrantable,
+          liveIntent: { ...merging, status: "confirmed" },
+        }),
+      ).toBe(FACTORY_MERGE_ALREADY_MERGED);
+      expect(
+        factoryMergeGrantBlocker({
+          ...mergeGrantable,
+          prepared: { ...mergePrepared, existing: { ...merging, status: "failed" } },
+        }),
+      ).toBeNull();
+    });
+
+    it("compares the pull request head with the accepted commit", () => {
+      expect(factoryPullRequestHeadView(pullRequest, headSha)).toEqual({
+        matches: true,
+        text: "Head aaaaaaa matches the accepted commit.",
+      });
+      expect(factoryPullRequestHeadView(pullRequest, "c".repeat(40))).toEqual({
+        matches: false,
+        text: "Head aaaaaaa is not the accepted commit ccccccc.",
+      });
+      expect(factoryPullRequestHeadView({ ...pullRequest, headSha: null }, headSha).matches).toBe(
+        false,
+      );
+    });
+
+    it("labels merge rows apart from publish rows", () => {
+      const merging = intent({ kind: "merge-pr", payload: { mergeMethod: "squash" } });
+      const { displayName } = githubCapabilities;
+      expect(factoryDeliveryStatusView({ ...merging, status: "sending" }, displayName).text).toBe(
+        "Merging…",
+      );
+      expect(
+        factoryDeliveryStatusView(
+          {
+            ...merging,
+            status: "confirmed",
+            remote: { number: 12, url: pullRequest.url },
+          },
+          displayName,
+        ),
+      ).toEqual({
+        kind: "confirmed",
+        text: "Merged pull request #12",
+        link: { label: "Open pull request #12", url: pullRequest.url },
+      });
+      expect(factoryDeliveryStatusView({ ...merging, status: "failed" }, displayName).text).toBe(
+        "Merging failed.",
+      );
+      expect(
+        factoryDeliveryStatusView({ ...merging, status: "unknown" }, displayName),
+      ).toMatchObject({
+        kind: "unknown",
+        text: "The server lost the merge response. Reconcile to check GitHub.",
+      });
+    });
+
+    it("maps merge refusals to the next step a person can take", () => {
+      const { displayName } = githubCapabilities;
+      const cases = [
+        ["not-published", FACTORY_MERGE_NOT_PUBLISHED],
+        ["pull-request-head-moved", FACTORY_MERGE_PR_HEAD_MOVED],
+        ["already-merged", FACTORY_MERGE_ALREADY_MERGED],
+        ["not-mergeable", factoryMergeNotMergeable(displayName)],
+        ["payload-changed", FACTORY_MERGE_METHOD_CHANGED],
+        ["already-delivering", FACTORY_MERGE_ALREADY_MERGING],
+        ["head-moved", FACTORY_DELIVERY_HEAD_MOVED],
+      ] as const;
+      for (const [reason, detail] of cases) {
+        expect(
+          describeFactoryMergeFailure(new FactoryDeliveryError({ reason }), displayName).detail,
+        ).toBe(detail);
+      }
+      expect(
+        describeFactoryMergeFailure(
+          new FactoryDeliveryError({ reason: "persistence-failure" }),
+          displayName,
+        ).title,
+      ).toBe("Couldn't merge");
+    });
+  });
+
+  describe("artifact", () => {
+    const sha = "e".repeat(64);
+    const artifactPrepared: FactoryArtifactDeliveryPrepareResult = {
+      attempt: "a1dd4aae-d332-49a7-b29d-f35ddaf2f19b",
+      acceptance: {
+        id: "knowledge-acceptance-1",
+        briefId: "brief-1",
+        threadId: acceptance.threadId,
+        projectId: acceptance.projectId,
+        artifactPath: "answer.md",
+        sha256: sha,
+        bytes: 14,
+        acceptedAt: "2026-01-01T00:00:00.000Z",
+        acceptedBy: acceptance.acceptedBy,
+      },
+      current: true,
+      repository,
+      destination: {
+        number: 7,
+        title: "Docs\u202E gap",
+        state: "open",
+        url: "https://github.com/owner/name/issues/7",
+      },
+      destinationKey: "comment:github:github.com/owner/name#7",
+      artifactSha256: sha,
+      artifactBytes: 14,
+      body: "# Answer\n\nbody",
+      payload: { issueNumber: 7 },
+      payloadDigest: "f".repeat(64),
+      existing: null,
+    };
+    function artifactIntent(
+      overrides: Partial<FactoryArtifactDeliveryIntent> = {},
+    ): FactoryArtifactDeliveryIntent {
+      return {
+        id: "artifact-intent-1",
+        originKey: acceptance.originKey,
+        threadId: acceptance.threadId,
+        projectId: acceptance.projectId,
+        kind: "publish-artifact",
+        acceptanceId: artifactPrepared.acceptance.id,
+        briefId: "brief-1",
+        artifactPath: "answer.md",
+        artifactSha256: sha,
+        artifactBytes: 14,
+        repository,
+        destinationKey: artifactPrepared.destinationKey,
+        payload: { issueNumber: 7 },
+        body: artifactPrepared.body,
+        payloadDigest: artifactPrepared.payloadDigest,
+        grantedBy: acceptance.acceptedBy,
+        grantedAt: "2026-01-01T00:00:00.000Z",
+        requestCommandId: "command-2",
+        status: "pending",
+        remote: null,
+        failure: null,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+      };
+    }
+    const grantable = {
+      permitted: true,
+      acceptedSha256: sha,
+      issueNumber: 7,
+      liveIntent: null,
+      prepared: artifactPrepared,
+    };
+
+    it("tells an artifact apart from a commit by the digest it carries", () => {
+      expect(isFactoryArtifactPrepareResult(artifactPrepared)).toBe(true);
+      expect(isFactoryArtifactPrepareResult(prepared)).toBe(false);
+      expect(isFactoryArtifactIntent(artifactIntent())).toBe(true);
+      expect(isFactoryArtifactIntent(intent())).toBe(false);
+      expect(isFactoryCommitIntent(intent())).toBe(true);
+      expect(isFactoryCommitIntent(artifactIntent())).toBe(false);
+    });
+
+    it("accepts only a positive whole issue number", () => {
+      expect(parseFactoryIssueNumber("7")).toBe(7);
+      expect(parseFactoryIssueNumber(" 12 ")).toBe(12);
+      for (const text of ["", "0", "07", "-1", "1.5", "1e3", "#7", "1234567890"]) {
+        expect(parseFactoryIssueNumber(text)).toBeNull();
+      }
+    });
+
+    it("grants only the exact current preview for the typed issue", () => {
+      expect(factoryArtifactGrantBlocker(grantable)).toBeNull();
+      expect(factoryArtifactGrantBlocker({ ...grantable, prepared: null })).toBe(
+        "Prepare a preview before granting.",
+      );
+      expect(factoryArtifactGrantBlocker({ ...grantable, permitted: false })).toContain(
+        "isn't permitted",
+      );
+      // Typing another issue after Prepare is an edit the preview does not cover.
+      expect(factoryArtifactGrantBlocker({ ...grantable, issueNumber: 8 })).toBe(
+        FACTORY_ARTIFACT_PAYLOAD_CHANGED,
+      );
+      expect(factoryArtifactGrantBlocker({ ...grantable, issueNumber: null })).toBe(
+        FACTORY_ARTIFACT_PAYLOAD_CHANGED,
+      );
+    });
+
+    it("refuses a grant whose preview no longer matches the accepted bytes", () => {
+      expect(
+        factoryArtifactGrantBlocker({
+          ...grantable,
+          prepared: { ...artifactPrepared, current: false },
+        }),
+      ).toBe(FACTORY_ARTIFACT_CHANGED);
+      expect(factoryArtifactGrantBlocker({ ...grantable, acceptedSha256: "1".repeat(64) })).toBe(
+        FACTORY_ARTIFACT_CHANGED,
+      );
+    });
+
+    it("allows one live comment per issue, but a failed one can be granted again", () => {
+      for (const status of ["pending", "sending", "unknown"] as const) {
+        expect(
+          factoryArtifactGrantBlocker({ ...grantable, liveIntent: artifactIntent({ status }) }),
+        ).toBe(FACTORY_ARTIFACT_ALREADY_DELIVERING);
+      }
+      expect(
+        factoryArtifactGrantBlocker({
+          ...grantable,
+          liveIntent: artifactIntent({ status: "confirmed" }),
+        }),
+      ).toBe("This deliverable was already posted on that issue.");
+      expect(
+        factoryArtifactGrantBlocker({
+          ...grantable,
+          prepared: { ...artifactPrepared, existing: artifactIntent({ status: "sending" }) },
+        }),
+      ).toBe(FACTORY_ARTIFACT_ALREADY_DELIVERING);
+      expect(
+        factoryArtifactGrantBlocker({
+          ...grantable,
+          prepared: { ...artifactPrepared, existing: artifactIntent({ status: "failed" }) },
+        }),
+      ).toBeNull();
+    });
+
+    it("finds the live comment for the typed issue only", () => {
+      const onSeven = artifactIntent({ id: "seven", status: "confirmed" });
+      const failedOnEight = artifactIntent({
+        id: "eight",
+        status: "failed",
+        payload: { issueNumber: 8 },
+      });
+      const onNine = artifactIntent({ id: "nine", payload: { issueNumber: 9 } });
+      const all = [onSeven, failedOnEight, onNine];
+      expect(liveFactoryArtifactIntent(all, 7)).toBe(onSeven);
+      expect(liveFactoryArtifactIntent(all, 8)).toBeNull();
+      expect(liveFactoryArtifactIntent(all, 9)).toBe(onNine);
+      expect(liveFactoryArtifactIntent(all, 10)).toBeNull();
+      expect(liveFactoryArtifactIntent(all, null)).toBeNull();
+    });
+
+    it("describes each comment status and links only an https comment", () => {
+      expect(factoryArtifactDeliveryStatusView(artifactIntent({ status: "sending" }))).toEqual({
+        kind: "in-progress",
+        text: "Posting comment on issue #7…",
+      });
+      const comment = { commentId: 99, url: "https://github.com/owner/name/issues/7#c-99" };
+      expect(
+        factoryArtifactDeliveryStatusView(artifactIntent({ status: "confirmed", remote: comment })),
+      ).toEqual({
+        kind: "confirmed",
+        text: "Posted comment on issue #7",
+        link: { label: "Open comment", url: comment.url },
+      });
+      expect(
+        factoryArtifactDeliveryStatusView(
+          artifactIntent({ status: "confirmed", remote: { ...comment, url: "http://x.test" } }),
+        ),
+      ).toMatchObject({ link: null });
+      expect(
+        factoryArtifactDeliveryStatusView(artifactIntent({ status: "failed", failure: "boom" })),
+      ).toEqual({ kind: "failed", text: "boom" });
+      expect(factoryArtifactDeliveryStatusView(artifactIntent({ status: "failed" })).text).toBe(
+        "Posting the comment failed.",
+      );
+      // The host comes from the repository the comment was granted for.
+      expect(factoryArtifactDeliveryStatusView(artifactIntent({ status: "unknown" }))).toEqual({
+        kind: "unknown",
+        text: "The server lost the response. Reconcile to check github.com.",
+      });
+    });
+
+    it("routes the shared status view to the comment wording", () => {
+      expect(factoryDeliveryStatusView(artifactIntent({ status: "pending" }), "GitHub").text).toBe(
+        "Posting comment on issue #7…",
+      );
+    });
+
+    it("offers Reconcile for an unknown or failed comment only", () => {
+      expect(isFactoryArtifactReconcilable(artifactIntent({ status: "unknown" }))).toBe(true);
+      expect(isFactoryArtifactReconcilable(artifactIntent({ status: "failed" }))).toBe(true);
+      for (const status of ["pending", "sending", "confirmed"] as const) {
+        expect(isFactoryArtifactReconcilable(artifactIntent({ status }))).toBe(false);
+      }
+    });
+
+    it("names the destination issue with its title made safe", () => {
+      expect(factoryArtifactDestinationText(artifactPrepared.destination)).toBe(
+        "#7 Docs gap (open)",
+      );
+    });
+
+    it("maps comment refusals to the next step a person can take", () => {
+      const cases = [
+        ["artifact-changed", FACTORY_ARTIFACT_CHANGED],
+        ["acceptance-stale", FACTORY_ARTIFACT_CHANGED],
+        ["payload-changed", FACTORY_ARTIFACT_PAYLOAD_CHANGED],
+        ["already-delivering", FACTORY_ARTIFACT_ALREADY_DELIVERING],
+        ["not-accepted", FACTORY_ARTIFACT_NOT_ACCEPTED],
+      ] as const;
+      for (const [reason, detail] of cases) {
+        expect(
+          describeFactoryArtifactDeliveryFailure(new FactoryDeliveryError({ reason }), "GitHub")
+            .detail,
+        ).toBe(detail);
+      }
+      for (const reason of ["artifact-too-large", "artifact-not-text"] as const) {
+        const error = new FactoryDeliveryError({ reason });
+        expect(describeFactoryArtifactDeliveryFailure(error, "GitHub")).toEqual({
+          kind: "error",
+          title: "Can't post this deliverable",
+          detail: error.message,
+        });
+      }
+      expect(
+        describeFactoryArtifactDeliveryFailure(
+          new FactoryDeliveryError({ reason: "destination-not-found" }),
+          "GitHub",
+        ),
+      ).toMatchObject({ kind: "repository", title: "Issue not found" });
+      expect(
+        describeFactoryArtifactDeliveryFailure(
+          new FactoryDeliveryError({ reason: "persistence-failure" }),
+          "GitHub",
+        ).title,
+      ).toBe("Couldn't post the comment");
+      expect(
+        describeFactoryArtifactDeliveryFailure(
+          new EnvironmentAuthorizationError({
+            message: "nope",
+            requiredScope: "source-control:write",
+          }),
+          "GitHub",
+        ).kind,
+      ).toBe("auth");
+    });
+
+    it("names the host in the one-line unsupported text, or stays neutral", () => {
+      const error = new FactoryDeliveryError({ reason: "capability-unsupported" });
+      expect(factoryIssueCommentUnsupportedText("GitLab")).toBe(
+        "GitLab does not support issue comments yet.",
+      );
+      expect(describeFactoryArtifactDeliveryFailure(error, "GitLab")).toEqual({
+        kind: "unsupported",
+        title: "Not supported",
+        detail: "GitLab does not support issue comments yet.",
+      });
+      expect(describeFactoryArtifactDeliveryFailure(error, null).detail).toBe(
+        "This repository's host does not support issue comments yet.",
+      );
+    });
+  });
+});

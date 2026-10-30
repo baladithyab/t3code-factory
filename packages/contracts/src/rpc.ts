@@ -1,4 +1,86 @@
 import {
+  FactoryIssueError,
+  FactoryIssueListInput,
+  FactoryIssueListResult,
+  FactoryIssueStartInput,
+  FactoryIssueStartResult,
+} from "./factory.ts";
+import {
+  FactoryFeedCandidateAdmitInput,
+  FactoryFeedCandidateAdmitResult,
+  FactoryFeedCandidateDismissInput,
+  FactoryFeedCandidateDismissResult,
+  FactoryFeedCandidateListInput,
+  FactoryFeedCandidateListResult,
+  FactoryFeedCandidateReadInput,
+  FactoryFeedCandidateReadResult,
+  FactoryFeedError,
+  FactoryFeedSourceBindInput,
+  FactoryFeedSourceListInput,
+  FactoryFeedSourceListResult,
+  FactoryFeedSourceRefreshInput,
+  FactoryFeedSourceResult,
+  FactoryFeedSourceUnbindInput,
+} from "./factoryFeeds.ts";
+import {
+  FactoryIssueFrontierReadInput,
+  FactoryIssueFrontierReadResult,
+  FactoryIssueReadinessReadInput,
+  FactoryIssueReadinessReadResult,
+  FactoryReadinessOverrideRevokeInput,
+  FactoryReadinessOverrideSetInput,
+} from "./factoryReadiness.ts";
+import {
+  FactoryResearchError,
+  FactoryResearchImplementationAdmitInput,
+  FactoryResearchImplementationAdmitResult,
+  FactoryResearchProtocolListInput,
+  FactoryResearchProtocolListResult,
+  FactoryResearchProtocolReadInput,
+  FactoryResearchProtocolReadResult,
+  FactoryResearchProtocolSealInput,
+  FactoryResearchProtocolSealResult,
+  FactoryResearchRunLaunchInput,
+  FactoryResearchRunLaunchResult,
+} from "./factoryResearch.ts";
+import { FactoryClaimListInput, FactoryClaimListResult } from "./factoryClaims.ts";
+import {
+  FactoryKnowledgeAcceptInput,
+  FactoryKnowledgeBrief,
+  FactoryKnowledgeBriefCreateInput,
+  FactoryKnowledgeBriefListInput,
+  FactoryKnowledgeBriefListResult,
+  FactoryKnowledgeError,
+  FactoryKnowledgeStartInput,
+  FactoryKnowledgeStartResult,
+  FactoryKnowledgeTaskReadInput,
+  FactoryKnowledgeTaskReadResult,
+} from "./factoryKnowledge.ts";
+import {
+  FactoryAcceptCommitInput,
+  FactoryAcceptanceError,
+  FactoryAcceptanceReadInput,
+  FactoryAcceptanceReadResult,
+} from "./factoryAcceptance.ts";
+import {
+  FactoryDeliveryError,
+  FactoryDeliveryGrantInput,
+  FactoryDeliveryIntent,
+  FactoryDeliveryPrepareInput,
+  FactoryDeliveryPrepareResult,
+  FactoryDeliveryReadInput,
+  FactoryDeliveryReadResult,
+  FactoryDeliveryReconcileInput,
+} from "./factoryDelivery.ts";
+import {
+  ProjectCoordinatorEnsureInput,
+  ProjectCoordinatorEnsureResult,
+  ProjectCoordinatorError,
+  ProjectCoordinatorGetInput,
+  ProjectCoordinatorGetResult,
+  ProjectCoordinatorListResult,
+} from "./projectCoordinator.ts";
+import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -398,6 +480,40 @@ import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
+  factoryListIssues: "factory.listIssues",
+  factoryStartIssue: "factory.startIssue",
+  factoryListFeedSources: "factory.listFeedSources",
+  factoryBindFeedSource: "factory.bindFeedSource",
+  factoryUnbindFeedSource: "factory.unbindFeedSource",
+  factoryRefreshFeedSource: "factory.refreshFeedSource",
+  factoryListFeedCandidates: "factory.listFeedCandidates",
+  factoryReadFeedCandidate: "factory.readFeedCandidate",
+  factorySetFeedCandidateDismissed: "factory.setFeedCandidateDismissed",
+  factoryAdmitFeedCandidate: "factory.admitFeedCandidate",
+  factoryReadIssueReadiness: "factory.readIssueReadiness",
+  factorySetIssueReadinessOverride: "factory.setIssueReadinessOverride",
+  factoryRevokeIssueReadinessOverride: "factory.revokeIssueReadinessOverride",
+  factoryReadIssueFrontier: "factory.readIssueFrontier",
+  factoryListResearchProtocols: "factory.listResearchProtocols",
+  factoryReadResearchProtocol: "factory.readResearchProtocol",
+  factorySealResearchProtocol: "factory.sealResearchProtocol",
+  factoryLaunchResearchRun: "factory.launchResearchRun",
+  factoryAdmitResearchImplementation: "factory.admitResearchImplementation",
+  factoryListClaims: "factory.listClaims",
+  factoryAcceptCommit: "factory.acceptCommit",
+  factoryReadAcceptance: "factory.readAcceptance",
+  factoryPrepareDelivery: "factory.prepareDelivery",
+  factoryGrantDelivery: "factory.grantDelivery",
+  factoryReadDeliveries: "factory.readDeliveries",
+  factoryReconcileDelivery: "factory.reconcileDelivery",
+  factoryCreateKnowledgeBrief: "factory.createKnowledgeBrief",
+  factoryListKnowledgeBriefs: "factory.listKnowledgeBriefs",
+  factoryStartKnowledgeTask: "factory.startKnowledgeTask",
+  factoryReadKnowledgeTask: "factory.readKnowledgeTask",
+  factoryAcceptKnowledgeArtifact: "factory.acceptKnowledgeArtifact",
+  projectCoordinatorsGet: "projectCoordinators.get",
+  projectCoordinatorsList: "projectCoordinators.list",
+  projectCoordinatorsEnsure: "projectCoordinators.ensure",
   projectsListEntries: "projects.listEntries",
   projectsListIgnoredFiles: "projects.listIgnoredFiles",
   projectsReadFile: "projects.readFile",
@@ -1927,6 +2043,200 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
+const WsFactoryListIssuesRpc = Rpc.make(WS_METHODS.factoryListIssues, {
+  payload: FactoryIssueListInput,
+  success: FactoryIssueListResult,
+  error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+});
+const WsFactoryStartIssueRpc = Rpc.make(WS_METHODS.factoryStartIssue, {
+  payload: FactoryIssueStartInput,
+  success: FactoryIssueStartResult,
+  error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+});
+const WsFactoryReadIssueReadinessRpc = Rpc.make(WS_METHODS.factoryReadIssueReadiness, {
+  payload: FactoryIssueReadinessReadInput,
+  success: FactoryIssueReadinessReadResult,
+  error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+});
+const WsFactorySetIssueReadinessOverrideRpc = Rpc.make(
+  WS_METHODS.factorySetIssueReadinessOverride,
+  {
+    payload: FactoryReadinessOverrideSetInput,
+    success: FactoryIssueReadinessReadResult,
+    error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+  },
+);
+const WsFactoryRevokeIssueReadinessOverrideRpc = Rpc.make(
+  WS_METHODS.factoryRevokeIssueReadinessOverride,
+  {
+    payload: FactoryReadinessOverrideRevokeInput,
+    success: FactoryIssueReadinessReadResult,
+    error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+  },
+);
+const WsFactoryReadIssueFrontierRpc = Rpc.make(WS_METHODS.factoryReadIssueFrontier, {
+  payload: FactoryIssueFrontierReadInput,
+  success: FactoryIssueFrontierReadResult,
+  error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+});
+const factoryResearchError = Schema.Union([FactoryResearchError, EnvironmentAuthorizationError]);
+const WsFactoryListResearchProtocolsRpc = Rpc.make(WS_METHODS.factoryListResearchProtocols, {
+  payload: FactoryResearchProtocolListInput,
+  success: FactoryResearchProtocolListResult,
+  error: factoryResearchError,
+});
+const WsFactoryReadResearchProtocolRpc = Rpc.make(WS_METHODS.factoryReadResearchProtocol, {
+  payload: FactoryResearchProtocolReadInput,
+  success: FactoryResearchProtocolReadResult,
+  error: factoryResearchError,
+});
+const WsFactorySealResearchProtocolRpc = Rpc.make(WS_METHODS.factorySealResearchProtocol, {
+  payload: FactoryResearchProtocolSealInput,
+  success: FactoryResearchProtocolSealResult,
+  error: factoryResearchError,
+});
+const WsFactoryLaunchResearchRunRpc = Rpc.make(WS_METHODS.factoryLaunchResearchRun, {
+  payload: FactoryResearchRunLaunchInput,
+  success: FactoryResearchRunLaunchResult,
+  error: factoryResearchError,
+});
+const WsFactoryAdmitResearchImplementationRpc = Rpc.make(
+  WS_METHODS.factoryAdmitResearchImplementation,
+  {
+    payload: FactoryResearchImplementationAdmitInput,
+    success: FactoryResearchImplementationAdmitResult,
+    error: factoryResearchError,
+  },
+);
+const WsFactoryListClaimsRpc = Rpc.make(WS_METHODS.factoryListClaims, {
+  payload: FactoryClaimListInput,
+  success: FactoryClaimListResult,
+  error: Schema.Union([FactoryIssueError, EnvironmentAuthorizationError]),
+});
+const factoryAcceptanceError = Schema.Union([
+  FactoryAcceptanceError,
+  EnvironmentAuthorizationError,
+]);
+const WsFactoryAcceptCommitRpc = Rpc.make(WS_METHODS.factoryAcceptCommit, {
+  payload: FactoryAcceptCommitInput,
+  success: FactoryAcceptanceReadResult,
+  error: factoryAcceptanceError,
+});
+const WsFactoryReadAcceptanceRpc = Rpc.make(WS_METHODS.factoryReadAcceptance, {
+  payload: FactoryAcceptanceReadInput,
+  success: FactoryAcceptanceReadResult,
+  error: factoryAcceptanceError,
+});
+const factoryDeliveryError = Schema.Union([FactoryDeliveryError, EnvironmentAuthorizationError]);
+const WsFactoryPrepareDeliveryRpc = Rpc.make(WS_METHODS.factoryPrepareDelivery, {
+  payload: FactoryDeliveryPrepareInput,
+  success: FactoryDeliveryPrepareResult,
+  error: factoryDeliveryError,
+});
+const WsFactoryGrantDeliveryRpc = Rpc.make(WS_METHODS.factoryGrantDelivery, {
+  payload: FactoryDeliveryGrantInput,
+  success: FactoryDeliveryIntent,
+  error: factoryDeliveryError,
+});
+const WsFactoryReadDeliveriesRpc = Rpc.make(WS_METHODS.factoryReadDeliveries, {
+  payload: FactoryDeliveryReadInput,
+  success: FactoryDeliveryReadResult,
+  error: factoryDeliveryError,
+});
+const WsFactoryReconcileDeliveryRpc = Rpc.make(WS_METHODS.factoryReconcileDelivery, {
+  payload: FactoryDeliveryReconcileInput,
+  success: FactoryDeliveryIntent,
+  error: factoryDeliveryError,
+});
+const factoryKnowledgeError = Schema.Union([FactoryKnowledgeError, EnvironmentAuthorizationError]);
+const WsFactoryCreateKnowledgeBriefRpc = Rpc.make(WS_METHODS.factoryCreateKnowledgeBrief, {
+  payload: FactoryKnowledgeBriefCreateInput,
+  success: FactoryKnowledgeBrief,
+  error: factoryKnowledgeError,
+});
+const WsFactoryListKnowledgeBriefsRpc = Rpc.make(WS_METHODS.factoryListKnowledgeBriefs, {
+  payload: FactoryKnowledgeBriefListInput,
+  success: FactoryKnowledgeBriefListResult,
+  error: factoryKnowledgeError,
+});
+const WsFactoryStartKnowledgeTaskRpc = Rpc.make(WS_METHODS.factoryStartKnowledgeTask, {
+  payload: FactoryKnowledgeStartInput,
+  success: FactoryKnowledgeStartResult,
+  error: factoryKnowledgeError,
+});
+const WsFactoryReadKnowledgeTaskRpc = Rpc.make(WS_METHODS.factoryReadKnowledgeTask, {
+  payload: FactoryKnowledgeTaskReadInput,
+  success: FactoryKnowledgeTaskReadResult,
+  error: factoryKnowledgeError,
+});
+const WsFactoryAcceptKnowledgeArtifactRpc = Rpc.make(WS_METHODS.factoryAcceptKnowledgeArtifact, {
+  payload: FactoryKnowledgeAcceptInput,
+  success: FactoryKnowledgeTaskReadResult,
+  error: factoryKnowledgeError,
+});
+const factoryFeedError = Schema.Union([FactoryFeedError, EnvironmentAuthorizationError]);
+const WsFactoryListFeedSourcesRpc = Rpc.make(WS_METHODS.factoryListFeedSources, {
+  payload: FactoryFeedSourceListInput,
+  success: FactoryFeedSourceListResult,
+  error: factoryFeedError,
+});
+const WsFactoryBindFeedSourceRpc = Rpc.make(WS_METHODS.factoryBindFeedSource, {
+  payload: FactoryFeedSourceBindInput,
+  success: FactoryFeedSourceResult,
+  error: factoryFeedError,
+});
+const WsFactoryUnbindFeedSourceRpc = Rpc.make(WS_METHODS.factoryUnbindFeedSource, {
+  payload: FactoryFeedSourceUnbindInput,
+  success: FactoryFeedSourceResult,
+  error: factoryFeedError,
+});
+const WsFactoryRefreshFeedSourceRpc = Rpc.make(WS_METHODS.factoryRefreshFeedSource, {
+  payload: FactoryFeedSourceRefreshInput,
+  success: FactoryFeedSourceResult,
+  error: factoryFeedError,
+});
+const WsFactoryListFeedCandidatesRpc = Rpc.make(WS_METHODS.factoryListFeedCandidates, {
+  payload: FactoryFeedCandidateListInput,
+  success: FactoryFeedCandidateListResult,
+  error: factoryFeedError,
+});
+const WsFactoryReadFeedCandidateRpc = Rpc.make(WS_METHODS.factoryReadFeedCandidate, {
+  payload: FactoryFeedCandidateReadInput,
+  success: FactoryFeedCandidateReadResult,
+  error: factoryFeedError,
+});
+const WsFactorySetFeedCandidateDismissedRpc = Rpc.make(
+  WS_METHODS.factorySetFeedCandidateDismissed,
+  {
+    payload: FactoryFeedCandidateDismissInput,
+    success: FactoryFeedCandidateDismissResult,
+    error: factoryFeedError,
+  },
+);
+const WsFactoryAdmitFeedCandidateRpc = Rpc.make(WS_METHODS.factoryAdmitFeedCandidate, {
+  payload: FactoryFeedCandidateAdmitInput,
+  success: FactoryFeedCandidateAdmitResult,
+  error: factoryFeedError,
+});
+
+const WsProjectCoordinatorsGetRpc = Rpc.make(WS_METHODS.projectCoordinatorsGet, {
+  payload: ProjectCoordinatorGetInput,
+  success: ProjectCoordinatorGetResult,
+  error: Schema.Union([ProjectCoordinatorError, EnvironmentAuthorizationError]),
+});
+
+const WsProjectCoordinatorsListRpc = Rpc.make(WS_METHODS.projectCoordinatorsList, {
+  payload: Schema.Struct({}),
+  success: ProjectCoordinatorListResult,
+  error: Schema.Union([ProjectCoordinatorError, EnvironmentAuthorizationError]),
+});
+
+const WsProjectCoordinatorsEnsureRpc = Rpc.make(WS_METHODS.projectCoordinatorsEnsure, {
+  payload: ProjectCoordinatorEnsureInput,
+  success: ProjectCoordinatorEnsureResult,
+  error: Schema.Union([ProjectCoordinatorError, EnvironmentAuthorizationError]),
+});
+
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "t3/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -1934,6 +2244,40 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 
 export const WsRpcGroup = RpcGroup.make(
   WsGuestShareCreateRpc,
+  WsFactoryListIssuesRpc,
+  WsFactoryStartIssueRpc,
+  WsFactoryListFeedSourcesRpc,
+  WsFactoryBindFeedSourceRpc,
+  WsFactoryUnbindFeedSourceRpc,
+  WsFactoryRefreshFeedSourceRpc,
+  WsFactoryListFeedCandidatesRpc,
+  WsFactoryReadFeedCandidateRpc,
+  WsFactorySetFeedCandidateDismissedRpc,
+  WsFactoryAdmitFeedCandidateRpc,
+  WsFactoryReadIssueReadinessRpc,
+  WsFactorySetIssueReadinessOverrideRpc,
+  WsFactoryRevokeIssueReadinessOverrideRpc,
+  WsFactoryReadIssueFrontierRpc,
+  WsFactoryListResearchProtocolsRpc,
+  WsFactoryReadResearchProtocolRpc,
+  WsFactorySealResearchProtocolRpc,
+  WsFactoryLaunchResearchRunRpc,
+  WsFactoryAdmitResearchImplementationRpc,
+  WsFactoryListClaimsRpc,
+  WsFactoryAcceptCommitRpc,
+  WsFactoryReadAcceptanceRpc,
+  WsFactoryPrepareDeliveryRpc,
+  WsFactoryGrantDeliveryRpc,
+  WsFactoryReadDeliveriesRpc,
+  WsFactoryReconcileDeliveryRpc,
+  WsFactoryCreateKnowledgeBriefRpc,
+  WsFactoryListKnowledgeBriefsRpc,
+  WsFactoryStartKnowledgeTaskRpc,
+  WsFactoryReadKnowledgeTaskRpc,
+  WsFactoryAcceptKnowledgeArtifactRpc,
+  WsProjectCoordinatorsGetRpc,
+  WsProjectCoordinatorsListRpc,
+  WsProjectCoordinatorsEnsureRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

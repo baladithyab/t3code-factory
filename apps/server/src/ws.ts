@@ -1,3 +1,12 @@
+import * as FactoryIssueService from "./factory/FactoryIssueService.ts";
+import * as FactoryIssueRelations from "./factory/FactoryIssueRelations.ts";
+import * as FactoryFeedService from "./factory/FactoryFeedService.ts";
+import * as FactoryResearchService from "./factory/FactoryResearchService.ts";
+import * as FactoryClaimsService from "./factory/FactoryClaimsService.ts";
+import * as FactoryAcceptanceService from "./factory/FactoryAcceptanceService.ts";
+import * as FactoryKnowledgeService from "./factory/FactoryKnowledgeService.ts";
+import * as FactoryDeliveryService from "./factory/FactoryDeliveryService.ts";
+import * as ProjectCoordinatorService from "./project/ProjectCoordinatorService.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -1272,6 +1281,15 @@ export const layerWsRpc = (
       const secretRequests = yield* SecretRequests.SecretRequests;
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
+      const factory = yield* FactoryIssueService.FactoryIssueService;
+      const factoryRelations = yield* FactoryIssueRelations.FactoryIssueRelations;
+      const factoryFeeds = yield* FactoryFeedService.FactoryFeedService;
+      const factoryResearch = yield* FactoryResearchService.FactoryResearchService;
+      const factoryClaims = yield* FactoryClaimsService.FactoryClaimsService;
+      const factoryAcceptance = yield* FactoryAcceptanceService.FactoryAcceptanceService;
+      const factoryKnowledge = yield* FactoryKnowledgeService.FactoryKnowledgeService;
+      const factoryDelivery = yield* FactoryDeliveryService.FactoryDeliveryService;
+      const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
@@ -2572,6 +2590,59 @@ export const layerWsRpc = (
                 Effect.forkScoped,
               ),
           ),
+        [WS_METHODS.factoryListIssues]: (input) => factory.list(input),
+        [WS_METHODS.factoryListClaims]: (input) => factoryClaims.list(input),
+        [WS_METHODS.factoryAcceptCommit]: (input) => factoryAcceptance.acceptCommit(input),
+        [WS_METHODS.factoryReadAcceptance]: (input) => factoryAcceptance.read(input),
+        [WS_METHODS.factoryCreateKnowledgeBrief]: (input) => factoryKnowledge.createBrief(input),
+        [WS_METHODS.factoryListKnowledgeBriefs]: (input) => factoryKnowledge.list(input),
+        [WS_METHODS.factoryStartKnowledgeTask]: (input) => factoryKnowledge.start(input),
+        [WS_METHODS.factoryReadKnowledgeTask]: (input) => factoryKnowledge.read(input),
+        [WS_METHODS.factoryAcceptKnowledgeArtifact]: (input) => factoryKnowledge.accept(input),
+        [WS_METHODS.factoryPrepareDelivery]: (input) => factoryDelivery.prepare(input),
+        [WS_METHODS.factoryGrantDelivery]: (input) => factoryDelivery.grant(input),
+        [WS_METHODS.factoryReadDeliveries]: (input) => factoryDelivery.read(input),
+        [WS_METHODS.factoryReconcileDelivery]: (input) => factoryDelivery.reconcile(input),
+        [WS_METHODS.factoryReadIssueReadiness]: (input) => factoryRelations.read(input),
+        [WS_METHODS.factorySetIssueReadinessOverride]: (input) =>
+          factoryRelations.setOverride(input),
+        [WS_METHODS.factoryRevokeIssueReadinessOverride]: (input) =>
+          factoryRelations.revokeOverride(input),
+        [WS_METHODS.factoryReadIssueFrontier]: (input) => factoryRelations.readFrontier(input),
+        [WS_METHODS.factoryStartIssue]: (input) => factory.start(input),
+        [WS_METHODS.factoryListFeedSources]: (input) => factoryFeeds.listSources(input),
+        [WS_METHODS.factoryBindFeedSource]: (input) => factoryFeeds.bindSource(input),
+        [WS_METHODS.factoryUnbindFeedSource]: (input) => factoryFeeds.unbindSource(input),
+        [WS_METHODS.factoryRefreshFeedSource]: (input) => factoryFeeds.refreshSource(input),
+        [WS_METHODS.factoryListFeedCandidates]: (input) => factoryFeeds.listCandidates(input),
+        [WS_METHODS.factoryReadFeedCandidate]: (input) => factoryFeeds.readCandidate(input),
+        [WS_METHODS.factorySetFeedCandidateDismissed]: (input) =>
+          factoryFeeds.setCandidateDismissed(input),
+        [WS_METHODS.factoryAdmitFeedCandidate]: (input) => factoryFeeds.admitCandidate(input),
+        [WS_METHODS.factoryListResearchProtocols]: (input) => factoryResearch.listProtocols(input),
+        [WS_METHODS.factoryReadResearchProtocol]: (input) => factoryResearch.readProtocol(input),
+        [WS_METHODS.factorySealResearchProtocol]: (input) =>
+          factoryResearch.sealProtocol({
+            ...input,
+            creationSource: clientAnalyticsProps.surface === "mobile" ? "mobile" : "web",
+          }),
+        [WS_METHODS.factoryLaunchResearchRun]: (input) =>
+          factoryResearch.launchRun({
+            ...input,
+            creationSource: clientAnalyticsProps.surface === "mobile" ? "mobile" : "web",
+          }),
+        [WS_METHODS.factoryAdmitResearchImplementation]: (input) =>
+          factoryResearch.admitImplementation({
+            ...input,
+            creationSource: clientAnalyticsProps.surface === "mobile" ? "mobile" : "web",
+          }),
+        [WS_METHODS.projectCoordinatorsGet]: (input) => projectCoordinators.get(input),
+        [WS_METHODS.projectCoordinatorsList]: (_input) => projectCoordinators.list(),
+        [WS_METHODS.projectCoordinatorsEnsure]: (input) =>
+          projectCoordinators.ensure({
+            ...input,
+            creationSource: clientAnalyticsProps.surface === "mobile" ? "mobile" : "web",
+          }),
         [WS_METHODS.pullRequestsList]: (input) => pullRequests.list(input),
         [WS_METHODS.pullRequestsListStats]: (input) => pullRequests.listStats(input),
         [WS_METHODS.pullRequestsFilterOptions]: (input) => pullRequests.filterOptions(input),
@@ -3263,6 +3334,15 @@ export const layer = Layer.unwrap(
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const factory = yield* FactoryIssueService.FactoryIssueService;
+    const factoryRelations = yield* FactoryIssueRelations.FactoryIssueRelations;
+    const factoryFeeds = yield* FactoryFeedService.FactoryFeedService;
+    const factoryResearch = yield* FactoryResearchService.FactoryResearchService;
+    const factoryClaims = yield* FactoryClaimsService.FactoryClaimsService;
+    const factoryAcceptance = yield* FactoryAcceptanceService.FactoryAcceptanceService;
+    const factoryKnowledge = yield* FactoryKnowledgeService.FactoryKnowledgeService;
+    const factoryDelivery = yield* FactoryDeliveryService.FactoryDeliveryService;
+    const projectCoordinators = yield* ProjectCoordinatorService.ProjectCoordinatorService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const peerLinks = yield* PeerLinks.PeerLinks;
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
@@ -3328,39 +3408,71 @@ export const layer = Layer.unwrap(
           return httpEffect;
         }).pipe(
           Effect.provide(
-            layerWsRpc(session, clientAnalyticsProps, serverBrowser).pipe(
-              Layer.provideMerge(RpcSerialization.layerJson),
-              // Handler-context reporters see only request defects, not server-wide defects.
-              Layer.provide(DefectReporter.layer),
-              Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
-              Layer.provide(AgentSessionScanner.layer),
-              Layer.provide(ProviderMaintenanceRunner.layer),
-              Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
-              // Share server-lifetime PR caches so WS mutations invalidate every client's HTTP diffs.
-              Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
-              Layer.provide(OtlpEndpointCheck.layer),
-              Layer.provide(
-                Layer.succeed(
-                  PullRequestReviewGuideService.PullRequestReviewGuideService,
-                  reviewGuides,
+            layerWsRpc(session, clientAnalyticsProps, serverBrowser)
+              .pipe(
+                Layer.provideMerge(RpcSerialization.layerJson),
+                // Handler-context reporters see only request defects, not server-wide defects.
+                Layer.provide(DefectReporter.layer),
+                Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+                Layer.provide(AgentSessionScanner.layer),
+                Layer.provide(ProviderMaintenanceRunner.layer),
+                Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+                // Share server-lifetime PR caches so WS mutations invalidate every client's HTTP diffs.
+                Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+              )
+              .pipe(
+                Layer.provide(Layer.succeed(FactoryIssueService.FactoryIssueService, factory)),
+                Layer.provide(
+                  Layer.succeed(FactoryIssueRelations.FactoryIssueRelations, factoryRelations),
                 ),
-              ),
-              Layer.provide(Layer.succeed(PeerLinks.PeerLinks, peerLinks)),
-              Layer.provide(Layer.succeed(PeerLinkRequests.PeerLinkRequests, peerLinkRequests)),
-              Layer.provide(
-                SourceControlDiscovery.layer.pipe(
-                  Layer.provide(
-                    SourceControlProviderRegistry.layer.pipe(
-                      Layer.provide(SourceControlBuiltInDrivers.layer),
-                      Layer.provideMerge(GitVcsDriver.layer),
-                      Layer.provide(
-                        VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
+                Layer.provide(Layer.succeed(FactoryFeedService.FactoryFeedService, factoryFeeds)),
+                Layer.provide(
+                  Layer.succeed(FactoryResearchService.FactoryResearchService, factoryResearch),
+                ),
+                Layer.provide(
+                  Layer.succeed(FactoryClaimsService.FactoryClaimsService, factoryClaims),
+                ),
+                Layer.provide(
+                  Layer.succeed(
+                    FactoryAcceptanceService.FactoryAcceptanceService,
+                    factoryAcceptance,
+                  ),
+                ),
+                Layer.provide(
+                  Layer.succeed(FactoryKnowledgeService.FactoryKnowledgeService, factoryKnowledge),
+                ),
+                Layer.provide(
+                  Layer.succeed(FactoryDeliveryService.FactoryDeliveryService, factoryDelivery),
+                ),
+                Layer.provide(
+                  Layer.succeed(
+                    ProjectCoordinatorService.ProjectCoordinatorService,
+                    projectCoordinators,
+                  ),
+                ),
+                Layer.provide(OtlpEndpointCheck.layer),
+                Layer.provide(
+                  Layer.succeed(
+                    PullRequestReviewGuideService.PullRequestReviewGuideService,
+                    reviewGuides,
+                  ),
+                ),
+                Layer.provide(Layer.succeed(PeerLinks.PeerLinks, peerLinks)),
+                Layer.provide(Layer.succeed(PeerLinkRequests.PeerLinkRequests, peerLinkRequests)),
+                Layer.provide(
+                  SourceControlDiscovery.layer.pipe(
+                    Layer.provide(
+                      SourceControlProviderRegistry.layer.pipe(
+                        Layer.provide(SourceControlBuiltInDrivers.layer),
+                        Layer.provideMerge(GitVcsDriver.layer),
+                        Layer.provide(
+                          VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
           ),
         );
         return yield* Effect.acquireUseRelease(

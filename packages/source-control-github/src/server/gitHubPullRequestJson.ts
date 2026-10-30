@@ -264,6 +264,7 @@ export function isSubjectOfPullRequest(result: PullRequestSubject.Result): boole
 const ReviewSubmissionSchema = Schema.Struct({
   event: Schema.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]),
   body: Schema.String,
+  commit_id: Schema.optional(Schema.String),
   comments: Schema.Array(
     Schema.Struct({
       path: Schema.String,
@@ -302,10 +303,12 @@ export function buildReviewSubmission(input: {
   readonly verdict: PullRequestReviewVerdict;
   readonly body: string;
   readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
+  readonly commitId?: string;
 }): typeof ReviewSubmissionSchema.Type {
   return {
     event: REVIEW_EVENTS[input.verdict],
     body: input.body,
+    ...(input.commitId === undefined ? {} : { commit_id: input.commitId }),
     comments: input.comments.map((comment) => {
       const end = gitHubReviewPosition(comment.position);
       const start =

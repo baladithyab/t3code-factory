@@ -128,6 +128,14 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Get", "Getting", "Got", "orchestration capabilities"],
     "capabilities",
   ),
+  factory_get_orchestrator: tool(
+    ["Get", "Getting", "Got", "the project orchestrator"],
+    "project-read",
+  ),
+  factory_start_orchestrator: tool(
+    ["Start", "Starting", "Started", "the project orchestrator"],
+    "thread-create",
+  ),
   delegate_task: tool(["Delegate", "Delegating", "Delegated", "a child task"], "delegate"),
   task_status: tool(["Get", "Getting", "Got", "delegated task status"], "task-status"),
   task_cancel: tool(

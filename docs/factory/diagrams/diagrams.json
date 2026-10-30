@@ -1,0 +1,637 @@
+{
+  "schemaVersion": 1,
+  "status": "Product direction reviewed 2026-10-29; diagrams include proposed capabilities, not a release checklist.",
+  "views": [
+    {
+      "id": "01-one-experience",
+      "label": "Experience",
+      "title": "One thread. Many contributors. One outcome.",
+      "description": "Proposed experience: one outcome can combine code, research, diagrams, and documents. Simple requests can skip decomposition.",
+      "height": 900,
+      "nodes": [
+        {
+          "id": "intent",
+          "text": "Describe an outcome",
+          "x": 330,
+          "y": 65,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "thread",
+          "text": "Ordinary outcome thread",
+          "x": 330,
+          "y": 175,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "plan",
+          "text": "Visible plan + dependencies",
+          "x": 330,
+          "y": 285,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "a",
+          "text": "Task A / agent",
+          "x": 40,
+          "y": 415,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "b",
+          "text": "Task B / agent",
+          "x": 330,
+          "y": 415,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "c",
+          "text": "Task C / agent",
+          "x": 620,
+          "y": 415,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "join",
+          "text": "Reconcile + verify results",
+          "x": 330,
+          "y": 555,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "review",
+          "text": "Review outcome / decide",
+          "x": 330,
+          "y": 665,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "settle",
+          "text": "Settle or continue",
+          "x": 330,
+          "y": 775,
+          "w": 240,
+          "h": 64
+        }
+      ],
+      "edges": [
+        {
+          "source": "intent",
+          "target": "thread"
+        },
+        {
+          "source": "thread",
+          "target": "plan"
+        },
+        {
+          "source": "plan",
+          "target": "a"
+        },
+        {
+          "source": "plan",
+          "target": "b"
+        },
+        {
+          "source": "plan",
+          "target": "c"
+        },
+        {
+          "source": "a",
+          "target": "join"
+        },
+        {
+          "source": "b",
+          "target": "join"
+        },
+        {
+          "source": "c",
+          "target": "join"
+        },
+        {
+          "source": "join",
+          "target": "review"
+        },
+        {
+          "source": "review",
+          "target": "settle"
+        },
+        {
+          "source": "a",
+          "target": "b",
+          "kind": "peer"
+        },
+        {
+          "source": "b",
+          "target": "c",
+          "kind": "peer"
+        }
+      ],
+      "notes": "Dashed bidirectional links are addressed peer messages. Independent tasks join into an evidence-bearing result. Completion, acceptance, delivery, and settlement are separate; settlement is reversible."
+    },
+    {
+      "id": "02-runtime",
+      "label": "Runtime",
+      "title": "Reasoning plans; durable services execute.",
+      "description": "Proposed Factory composition on T3 V2: models propose plans; durable services validate transitions and run accepted work.",
+      "height": 900,
+      "nodes": [
+        {
+          "id": "ux",
+          "text": "Shared thread / plan / artifacts",
+          "x": 330,
+          "y": 65,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "coord",
+          "text": "Coordinator proposes work",
+          "x": 330,
+          "y": 175,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "commands",
+          "text": "Plan + task service commands",
+          "x": 330,
+          "y": 285,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "v2",
+          "text": "V2 events / receipts / outbox",
+          "x": 330,
+          "y": 395,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "tasks",
+          "text": "Task attempts + claims",
+          "x": 40,
+          "y": 525,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "context",
+          "text": "Context + evidence references",
+          "x": 330,
+          "y": 525,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "messages",
+          "text": "Scoped peer messages",
+          "x": 620,
+          "y": 525,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "adapters",
+          "text": "Existing harness adapters",
+          "x": 330,
+          "y": 655,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "results",
+          "text": "Results back to goal thread",
+          "x": 330,
+          "y": 775,
+          "w": 240,
+          "h": 64
+        }
+      ],
+      "edges": [
+        {
+          "source": "ux",
+          "target": "coord"
+        },
+        {
+          "source": "coord",
+          "target": "commands"
+        },
+        {
+          "source": "commands",
+          "target": "v2"
+        },
+        {
+          "source": "v2",
+          "target": "tasks"
+        },
+        {
+          "source": "v2",
+          "target": "context"
+        },
+        {
+          "source": "v2",
+          "target": "messages"
+        },
+        {
+          "source": "tasks",
+          "target": "adapters"
+        },
+        {
+          "source": "context",
+          "target": "adapters"
+        },
+        {
+          "source": "messages",
+          "target": "adapters"
+        },
+        {
+          "source": "adapters",
+          "target": "results"
+        }
+      ],
+      "notes": "Task dependencies are distinct from execution lineage. V2 means the existing command/event/outbox engine. Peer discussion does not change ownership or acceptance; typed service commands do."
+    },
+    {
+      "id": "03-fleet",
+      "label": "Fleet",
+      "title": "Place the work; preserve its owner.",
+      "description": "Proposed shared placement and admission: harness/model, target environment, and provisioning are separate choices.",
+      "height": 900,
+      "nodes": [
+        {
+          "id": "ready",
+          "text": "Ready task + requirements",
+          "x": 330,
+          "y": 65,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "policy",
+          "text": "Capability / budget / locality",
+          "x": 330,
+          "y": 175,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "reserve",
+          "text": "Select + reserve capacity",
+          "x": 330,
+          "y": 285,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "local",
+          "text": "Local or linked T3 environment",
+          "x": 130,
+          "y": 425,
+          "w": 280,
+          "h": 64
+        },
+        {
+          "id": "attempt",
+          "text": "Owned, observable attempt",
+          "x": 330,
+          "y": 565,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "durable",
+          "text": "Persist artifacts + reconcile",
+          "x": 330,
+          "y": 685,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "result",
+          "text": "Return evidence to thread",
+          "x": 330,
+          "y": 795,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "sandbox",
+          "text": "Remote SandboxProvider",
+          "x": 490,
+          "y": 425,
+          "w": 280,
+          "h": 64
+        }
+      ],
+      "edges": [
+        {
+          "source": "ready",
+          "target": "policy"
+        },
+        {
+          "source": "policy",
+          "target": "reserve"
+        },
+        {
+          "source": "reserve",
+          "target": "local"
+        },
+        {
+          "source": "local",
+          "target": "attempt"
+        },
+        {
+          "source": "attempt",
+          "target": "durable"
+        },
+        {
+          "source": "durable",
+          "target": "result"
+        },
+        {
+          "source": "reserve",
+          "target": "sandbox"
+        },
+        {
+          "source": "sandbox",
+          "target": "attempt"
+        }
+      ],
+      "notes": "Sandbox candidates share one category: Blaxel, Modal, Daytona, E2B, Baseten, and others. Capabilities differ; batch jobs are optional. Provisioning does not transfer ownership. Persist artifacts and reconcile uncertain attempts before retrying."
+    },
+    {
+      "id": "04-workflow",
+      "label": "Workflows",
+      "title": "A repeatable way to settle work.",
+      "description": "Proposed workflows reuse outcome threads and tasks. Manual, scheduled, and scoped event requests enter the same bounded execution loop.",
+      "height": 900,
+      "nodes": [
+        {
+          "id": "manual",
+          "text": "Manual request",
+          "x": 40,
+          "y": 65,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "schedule",
+          "text": "Schedule",
+          "x": 330,
+          "y": 65,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "signal",
+          "text": "Scoped event / signal",
+          "x": 620,
+          "y": 65,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "trigger",
+          "text": "Deduplicate + apply policy",
+          "x": 330,
+          "y": 205,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "run",
+          "text": "Instantiate versioned plan",
+          "x": 330,
+          "y": 325,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "ready",
+          "text": "Run independent ready tasks",
+          "x": 330,
+          "y": 445,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "review",
+          "text": "Join + check criteria",
+          "x": 330,
+          "y": 565,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "next",
+          "text": "Continue / ask / deliver",
+          "x": 330,
+          "y": 685,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "close",
+          "text": "Settle run; retain evidence",
+          "x": 330,
+          "y": 795,
+          "w": 240,
+          "h": 64
+        }
+      ],
+      "edges": [
+        {
+          "source": "manual",
+          "target": "trigger"
+        },
+        {
+          "source": "schedule",
+          "target": "trigger"
+        },
+        {
+          "source": "signal",
+          "target": "trigger"
+        },
+        {
+          "source": "trigger",
+          "target": "run"
+        },
+        {
+          "source": "run",
+          "target": "ready"
+        },
+        {
+          "source": "ready",
+          "target": "review"
+        },
+        {
+          "source": "review",
+          "target": "next"
+        },
+        {
+          "source": "next",
+          "target": "close"
+        }
+      ],
+      "notes": "Filter and deduplicate events before model work. Dependency readiness drives parallel execution; phase names are presentation. Record explicit attempts or plan revisions for failures and new findings. No-op events stay quiet."
+    },
+    {
+      "id": "05-project-coordinator",
+      "label": "Project coordinator",
+      "title": "Every thread can orchestrate. One optional project role.",
+      "description": "Proposed UX: outcome threads can start directly. One ordinary thread may be designated to coordinate priorities and shared decisions for an explicit project scope.",
+      "height": 850,
+      "nodes": [
+        {
+          "id": "scope",
+          "text": "Explicit project scope",
+          "x": 70,
+          "y": 65,
+          "w": 300,
+          "h": 64
+        },
+        {
+          "id": "coordinator",
+          "text": "One designated ordinary thread",
+          "x": 530,
+          "y": 65,
+          "w": 300,
+          "h": 64
+        },
+        {
+          "id": "outcome_a",
+          "text": "Outcome thread A",
+          "x": 40,
+          "y": 300,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "outcome_b",
+          "text": "Outcome thread B",
+          "x": 330,
+          "y": 300,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "outcome_c",
+          "text": "Outcome thread C",
+          "x": 620,
+          "y": 300,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "tasks_a",
+          "text": "Own tasks / collaborators",
+          "x": 40,
+          "y": 470,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "tasks_b",
+          "text": "Own tasks / collaborators",
+          "x": 330,
+          "y": 470,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "tasks_c",
+          "text": "Own tasks / collaborators",
+          "x": 620,
+          "y": 470,
+          "w": 240,
+          "h": 64
+        },
+        {
+          "id": "evidence",
+          "text": "Results + project decisions",
+          "x": 300,
+          "y": 695,
+          "w": 300,
+          "h": 64
+        }
+      ],
+      "edges": [
+        {
+          "source": "scope",
+          "target": "coordinator"
+        },
+        {
+          "source": "coordinator",
+          "target": "outcome_a",
+          "kind": "coordination"
+        },
+        {
+          "source": "coordinator",
+          "target": "outcome_b",
+          "kind": "coordination"
+        },
+        {
+          "source": "coordinator",
+          "target": "outcome_c",
+          "kind": "coordination"
+        },
+        {
+          "source": "outcome_a",
+          "target": "tasks_a"
+        },
+        {
+          "source": "outcome_b",
+          "target": "tasks_b"
+        },
+        {
+          "source": "outcome_c",
+          "target": "tasks_c"
+        },
+        {
+          "source": "tasks_a",
+          "target": "evidence"
+        },
+        {
+          "source": "tasks_b",
+          "target": "evidence"
+        },
+        {
+          "source": "tasks_c",
+          "target": "evidence"
+        }
+      ],
+      "notes": "Dashed arrows mean optional coordination, not a prerequisite to launch an outcome. The current create/resume binding is checkout-local; arbitrary existing-thread assignment and revision-checked reassignment are proposed. Reassignment preserves active attempts. A role grants no extra authority."
+    }
+  ],
+  "stories": [
+    {
+      "person": "Software engineer",
+      "outcome": "Ship a change with tests and review evidence."
+    },
+    {
+      "person": "Research engineer",
+      "outcome": "Test a hypothesis with a reproducible baseline and bounded experiments."
+    },
+    {
+      "person": "Engineering manager",
+      "outcome": "Resolve release blockers and decide priorities."
+    },
+    {
+      "person": "Solutions architect",
+      "outcome": "Compare architectures and produce editable diagrams."
+    },
+    {
+      "person": "Forward deployed engineer",
+      "outcome": "Investigate, prototype, and explain a customer solution."
+    }
+  ]
+}

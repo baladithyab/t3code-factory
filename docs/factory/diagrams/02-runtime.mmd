@@ -1,0 +1,22 @@
+flowchart TD
+  accTitle: Reasoning plans; durable services execute.
+  accDescr: Proposed Factory composition on T3 V2: models propose plans; durable services validate transitions and run accepted work. Task dependencies are distinct from execution lineage. V2 means the existing command/event/outbox engine. Peer discussion does not change ownership or acceptance; typed service commands do.
+  ux --> coord
+  coord --> commands
+  commands --> v2
+  v2 --> tasks
+  v2 --> context
+  v2 --> messages
+  tasks --> adapters
+  context --> adapters
+  messages --> adapters
+  adapters --> results
+  ux["Shared thread / plan / artifacts"]
+  coord["Coordinator proposes work"]
+  commands["Plan + task service commands"]
+  v2["V2 events / receipts / outbox"]
+  tasks["Task attempts + claims"]
+  context["Context + evidence references"]
+  messages["Scoped peer messages"]
+  adapters["Existing harness adapters"]
+  results["Results back to goal thread"]
