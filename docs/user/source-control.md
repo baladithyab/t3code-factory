@@ -171,11 +171,50 @@ and base commit. For failed workspace preparation, open the thread and use its s
 Archived task threads remain readable without unarchiving. A deleted thread requires an
 explicit new-attempt confirmation; closed issues cannot start new attempts.
 
+GitHub issue state and linked thread state are independent. Closing an issue does not stop
+an existing worker, and completing a worker does not close the issue. To stop work, open
+the linked thread and use its normal stop controls. Factory does not automatically write
+task results back to GitHub issues.
+
 Listing needs `orchestration:read`; starting also needs `orchestration:operate` and
 `source-control:write`. Agents can use `factory_list_issues` and `factory_start_issue` under
 their existing permissions. Pass the returned `repository.canonicalKey` as
 `expectedRepositoryKey` when starting; a changed origin is refused instead of silently
 retargeting the task.
+
+For example, call `factory_list_issues` with a registered project ID:
+
+```json
+{
+  "projectId": "<project-id>",
+  "state": "open",
+  "page": 1
+}
+```
+
+Check the returned repository and the selected issue's `task`. If it already has a task,
+open its `threadId`. For an explicitly authorized new task, pass parameters like these to
+`factory_start_issue`:
+
+```json
+{
+  "commandId": "<unique-command-id>",
+  "projectId": "<project-id>",
+  "expectedRepositoryKey": "github.com/<owner>/<repository>",
+  "issueNumber": 17,
+  "modelSelection": {
+    "instanceId": "<provider-instance-id>",
+    "model": "<model-id>"
+  },
+  "runtimeMode": "approval-required",
+  "interactionMode": "default"
+}
+```
+
+Replace the repository key with the exact `repository.canonicalKey` returned by the list,
+and use the selected issue number. Choose provider/model IDs from `orchestrator_capabilities`;
+the supervised example uses `approval-required`, and MCP cannot exceed the caller's runtime
+authority. Reuse `commandId` when retrying the same request. Omitting `baseRef` uses local HEAD.
 
 ## Create a pull request
 
