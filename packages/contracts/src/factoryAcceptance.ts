@@ -23,6 +23,7 @@ export const FactoryAcceptance = Schema.Struct({
   projectId: ProjectId,
   headSha: Schema.String,
   baseRef: Schema.String,
+  baseBranch: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   baseSha: Schema.String,
   acceptedAt: IsoDateTime,
   acceptedBy: EnvironmentId,

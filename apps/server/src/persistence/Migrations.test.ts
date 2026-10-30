@@ -71,6 +71,46 @@ const v2TableCount = Effect.gen(function* () {
 });
 
 describe("runMigrations", () => {
+  it.effect("adds unset delivery destinations without guessing or rewriting legacy pins", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 203 });
+      const snapshot = JSON.stringify({ baseRef: "a".repeat(40) });
+      yield* sql`INSERT INTO factory_issue_launches
+        (thread_id, canonical_key, issue_number, request_command_id, intent_json)
+        VALUES ('thread', 'github.com/owner/repo', 1, 'launch', ${snapshot})`;
+      yield* sql`INSERT INTO factory_acceptances
+        (id, origin_key, thread_id, project_id, head_sha, base_ref, base_sha, accepted_at, accepted_by, evidence_json)
+        VALUES ('acceptance', 'origin', 'thread', 'project', 'head', 'snapshot', 'snapshot', 'at', 'env', '[]')`;
+      yield* sql`INSERT INTO factory_delivery_intents
+        (id, origin_key, thread_id, project_id, kind, acceptance_id, repository_json, base_ref, base_sha,
+         head_sha, payload_json, payload_digest, granted_by, granted_at, request_command_id, status, updated_at)
+        VALUES ('delivery', 'origin', 'thread', 'project', 'publish-pr', 'acceptance', '{}', 'snapshot', 'snapshot',
+          'head', '{}', 'digest', 'env', 'at', 'grant', 'pending', 'at')`;
+      yield* runMigrations();
+      assert.deepEqual(yield* sql`SELECT intent_json FROM factory_issue_launches`, [
+        { intent_json: snapshot },
+      ]);
+      assert.deepEqual(
+        yield* sql`SELECT base_ref, base_sha, head_sha, base_branch FROM factory_acceptances`,
+        [{ base_ref: "snapshot", base_sha: "snapshot", head_sha: "head", base_branch: null }],
+      );
+      assert.deepEqual(
+        yield* sql`SELECT base_ref, base_sha, head_sha, base_branch, payload_digest, status FROM factory_delivery_intents`,
+        [
+          {
+            base_ref: "snapshot",
+            base_sha: "snapshot",
+            head_sha: "head",
+            base_branch: null,
+            payload_digest: "digest",
+            status: "pending",
+          },
+        ],
+      );
+      assert.deepEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
   it.effect(
     "upgrades known legacy Factory histories without replaying their schema or losing data",
     () =>

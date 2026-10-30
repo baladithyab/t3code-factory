@@ -204,6 +204,12 @@ ref to a fixed commit and starts a separate Git worktree; it does not fetch, reb
 uncommitted changes from the project checkout. Commit the source you want workers to receive
 before using Factory to develop this project itself.
 
+For PR delivery, use a named branch with an existing fetched ref on `origin`. Factory keeps the
+fixed launch commit and the host base branch separately; review both in the delivery preview.
+An attached HEAD uses its branch's origin destination. Tags, commit IDs, detached HEAD, and
+branches tracking another remote can start work but cannot authorize PR delivery. Older tasks that did not save a host
+base branch need a new task from a named origin branch; re-accepting a commit cannot restore it.
+
 When Factory develops its own code, keep its host server outside automatic source restarts.
 A restart interrupts running agents, including when a check only rewrites a watched
 configuration file.
@@ -217,7 +223,12 @@ the issue again. A refresh never silently replaces the snapshot in an open confi
 Tasks default to approval-required mode. Project-configured worktree setup scripts still run
 on the environment's machine; approval mode is not an OS or network sandbox. Starting a task
 does not authorize publishing, pushing, opening a pull request, merging, or releasing.
-Review the linked thread and use the normal Git and pull-request controls separately.
+For a GitHub task, review the linked thread's commit, then use **Accept this commit** in its
+issue details. Prepare and review the pull request before granting publication; merging needs
+its own preview and grant. Each grant is bound to the accepted commit. If the head moves,
+review and re-accept it first. A lost host response leaves the delivery unknown: **Reconcile**
+reads the host's result without sending again. Commit acceptance, delivery grants and
+reconciliation need both operate and source-control write permission on the owning environment.
 
 There is one current task per repository and issue in each environment, including across
 multiple project checkouts. **Open thread** returns to that task's owning project rather

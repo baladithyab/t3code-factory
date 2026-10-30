@@ -28,7 +28,6 @@ import * as Schema from "effect/Schema";
 import * as Launches from "../persistence/FactoryIssueLaunches.ts";
 import * as ManagedFolders from "../project/ManagedProjectFolders.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
-import * as Git from "../vcs/GitVcsDriver.ts";
 import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
 import * as TaskLaunch from "./FactoryTaskLaunch.ts";
 import { factoryIssueCapabilities } from "./IssueTrackerProviderRegistry.ts";
@@ -81,12 +80,12 @@ export class FactoryIssueService extends Context.Service<
 const make = Effect.gen(function* () {
   const launches = yield* Launches.FactoryIssueLaunches;
   const threads = yield* Threads.ThreadManagementService;
-  const git = yield* Git.GitVcsDriver;
   const crypto = yield* Crypto.Crypto;
   const folders = yield* ManagedFolders.ManagedProjectFolders;
   const environment = yield* ServerEnvironmentIdentity;
 
   const resolve = yield* TaskLaunch.makeRepositoryResolver;
+  const resolveBase = yield* TaskLaunch.makeBaseResolver;
   const taskLaunch = yield* TaskLaunch.make<Launches.FactoryLaunchIntent, FactoryIssueError>({
     span: "FactoryIssueService",
     error: (reason, cause) =>
@@ -239,11 +238,9 @@ const make = Effect.gen(function* () {
     if (issue.state !== "open") return yield* new FactoryIssueError({ reason: "closed-issue" });
     if ((yield* revisionOf(repository, issue)) !== input.expectedIssueRevision)
       return yield* new FactoryIssueError({ reason: "issue-changed" });
-    const { commitSha } = yield* git
-      .resolveCommit({ cwd: project.workspaceRoot, revision: input.baseRef ?? "HEAD" })
-      .pipe(
-        Effect.mapError((cause) => new FactoryIssueError({ reason: "invalid-base-ref", cause })),
-      );
+    const base = yield* resolveBase(project.workspaceRoot, input.baseRef).pipe(
+      Effect.mapError((cause) => new FactoryIssueError({ reason: "invalid-base-ref", cause })),
+    );
     const current = yield* resolve(input.projectId);
     if (
       current.repository.canonicalKey !== repository.canonicalKey ||
@@ -261,7 +258,7 @@ const make = Effect.gen(function* () {
       commandId: CommandId.make(`factory:${attempt}`),
       threadId: ThreadId.make(`factory:${attempt}`),
       messageId: MessageId.make(`factory:${attempt}:message`),
-      baseRef: commitSha,
+      ...base,
       modelSelection: input.modelSelection,
       runtimeMode: input.runtimeMode,
       interactionMode: input.interactionMode,

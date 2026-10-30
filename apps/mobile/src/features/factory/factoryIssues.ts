@@ -777,7 +777,7 @@ export function factoryArtifactDeliveryStatusView(
     case "unknown":
       return {
         kind: "unknown",
-        text: `The server lost the response. Reconcile to check ${intent.repository.host}.`,
+        text: `${intent.failure?.trim() || "The server lost the response."} Reconcile to check ${intent.repository.host}.`,
       };
   }
 }

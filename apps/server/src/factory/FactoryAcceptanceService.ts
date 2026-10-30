@@ -113,6 +113,7 @@ const make = Effect.gen(function* () {
         projectId: input.projectId,
         headSha: head.value,
         baseRef: origin.value.baseRef,
+        baseBranch: origin.value.baseBranch,
         baseSha: baseSha.value,
         acceptedAt: DateTime.formatIso(yield* DateTime.now),
         acceptedBy: yield* environment.getEnvironmentId,

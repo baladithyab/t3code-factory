@@ -39,6 +39,7 @@ export const FactoryLaunchCore = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
   baseRef: Schema.String,
+  baseBranch: Schema.optionalKey(Schema.NullOr(Schema.String)),
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
@@ -61,6 +62,41 @@ type LaunchReason =
   | "launch-authority"
   | "provider-unavailable"
   | "launch-failure";
+
+export const makeBaseResolver = Effect.gen(function* () {
+  const git = yield* Git.GitVcsDriver;
+  return Effect.fn("FactoryTaskLaunch.resolveBase")(function* (cwd: string, revision = "HEAD") {
+    const symbolic = yield* git.execute({
+      operation: "FactoryTaskLaunch.resolveBase",
+      cwd,
+      args: ["rev-parse", "--symbolic-full-name", "--verify", "--end-of-options", revision],
+      allowNonZeroExit: true,
+      maxOutputBytes: 4096,
+    });
+    const ref =
+      symbolic.exitCode === 0 && !symbolic.stdoutTruncated && !symbolic.stderrTruncated
+        ? symbolic.stdout.trim()
+        : "";
+    const { commitSha } = yield* git.resolveCommit({
+      cwd,
+      revision: ref.startsWith("refs/") ? ref : revision,
+    });
+    const target = ref.startsWith("refs/heads/")
+      ? yield* git.resolveWorktreeBaseRemote({ cwd, refName: ref.slice("refs/heads/".length) })
+      : ref.startsWith("refs/remotes/origin/")
+        ? { remoteName: "origin", branchName: ref.slice("refs/remotes/origin/".length) }
+        : null;
+    // Only origin owns the admitted repository. Tags, SHAs, detached HEAD and other remotes do not
+    // authorize a host destination, even when their commits happen to match an origin branch.
+    const baseBranch =
+      target?.remoteName === "origin" &&
+      target.branchName !== "HEAD" &&
+      (yield* git.remoteBranchExists({ cwd, remoteName: "origin", refName: target.branchName }))
+        ? target.branchName
+        : null;
+    return { baseRef: commitSha, baseBranch };
+  });
+});
 
 function repositoryTarget(
   identity: RepositoryIdentity,
@@ -97,20 +133,24 @@ export const makeRepositoryResolver = Effect.gen(function* () {
   const identities = yield* Identities.RepositoryIdentityResolver;
   const git = yield* Git.GitVcsDriver;
   const trackers = yield* IssueTrackers.IssueTrackerProviderRegistry;
-  return Effect.fn("FactoryIssueService.resolve")(function* (projectId: ProjectId) {
+  return Effect.fn("FactoryIssueService.resolve")(function* (
+    projectId: ProjectId,
+    workspaceRoot?: string,
+  ) {
     const project = yield* projects
       .getById(projectId)
       .pipe(
         Effect.mapError((cause) => new FactoryIssueError({ reason: "persistence-failure", cause })),
       );
     if (Option.isNone(project)) return yield* new FactoryIssueError({ reason: "missing-project" });
-    const identity = yield* identities.resolve(project.value.workspaceRoot, { refresh: true });
+    const cwd = workspaceRoot ?? project.value.workspaceRoot;
+    const identity = yield* identities.resolve(cwd, { refresh: true });
     if (identity === null) return yield* new FactoryIssueError({ reason: "missing-repository" });
     // `remote get-url` distinguishes a missing origin and applies Git's insteadOf rewrites.
     const origin = yield* git
       .execute({
         operation: "FactoryIssueService.resolveOrigin",
-        cwd: project.value.workspaceRoot,
+        cwd,
         args: ["remote", "get-url", "--", "origin"],
         allowNonZeroExit: true,
         maxOutputBytes: 64 * 1024,
@@ -126,7 +166,7 @@ export const makeRepositoryResolver = Effect.gen(function* () {
     )
       return yield* new FactoryIssueError({ reason: "missing-repository" });
     const originIdentity = yield* identities.resolveRemote({
-      rootPath: identity.rootPath ?? project.value.workspaceRoot,
+      rootPath: identity.rootPath ?? cwd,
       remoteName: "origin",
       remoteUrl: origin.stdout.trim(),
     });
@@ -187,6 +227,7 @@ export const makeInspector = Effect.fn("FactoryTaskLaunch.makeInspector")(functi
         projectId: intent.projectId,
         threadId: intent.threadId,
         baseRef: intent.baseRef,
+        baseBranch: intent.baseBranch ?? null,
         createdAt: intent.createdAt,
         status,
         modelSelection: intent.modelSelection,

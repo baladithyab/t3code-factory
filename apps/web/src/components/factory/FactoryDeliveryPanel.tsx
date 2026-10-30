@@ -409,7 +409,11 @@ export function FactoryDeliveryPanel(props: {
             </dd>
           </div>
           <div>
-            <dt>Base</dt>
+            <dt>Host base branch</dt>
+            <dd>{prepared.baseBranch ?? "No reviewed destination"}</dd>
+          </div>
+          <div>
+            <dt>Launch snapshot</dt>
             <dd>{prepared.baseRef}</dd>
           </div>
           <div>

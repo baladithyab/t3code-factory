@@ -178,13 +178,19 @@ function harness(
     issueTrackersLayer(options.trackers ?? [fakeTracker(options.tracker)]),
     Layer.mock(Git.GitVcsDriver)({
       resolveCommit: options.resolveCommit ?? (() => Effect.succeed({ commitSha: baseRef })),
+      resolveWorktreeBaseRemote: ({ refName }) =>
+        Effect.succeed({ remoteName: "origin", branchName: refName }),
+      remoteBranchExists: () => Effect.succeed(true),
       execute:
         options.execute ??
-        (({ cwd }) =>
+        (({ cwd, args }) =>
           (options.resolve ?? (() => Effect.succeed(identity)))(cwd, { refresh: true }).pipe(
             Effect.map((resolved) => ({
               exitCode: ChildProcessSpawner.ExitCode(resolved === null ? 2 : 0),
-              stdout: resolved?.origin?.remoteUrl ?? resolved?.locator.remoteUrl ?? "",
+              stdout:
+                args[0] === "rev-parse"
+                  ? "refs/heads/main"
+                  : (resolved?.origin?.remoteUrl ?? resolved?.locator.remoteUrl ?? ""),
               stderr: "",
               stdoutTruncated: false,
               stderrTruncated: false,
@@ -431,7 +437,7 @@ it.effect(
       const reviewed = yield* reviewedInput("first");
       const results = yield* Effect.all(
         [
-          factory.start(reviewed),
+          factory.start({ ...reviewed, baseRef: "main" }),
           factory.start({
             ...reviewed,
             commandId: CommandId.make("second"),
@@ -445,6 +451,7 @@ it.effect(
       assert.equal(first.threadId, second.threadId);
       assert.equal(first.projectId, second.projectId);
       assert.equal(first.task.baseRef, baseRef);
+      assert.equal(first.task.baseBranch, "main");
       const threads = yield* Threads.ThreadManagementService;
       const projection = yield* threads.getThreadProjection(first.threadId);
       assert.equal(projection.runs.length, 1);

@@ -333,10 +333,18 @@ describe("describeDeliveryStatus", () => {
       ).toBe("Host rejected the SHA");
       expect(
         describeDeliveryStatus({ kind, status: "unknown", failure: "Connection lost" }, "GitHub"),
-      ).toBe("The server lost the response. Reconcile to check GitHub.");
+      ).toBe(
+        kind === "publish-artifact"
+          ? "Connection lost Reconcile to check GitHub."
+          : "The server lost the response. Reconcile to check GitHub.",
+      );
       expect(
         describeDeliveryStatus({ kind, status: "unknown", failure: "Connection lost" }, "GitLab"),
-      ).toBe("The server lost the response. Reconcile to check GitLab.");
+      ).toBe(
+        kind === "publish-artifact"
+          ? "Connection lost Reconcile to check GitLab."
+          : "The server lost the response. Reconcile to check GitLab.",
+      );
     },
   );
 });

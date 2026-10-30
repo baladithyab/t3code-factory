@@ -18,6 +18,7 @@ import {
   isFactoryArtifactReconcilable,
   liveFactoryArtifactIntent,
   parseFactoryIssueNumber,
+  safeFactoryIssueUrl,
 } from "./factoryIssues";
 import { formatFactoryBytes, shortFactoryDigest } from "./factoryKnowledge";
 import { useFactoryArtifactDelivery } from "./useFactoryArtifactDelivery";
@@ -29,7 +30,8 @@ function ArtifactDeliveryRow(props: {
   readonly onReconcile: (intent: FactoryArtifactDeliveryIntent) => void;
 }) {
   const view = factoryArtifactDeliveryStatusView(props.intent);
-  const link = view.kind === "confirmed" ? view.link : null;
+  const commentUrl = props.intent.remote ? safeFactoryIssueUrl(props.intent.remote.url) : null;
+  const link = commentUrl === null ? null : { label: "Open comment", url: commentUrl };
   const host = props.intent.repository.host;
   // Static text while the server posts: no spinner, so nothing repaints while it waits.
   return (

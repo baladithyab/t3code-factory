@@ -71,6 +71,8 @@ export const FactoryIssueTask = Schema.Struct({
     "missing",
   ]),
   baseRef: TrimmedNonEmptyString,
+  // Absent on legacy launches and snapshots without an origin branch destination.
+  baseBranch: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   createdAt: IsoDateTime,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,

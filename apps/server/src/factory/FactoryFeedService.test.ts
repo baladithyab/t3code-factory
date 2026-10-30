@@ -134,10 +134,16 @@ function harness(
     ),
     Layer.mock(Git.GitVcsDriver)({
       resolveCommit: options.resolveCommit ?? (() => Effect.succeed({ commitSha: baseRef })),
-      execute: () =>
+      resolveWorktreeBaseRemote: ({ refName }) =>
+        Effect.succeed({ remoteName: "origin", branchName: refName }),
+      remoteBranchExists: () => Effect.succeed(true),
+      execute: ({ args }) =>
         Effect.succeed({
           exitCode: ChildProcessSpawner.ExitCode(0),
-          stdout: options.origin ?? "git@github.com:owner/factory.git",
+          stdout:
+            args[0] === "rev-parse"
+              ? "refs/heads/main"
+              : (options.origin ?? "git@github.com:owner/factory.git"),
           stderr: "",
           stdoutTruncated: false,
           stderrTruncated: false,

@@ -190,6 +190,7 @@ it.live("keeps project settings through the V2 migrations and the first V2 boot"
         const project = yield* (yield* ProjectService.ProjectService).getById(projectId);
         assert.equal(project._tag, "Some");
       }).pipe(Effect.provide(layerRuntime(dbPath)));
+      yield* fs.remove(dbPath);
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );

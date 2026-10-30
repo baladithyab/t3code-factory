@@ -17,6 +17,7 @@ import {
   type FactoryArtifactDeliveryGrantInput,
   type PullRequestActionInput,
   type PullRequestDetail,
+  type ChangeRequest,
 } from "@t3tools/contracts";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
 import {
@@ -24,6 +25,8 @@ import {
   type TrackerIssueComment,
 } from "@t3tools/source-control-core/server/IssueTrackerProvider";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
@@ -73,6 +76,17 @@ const payload: FactoryDeliveryPublishPayload = {
   draft: false,
 };
 const pullRequest = { number: 12, url: "https://github.com/owner/repo/pull/12" };
+const publishedChangeRequest = (overrides: Partial<ChangeRequest> = {}): ChangeRequest => ({
+  ...pullRequest,
+  provider: SourceControlProviderKind.make("github"),
+  title: payload.title,
+  baseRefName: "main",
+  headRefName: "feature",
+  headSha: first,
+  state: "open",
+  updatedAt: Option.none(),
+  ...overrides,
+});
 
 const intent: FactoryLaunchIntent = {
   repository: {
@@ -98,7 +112,8 @@ const intent: FactoryLaunchIntent = {
   commandId: CommandId.make("command"),
   threadId: claimed,
   messageId: MessageId.make("message"),
-  baseRef: "main",
+  baseRef: base,
+  baseBranch: "main",
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
   runtimeMode: "approval-required",
   interactionMode: "default",
@@ -135,6 +150,7 @@ const harness = (
     // The host's view of the published pull request, which a test moves to simulate a push, a
     // conflict or a merge made elsewhere.
     pr: {
+      baseBranch: "main",
       headSha: first as string | undefined,
       state: "open" as "open" | "closed" | "merged",
       mergeability: "mergeable" as "mergeable" | "conflicting" | "unknown",
@@ -152,6 +168,14 @@ const harness = (
     invalidations: 0,
     // Every pull request read, cached or fresh: a refused delivery must not reach the host.
     reads: 0,
+    headLookups: 0,
+    beforeHeadLookup: Effect.void as Effect.Effect<void>,
+    publications: null as ReadonlyArray<ChangeRequest> | null,
+    publicationRead: "ok" as "ok" | "fail",
+    publicationLookups: [] as Parameters<
+      SourceControlProvider.SourceControlProvider["Service"]["listChangeRequests"]
+    >[0][],
+    providerDestinationMatches: true,
   };
   const providerFailure = (cwd: string, cause: unknown) =>
     new SourceControlProviderError({
@@ -163,9 +187,19 @@ const harness = (
     });
   const provider: SourceControlProvider.SourceControlProvider["Service"] = {
     kind: SourceControlProviderKind.make("github"),
-    listChangeRequests: () => unsupported("listChangeRequests"),
+    createsChangeRequestsIn: () => Effect.succeed(state.providerDestinationMatches),
+    listChangeRequests: (input) => {
+      state.publicationLookups.push(input);
+      return state.publicationRead === "fail"
+        ? Effect.fail(providerFailure(input.cwd, { _tag: "GitHubApiRequestError" }))
+        : Effect.succeed(
+            state.publications ?? (Option.isSome(state.open) ? [publishedChangeRequest()] : []),
+          );
+    },
     getChangeRequest: () => unsupported("getChangeRequest"),
     createChangeRequest: (input) => {
+      assert.deepEqual(input.target, { owner: "owner", repository: "repo", refName: "main" });
+      assert.equal(input.context?.provider.baseUrl, "https://github.com");
       state.calls.push(`create:${input.baseRefName}:${input.headSelector}:${input.title}`);
       if (state.create === "definite")
         return Effect.fail(
@@ -189,7 +223,7 @@ const harness = (
           ? state.origin
           : revision === "HEAD^{commit}"
             ? state.head
-            : revision === "main^{commit}"
+            : revision === `${base}^{commit}`
               ? base
               : null;
       if (stdout === null) return Effect.die(`Unexpected git arguments: ${JSON.stringify(args)}`);
@@ -234,6 +268,7 @@ const harness = (
             url: `https://github.com/owner/repo/pull/${ref.number}`,
             state: state.pr.state,
             isDraft: state.pr.isDraft,
+            baseBranch: state.pr.baseBranch,
             mergeability: state.pr.mergeability,
             ...(state.pr.headSha === undefined ? {} : { headSha: state.pr.headSha }),
             checks: state.pr.checks.map((status, index) => ({
@@ -308,19 +343,24 @@ const harness = (
         }),
       resolveRemote: () =>
         Effect.succeed({
-          canonicalKey: "github.com/owner/repo",
+          canonicalKey: state.origin.replace("https://", "").replace(/\.git$/, ""),
           provider: SourceControlProviderKind.make("github"),
           locator: { source: "git-remote", remoteName: "origin", remoteUrl: state.origin },
         }),
     }),
     Layer.mock(GitManager.GitManager)({
       findOpenPullRequestForHead: () =>
-        Effect.succeed({ headSelector: "feature", open: state.open }),
+        Effect.gen(function* () {
+          state.headLookups += 1;
+          yield* state.beforeHeadLookup;
+          return { headSelector: "feature", open: state.open };
+        }),
       invalidateStatus: () => Effect.void,
     }),
     Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
       resolveLink: () => undefined,
       resolve: () => Effect.succeed(provider),
+      resolveHandle: ({ context }) => Effect.succeed({ provider, context: context ?? null }),
     }),
     Layer.mock(Threads.ThreadManagementService)({
       getThreadShell: (id) =>
@@ -394,7 +434,8 @@ const harness = (
           kind: "publish-pr",
           acceptanceId: "acceptance:seeded",
           repository: intent.repository,
-          baseRef: "main",
+          baseRef: base,
+          baseBranch: "main",
           baseSha: base,
           headSha: first,
           payload,
@@ -529,14 +570,17 @@ it.effect(
       const prepared = yield* prepare();
       assert.equal(prepared.current, true);
       assert.equal(prepared.headSha, first);
-      assert.equal(prepared.baseRef, "main");
+      assert.equal(prepared.baseRef, base);
+      assert.equal(prepared.baseBranch, "main");
       assert.equal(prepared.existing, null);
       assert.equal(
         prepared.payloadDigest,
         Delivery.deliveryPayloadDigest({
           kind: "publish-pr",
           repository: intent.repository,
-          baseRef: "main",
+          baseRef: base,
+          baseBranch: "main",
+          baseSha: base,
           headSha: first,
           payload,
         }),
@@ -556,6 +600,103 @@ it.effect("prepare refuses an acceptance whose head has since moved", () => {
   }).pipe(Effect.provide(layer));
 });
 
+it.effect.each([undefined, null])(
+  "legacy launch destination %s is never guessed from its SHA",
+  (baseBranch) => {
+    const { state, layer } = harness();
+    return Effect.gen(function* () {
+      const { baseBranch: _, ...legacy } = intent;
+      yield* acceptClaim(baseBranch === undefined ? legacy : { ...legacy, baseBranch });
+      const service = yield* Delivery.FactoryDeliveryService;
+      assert.equal((yield* prepare().pipe(Effect.flip)).reason, "missing-base-branch");
+      assert.equal(
+        (yield* service
+          .grant({
+            projectId,
+            threadId: claimed,
+            kind: "publish-pr",
+            commandId: "legacy",
+            expectedHeadSha: first,
+            expectedPayloadDigest: "d".repeat(64),
+            payload,
+          })
+          .pipe(Effect.flip)).reason,
+        "missing-base-branch",
+      );
+      assert.deepEqual(state.calls, []);
+      assert.deepEqual(yield* outboxRows, []);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect(
+  "a destination changed after preview invalidates its digest without moving the accepted head",
+  () => {
+    const { state, layer } = harness();
+    return Effect.gen(function* () {
+      yield* accept;
+      const preview = yield* prepare();
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE factory_acceptances SET base_branch = 'stable'`;
+      yield* sql`UPDATE factory_issue_launches SET intent_json = ${JSON.stringify({ ...intent, baseBranch: "stable" })}`;
+      const service = yield* Delivery.FactoryDeliveryService;
+      assert.equal(
+        (yield* service
+          .grant({
+            projectId,
+            threadId: claimed,
+            kind: "publish-pr",
+            commandId: "changed-target",
+            expectedHeadSha: preview.headSha,
+            expectedPayloadDigest: preview.payloadDigest,
+            payload,
+          })
+          .pipe(Effect.flip)).reason,
+        "payload-changed",
+      );
+      assert.deepEqual(state.calls, []);
+      assert.deepEqual(yield* outboxRows, []);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("a legacy queued publication refuses before push after an upgrade", () => {
+  const { state, layer } = harness();
+  return Effect.gen(function* () {
+    yield* accept;
+    const granted = yield* grant();
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`UPDATE factory_delivery_intents SET base_branch = NULL WHERE id = ${granted.id}`;
+    yield* (yield* Delivery.FactoryDeliveryService).execute(granted.id);
+    assert.deepInclude(yield* only, { status: "failed", failure: "missing-base-branch" });
+    assert.deepEqual(state.calls, []);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("an origin change after grant refuses publication before push", () => {
+  const { state, layer } = harness();
+  return Effect.gen(function* () {
+    yield* accept;
+    const granted = yield* grant();
+    state.origin = "https://github.com/other/repo.git";
+    yield* (yield* Delivery.FactoryDeliveryService).execute(granted.id);
+    assert.deepInclude(yield* only, { status: "failed", failure: "repository-changed" });
+    assert.deepEqual(state.calls, []);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("a provider destination override cannot redirect a reviewed publication", () => {
+  const { state, layer } = harness();
+  return Effect.gen(function* () {
+    yield* accept;
+    const granted = yield* grant();
+    state.providerDestinationMatches = false;
+    yield* (yield* Delivery.FactoryDeliveryService).execute(granted.id);
+    assert.deepInclude(yield* only, { status: "failed", failure: "repository-changed" });
+    assert.deepEqual(state.calls, []);
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect(
   "a grant commits one pending intent with exactly one outbox row and wakes the worker",
   () => {
@@ -568,7 +709,8 @@ it.effect(
         kind: "publish-pr",
         status: "pending",
         headSha: first,
-        baseRef: "main",
+        baseRef: base,
+        baseBranch: "main",
         baseSha: base,
         grantedBy: environmentId,
         requestCommandId: "grant-1",
@@ -599,6 +741,23 @@ it.effect(
       yield* accept;
       const granted = yield* grant();
       assert.deepEqual(yield* grant(), granted);
+      if (granted.kind === "publish-artifact") return yield* Effect.die("expected commit delivery");
+      assert.equal(granted.baseBranch, "main");
+      const service = yield* Delivery.FactoryDeliveryService;
+      assert.equal(
+        (yield* service
+          .grant({
+            projectId,
+            threadId: claimed,
+            kind: "publish-pr",
+            commandId: "grant-1",
+            expectedHeadSha: first,
+            expectedPayloadDigest: granted.payloadDigest,
+            payload: { ...payload, title: "Unreviewed title" },
+          })
+          .pipe(Effect.flip)).reason,
+        "payload-changed",
+      );
       assert.lengthOf(yield* outboxRows, 1);
       assert.lengthOf(yield* deliveries, 1);
     }).pipe(Effect.provide(layer));
@@ -662,6 +821,19 @@ it.effect("an open pull request for the head is adopted without creating another
     const settled = yield* only;
     assert.equal(settled.status, "confirmed");
     assert.deepEqual(settled.remote, pullRequest);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("an existing pull request to another base is never adopted", () => {
+  const { state, layer } = harness();
+  state.open = Option.some(pullRequest);
+  state.pr.baseBranch = "other-base";
+  return Effect.gen(function* () {
+    yield* accept;
+    yield* executeGranted();
+    assert.deepInclude(yield* only, { status: "failed", failure: "pull-request-target-mismatch" });
+    assert.deepEqual(state.calls, ["push"]);
+    assert.deepEqual(state.links, []);
   }).pipe(Effect.provide(layer));
 });
 
@@ -741,7 +913,7 @@ it.effect("a push failure or a moved head fails the intent before anything is cr
 });
 
 it.effect(
-  "reconciling an unknown intent releases the origin, then adopts the PR once it shows",
+  "reconciling an unknown publication preserves its slot, then adopts the PR once it shows",
   () => {
     const { state, layer } = harness();
     return Effect.gen(function* () {
@@ -751,11 +923,9 @@ it.effect(
       const granted = yield* executeGranted();
       state.calls.length = 0;
 
-      // The forge answered and showed nothing: the send did not land, so the intent fails instead
-      // of staying `unknown` forever. A failed intent is still reconcilable once the PR shows.
       const released = yield* service.reconcile({ projectId, intentId: granted.id });
-      assert.equal(released.status, "failed");
-      assert.equal(released.failure, "no open pull request found for this head");
+      assert.equal(released.status, "unknown");
+      assert.isNotNull(released.failure);
 
       state.open = Option.some(pullRequest);
       const confirmed = yield* service.reconcile({ projectId, intentId: granted.id });
@@ -776,7 +946,95 @@ it.effect(
   },
 );
 
-it.effect("a reconciled-away unknown intent frees the origin for a new grant", () => {
+it.effect(
+  "a replacement granted during PR reconciliation prevents the superseded thread link",
+  () => {
+    const { state, layer } = harness();
+    return Effect.gen(function* () {
+      yield* accept;
+      const service = yield* Delivery.FactoryDeliveryService;
+      const store = yield* DeliveryStore.FactoryDeliveryStore;
+      const first = yield* grant();
+      yield* store.settle(first.id, { status: "unknown", failure: "response lost", updatedAt: at });
+      const entered = yield* Deferred.make<void>();
+      const released = yield* Deferred.make<void>();
+      state.beforeHeadLookup = Deferred.succeed(entered, undefined).pipe(
+        Effect.andThen(Deferred.await(released)),
+      );
+      state.open = Option.some(pullRequest);
+      const reconcile = yield* service
+        .reconcile({ projectId, intentId: first.id })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* store.settle(first.id, { status: "failed", failure: "absent", updatedAt: at });
+      const replacement = { ...first, id: "replacement", requestCommandId: "replacement" };
+      yield* store.grant(replacement, { recheck: Effect.void, enqueue: Effect.void });
+      yield* Deferred.succeed(released, undefined);
+      const settled = yield* Fiber.join(reconcile);
+      assert.equal(settled.status, "failed");
+      assert.isNull(settled.remote);
+      assert.equal(
+        settled.failure,
+        `Replacement delivery ${replacement.id} already holds the live slot; its remote cannot be attributed to this attempt.`,
+      );
+      assert.deepEqual(state.links, []);
+      assert.deepEqual(Option.getOrThrow(yield* store.get(replacement.id)), replacement);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect.each(["publish-pr", "merge-pr"] as const)(
+  "a failed %s cannot reconcile against a replacement's pull request",
+  (kind) => {
+    const { state, layer } = harness();
+    return Effect.gen(function* () {
+      yield* accept;
+      const service = yield* Delivery.FactoryDeliveryService;
+      const store = yield* DeliveryStore.FactoryDeliveryStore;
+      const first = yield* grant();
+      if (first.kind === "publish-artifact") return yield* Effect.die("expected commit intent");
+      yield* store.settle(first.id, { status: "failed", failure: "absent", updatedAt: at });
+      const failed =
+        kind === "publish-pr"
+          ? first
+          : {
+              ...first,
+              id: "merge-a",
+              kind,
+              payload: { mergeMethod: "squash" as const },
+              remote: pullRequest,
+              requestCommandId: "merge-a",
+            };
+      if (kind === "merge-pr") {
+        yield* store.grant(failed, { recheck: Effect.void, enqueue: Effect.void });
+        yield* store.settle(failed.id, { status: "failed", failure: "absent", updatedAt: at });
+      }
+      const replacement = {
+        ...failed,
+        id: "replacement",
+        requestCommandId: "replacement",
+        status: "pending" as const,
+      };
+      yield* store.grant(replacement, { recheck: Effect.void, enqueue: Effect.void });
+      state.open = Option.some(pullRequest);
+      state.pr.state = "merged";
+      const lookups = state.headLookups;
+      const reads = state.reads;
+      const refused = yield* service
+        .reconcile({ projectId, intentId: failed.id })
+        .pipe(Effect.flip);
+      assert.equal(refused.reason, "not-reconcilable");
+      assert.equal(refused.replacementDeliveryId, replacement.id);
+      assert.equal(refused.message, "A replacement delivery already holds this slot.");
+      assert.equal(state.headLookups, lookups);
+      assert.equal(state.reads, reads);
+      assert.deepEqual(state.links, []);
+      assert.deepEqual(Option.getOrThrow(yield* store.get(replacement.id)), replacement);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("a missing publication stays unknown and blocks a replacement grant", () => {
   const { state, layer } = harness();
   return Effect.gen(function* () {
     yield* accept;
@@ -788,8 +1046,145 @@ it.effect("a reconciled-away unknown intent frees the origin for a new grant", (
       "already-delivering",
     );
     yield* service.reconcile({ projectId, intentId: granted.id });
-    const regrant = yield* grant({ commandId: "grant-after-release" });
-    assert.equal(regrant.status, "pending");
+    const regrant = yield* grant({ commandId: "grant-after-reconcile" }).pipe(Effect.flip);
+    assert.equal(regrant.reason, "already-delivering");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each(["open", "closed", "merged"] as const)(
+  "publication reconciliation recovers a %s PR at the frozen destination",
+  (prState) => {
+    const { state, layer } = harness();
+    return Effect.gen(function* () {
+      const baseBranch = "factory-verification/20261029/base";
+      yield* acceptClaim({ ...intent, baseBranch });
+      const granted = yield* grant();
+      const store = yield* DeliveryStore.FactoryDeliveryStore;
+      yield* store.settle(granted.id, {
+        status: "unknown",
+        failure: "response lost",
+        updatedAt: at,
+      });
+      state.origin = "https://github.com/other/checkout.git";
+      state.head = second;
+      state.pr.baseBranch = baseBranch;
+      state.pr.state = prState;
+      state.publications = [publishedChangeRequest({ state: prState, baseRefName: baseBranch })];
+      const recovered = yield* (yield* Delivery.FactoryDeliveryService).reconcile({
+        projectId,
+        intentId: granted.id,
+      });
+      if (recovered.kind !== "publish-pr") return yield* Effect.die("expected publication");
+      assert.equal(recovered.status, "confirmed");
+      assert.deepEqual(recovered.remote, pullRequest);
+      assert.equal(recovered.headSha, first);
+      assert.equal(recovered.baseBranch, baseBranch);
+      assert.deepEqual(recovered.repository, intent.repository);
+      assert.deepEqual(state.publicationLookups, [
+        {
+          cwd: "/worktree",
+          context: {
+            provider: {
+              kind: intent.repository.provider,
+              name: "github",
+              baseUrl: "https://github.com",
+            },
+            remoteName: "origin",
+            remoteUrl: intent.repository.url,
+          },
+          headSelector: "feature",
+          state: "all",
+          limit: 100,
+        },
+      ]);
+      assert.deepEqual(state.calls, []);
+      assert.lengthOf(state.links, 1);
+      assert.deepEqual(Option.getOrThrow(yield* store.get(granted.id)), recovered);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect.each([
+  "missing",
+  "ambiguous",
+  "truncated",
+  "wrong-repository",
+  "wrong-host",
+  "wrong-provider",
+  "wrong-number",
+  "wrong-head",
+  "missing-head",
+  "wrong-base",
+  "unreadable",
+  "unverifiable",
+  "changed-destination",
+] as const)("publication reconciliation preserves unknown on %s evidence", (scenario) => {
+  const { state, layer } = harness();
+  return Effect.gen(function* () {
+    yield* accept;
+    const granted = yield* grant();
+    const store = yield* DeliveryStore.FactoryDeliveryStore;
+    yield* store.settle(granted.id, { status: "unknown", failure: "response lost", updatedAt: at });
+    const candidate = publishedChangeRequest();
+    state.publications = scenario === "missing" ? [] : [candidate];
+    if (scenario === "ambiguous")
+      state.publications = [
+        candidate,
+        publishedChangeRequest({
+          number: 13,
+          url: "https://github.com/owner/repo/pull/13",
+        }),
+      ];
+    if (scenario === "truncated")
+      state.publications = [
+        candidate,
+        ...Array.from({ length: 99 }, (_, index) =>
+          publishedChangeRequest({
+            number: index + 100,
+            url: `https://github.com/owner/repo/pull/${index + 100}`,
+            headSha: second,
+          }),
+        ),
+      ];
+    if (scenario === "wrong-repository")
+      state.publications = [
+        publishedChangeRequest({ url: "https://github.com/other/repo/pull/12" }),
+      ];
+    if (scenario === "wrong-host")
+      state.publications = [
+        publishedChangeRequest({ url: "https://git.example/owner/repo/pull/12" }),
+      ];
+    if (scenario === "wrong-provider")
+      state.publications = [
+        publishedChangeRequest({ provider: SourceControlProviderKind.make("gitlab") }),
+      ];
+    if (scenario === "wrong-number") state.publications = [publishedChangeRequest({ number: 13 })];
+    if (scenario === "wrong-head")
+      state.publications = [publishedChangeRequest({ headSha: second })];
+    if (scenario === "missing-head")
+      state.publications = [publishedChangeRequest({ headSha: undefined })];
+    if (scenario === "wrong-base")
+      state.publications = [publishedChangeRequest({ baseRefName: "another-base" })];
+    if (scenario === "unreadable") state.publicationRead = "fail";
+    if (scenario === "unverifiable") state.read = "fail";
+    if (scenario === "changed-destination") state.pr.baseBranch = "another-base";
+    const recovered = yield* (yield* Delivery.FactoryDeliveryService).reconcile({
+      projectId,
+      intentId: granted.id,
+    });
+    if (recovered.kind !== "publish-pr" || granted.kind !== "publish-pr")
+      return yield* Effect.die("expected publication");
+    assert.equal(recovered.status, "unknown");
+    assert.isNotNull(recovered.failure);
+    assert.deepEqual(recovered.repository, granted.repository);
+    assert.equal(recovered.headSha, granted.headSha);
+    assert.equal(recovered.baseBranch, granted.baseBranch);
+    assert.deepEqual(state.calls, []);
+    assert.deepEqual(state.links, []);
+    assert.equal(
+      (yield* grant({ commandId: "replacement" }).pipe(Effect.flip)).reason,
+      "already-delivering",
+    );
   }).pipe(Effect.provide(layer));
 });
 
@@ -806,28 +1201,32 @@ it.effect(
   },
 );
 
-it.effect("the publish digest is unchanged by the merge-pr kind", () =>
+it.effect("publish and merge digests bind the snapshot and host branch separately", () =>
   Effect.sync(() => {
     assert.equal(
       Delivery.deliveryPayloadDigest({
         kind: "publish-pr",
         repository: intent.repository,
-        baseRef: "main",
+        baseRef: base,
+        baseBranch: "main",
+        baseSha: base,
         headSha: first,
         payload,
       }),
-      "b0e65da5187c802869f5586342d22a39a9769dce8371e50c7fa0ff301a86ae5c",
+      "f2d9c6fb49a5c8b273f52a140f0d2dd0de334a5e1abafa0511f7012b6c2ed355",
     );
     assert.equal(
       Delivery.deliveryPayloadDigest({
         kind: "merge-pr",
         repository: intent.repository,
-        baseRef: "main",
+        baseRef: base,
+        baseBranch: "main",
+        baseSha: base,
         headSha: first,
         payload: { mergeMethod: "squash" },
         pullRequestNumber: pullRequest.number,
       }),
-      "5017e4191eec331b724c07af383d7901bd1d567a4642be91ecd7d428c6767922",
+      "e54180caacae54008dee61df828215d86b1e3abdd9f793b080ae26a0d7cd47e0",
     );
   }),
 );
@@ -909,11 +1308,11 @@ it.effect("prepare merge-pr needs a confirmed publish, then reports the pull req
     assert.deepEqual(squash.payload, { mergeMethod: "squash" });
     assert.equal(
       squash.payloadDigest,
-      "5017e4191eec331b724c07af383d7901bd1d567a4642be91ecd7d428c6767922",
+      "e54180caacae54008dee61df828215d86b1e3abdd9f793b080ae26a0d7cd47e0",
     );
     assert.notEqual((yield* prepareMerge("rebase")).payloadDigest, squash.payloadDigest);
     // Advisory reads may use the shared cache; only a grant and a reconcile drop it.
-    assert.equal(state.invalidations, 0);
+    assert.equal(state.invalidations, 1);
 
     const mismatched = yield* service
       .prepare({ projectId, threadId: claimed, kind: "merge-pr", payload })
@@ -930,6 +1329,9 @@ it.effect(
     const { state, layer } = harness();
     return Effect.gen(function* () {
       yield* published;
+      state.pr.baseBranch = "other-base";
+      assert.equal((yield* grantMerge().pipe(Effect.flip)).reason, "payload-changed");
+      state.pr.baseBranch = "main";
       state.pr.headSha = second;
       assert.equal((yield* grantMerge().pipe(Effect.flip)).reason, "pull-request-head-moved");
       state.pr.headSha = undefined;
@@ -1194,7 +1596,7 @@ it.effect(
         .pipe(Effect.flip);
       assert.equal(refused.reason, "capability-unsupported");
       assert.equal(state.reads, reads);
-      assert.equal(state.invalidations, 0);
+      assert.equal(state.invalidations, 1);
       assert.deepEqual(state.mergeCalls, []);
     }).pipe(Effect.provide(layer));
   },
@@ -1220,7 +1622,9 @@ const artifactHarness = Effect.gen(function* () {
     send: "ok" as "ok" | "definite" | "ambiguous",
     listingFailure: null as IssueTrackerProviderError["reason"] | null,
     failPage: 1,
+    failRead: null as number | null,
     listings: [] as { comments: readonly TrackerIssueComment[]; nextPage: number | null }[],
+    listingResponses: [] as { comments: readonly TrackerIssueComment[]; nextPage: number | null }[],
   };
   const failure = (
     operation: string,
@@ -1265,9 +1669,13 @@ const artifactHarness = Effect.gen(function* () {
     },
     listIssueComments: ({ page }) => {
       host.pages.push(page);
-      return host.listingFailure !== null && page === host.failPage
+      return host.listingFailure !== null &&
+        (host.failRead === null ? page === host.failPage : host.pages.length === host.failRead)
         ? Effect.fail(failure("listIssueComments", host.listingFailure))
-        : Effect.succeed(host.listings[page - 1] ?? { comments: [], nextPage: null });
+        : Effect.succeed(
+            host.listingResponses.shift() ??
+              host.listings[page - 1] ?? { comments: [], nextPage: null },
+          );
     },
   });
   const tracker = { ...fake, capabilities: { ...fake.capabilities } };
@@ -1441,16 +1849,9 @@ it.effect(
           })
           .pipe(Effect.flip);
         assert.equal(refused.reason, "capability-unsupported");
-        assert.deepEqual(h.host, {
-          reads: [],
-          posts: [],
-          pages: [],
-          issue: "ok",
-          send: "ok",
-          listingFailure: null,
-          failPage: 1,
-          listings: [],
-        });
+        assert.deepEqual(h.host.reads, []);
+        assert.deepEqual(h.host.posts, []);
+        assert.deepEqual(h.host.pages, []);
       }),
     ),
 );
@@ -1663,17 +2064,29 @@ it.effect(
         const unknown = Option.getOrThrow(
           yield* (yield* DeliveryStore.FactoryDeliveryStore).get(granted.id),
         );
-        h.host.listings = [{ comments: [], nextPage: 2 }];
+        h.host.listings = [
+          {
+            comments: [{ id: 1, body: "unrelated", url: "https://github.com/comment/1" }],
+            nextPage: 2,
+          },
+        ];
         h.host.failPage = 2;
         h.host.listingFailure = "truncated-response";
-        assert.deepEqual(yield* service.reconcile(request), unknown);
+        const truncated = yield* service.reconcile(request);
+        assert.equal(truncated.status, unknown.status);
+        assert.equal(truncated.failure, "github failed in listIssueComments: fixture response");
         assert.deepEqual(h.host.pages, [1, 2]);
         h.host.pages.length = 0;
         h.host.listingFailure = "failed";
-        assert.deepEqual(yield* service.reconcile(request), unknown);
+        const unread = yield* service.reconcile(request);
+        assert.equal(unread.status, unknown.status);
+        assert.equal(unread.failure, "github failed in listIssueComments: fixture response");
         h.host.listingFailure = null;
+        h.host.listings = [];
+        h.host.pages.length = 0;
         const released = yield* service.reconcile(request);
         assert.equal(released.status, "failed");
+        assert.deepEqual(h.host.pages, [1]);
         h.host.pages.length = 0;
         // The host stores the comment with CRLF line endings and trailing whitespace.
         h.host.listings = [
@@ -1701,6 +2114,233 @@ it.effect(
         assert.deepEqual(h.host.pages, [1, 2]);
         assert.lengthOf(h.host.posts, 1);
         assert.deepEqual(h.state.calls, []);
+      }),
+    ),
+);
+
+it.effect.each([
+  "shifted-marker",
+  "shifted-ids",
+  "later-marker",
+  "interior-ids",
+  "stable",
+] as const)(
+  "artifact reconciliation verifies prefix pages after a multi-page walk: %s",
+  (scenario) =>
+    withArtifact((h) =>
+      Effect.gen(function* () {
+        yield* acceptArtifact(h);
+        h.host.send = "ambiguous";
+        const granted = yield* grantArtifact();
+        if (granted.kind !== "publish-artifact")
+          return yield* Effect.die("expected artifact intent");
+        yield* drain;
+        const comment = (id: number, body = "unrelated"): TrackerIssueComment => ({
+          id,
+          body,
+          url: `https://github.com/owner/repo/issues/7#issuecomment-${id}`,
+        });
+        const page1 = { comments: [comment(1), comment(2)], nextPage: 2 };
+        const page2 = { comments: [comment(4), comment(5), comment(7)], nextPage: 3 };
+        // Deleting comment 1 shifts comment 3 left, out of page 2 before it is read.
+        h.host.listingResponses = [
+          page1,
+          page2,
+          { comments: [comment(8)], nextPage: null },
+          scenario !== "shifted-marker" && scenario !== "shifted-ids"
+            ? page1
+            : {
+                comments: [
+                  comment(2),
+                  comment(3, scenario === "shifted-marker" ? granted.body : "unrelated"),
+                ],
+                nextPage: 2,
+              },
+          scenario === "later-marker"
+            ? { ...page2, comments: [comment(4), comment(5, granted.body), comment(7)] }
+            : scenario === "interior-ids"
+              ? { ...page2, comments: [comment(4), comment(6), comment(7)] }
+              : page2,
+        ];
+        const reconciled = yield* (yield* Delivery.FactoryDeliveryService).reconcile({
+          projectId,
+          intentId: granted.id,
+        });
+        assert.equal(
+          reconciled.status,
+          scenario === "shifted-marker" || scenario === "later-marker"
+            ? "confirmed"
+            : scenario === "shifted-ids" || scenario === "interior-ids"
+              ? "unknown"
+              : "failed",
+        );
+        assert.equal(
+          reconciled.failure,
+          scenario === "shifted-marker" || scenario === "later-marker"
+            ? null
+            : scenario === "shifted-ids" || scenario === "interior-ids"
+              ? "Comment listing changed during reconciliation; reconcile again."
+              : "no matching artifact comment found",
+        );
+        assert.deepEqual(
+          reconciled.remote,
+          scenario === "shifted-marker"
+            ? { commentId: 3, url: comment(3).url }
+            : scenario === "later-marker"
+              ? { commentId: 5, url: comment(5).url }
+              : null,
+        );
+        assert.deepEqual(
+          h.host.pages,
+          scenario === "shifted-marker" || scenario === "shifted-ids"
+            ? [1, 2, 3, 1]
+            : [1, 2, 3, 1, 2],
+        );
+        assert.lengthOf(h.host.posts, 1);
+      }),
+    ),
+);
+
+it.effect.each([1, 2])(
+  "artifact reconciliation confirms an exact marker despite an unreliable next page: %s",
+  (nextPage) =>
+    withArtifact((h) =>
+      Effect.gen(function* () {
+        yield* acceptArtifact(h);
+        h.host.send = "ambiguous";
+        const granted = yield* grantArtifact();
+        if (granted.kind !== "publish-artifact")
+          return yield* Effect.die("expected artifact intent");
+        yield* drain;
+        const remote = {
+          commentId: 92,
+          url: "https://github.com/owner/repo/issues/7#issuecomment-92",
+        };
+        h.host.listings = [
+          {
+            comments: [{ id: remote.commentId, url: remote.url, body: granted.body }],
+            nextPage,
+          },
+        ];
+        h.host.failPage = 2;
+        h.host.listingFailure = "failed";
+        const reconciled = yield* (yield* Delivery.FactoryDeliveryService).reconcile({
+          projectId,
+          intentId: granted.id,
+        });
+        assert.equal(reconciled.status, "confirmed");
+        assert.deepEqual(reconciled.remote, remote);
+        assert.deepEqual(h.host.pages, [1]);
+      }),
+    ),
+);
+
+it.effect.each([
+  "empty-page",
+  "backward-page",
+  "skipped-page",
+  "reversed-ids",
+  "duplicate-ids",
+  "overlapping-ids",
+  "verification-error",
+] as const)("artifact reconciliation preserves unknown on an inconclusive %s", (scenario) =>
+  withArtifact((h) =>
+    Effect.gen(function* () {
+      yield* acceptArtifact(h);
+      h.host.send = "ambiguous";
+      const granted = yield* grantArtifact();
+      yield* drain;
+      h.host.listings = [
+        {
+          comments: (scenario === "reversed-ids"
+            ? [2, 1]
+            : scenario === "duplicate-ids"
+              ? [1, 1]
+              : [1]
+          ).map((id) => ({ id, body: "unrelated", url: `https://github.com/comment/${id}` })),
+          nextPage: scenario === "skipped-page" ? 3 : 2,
+        },
+        {
+          comments:
+            scenario === "empty-page"
+              ? []
+              : [
+                  {
+                    id: scenario === "overlapping-ids" ? 1 : 2,
+                    body: "unrelated",
+                    url: "https://github.com/comment/2",
+                  },
+                ],
+          nextPage: scenario === "backward-page" ? 1 : null,
+        },
+      ];
+      if (scenario === "verification-error") {
+        h.host.listingFailure = "failed";
+        h.host.failRead = 3;
+      }
+      const reconciled = yield* (yield* Delivery.FactoryDeliveryService).reconcile({
+        projectId,
+        intentId: granted.id,
+      });
+      assert.equal(reconciled.status, "unknown");
+      assert.isNull(reconciled.remote);
+      if (scenario === "verification-error") {
+        assert.equal(reconciled.failure, "github failed in listIssueComments: fixture response");
+        assert.deepEqual(h.host.pages, [1, 2, 1]);
+      } else {
+        assert.equal(
+          reconciled.failure,
+          "Comment listing did not advance cleanly; reconcile again.",
+        );
+      }
+    }),
+  ),
+);
+
+it.effect.each(["pending", "confirmed"] as const)(
+  "late artifact discovery preserves a %s replacement and records the old comment",
+  (status) =>
+    withArtifact((h) =>
+      Effect.gen(function* () {
+        yield* acceptArtifact(h);
+        h.host.send = "ambiguous";
+        const first = yield* grantArtifact({ commandId: "grant-a" });
+        if (first.kind !== "publish-artifact") return yield* Effect.die("expected artifact intent");
+        yield* drain;
+        const service = yield* Delivery.FactoryDeliveryService;
+        const store = yield* DeliveryStore.FactoryDeliveryStore;
+        assert.equal(
+          (yield* service.reconcile({ projectId, intentId: first.id })).status,
+          "failed",
+        );
+        h.host.send = "ok";
+        const replacement = yield* grantArtifact({ commandId: "grant-b" });
+        if (status === "confirmed") yield* drain;
+        const before = Option.getOrThrow(yield* store.get(replacement.id));
+        assert.equal(before.status, status);
+        const remote = {
+          commentId: 92,
+          url: "https://github.com/owner/repo/issues/7#issuecomment-92",
+        };
+        h.host.listings = [
+          {
+            comments: [{ id: remote.commentId, url: remote.url, body: first.body }],
+            nextPage: null,
+          },
+        ];
+        const reconciled = yield* service.reconcile({ projectId, intentId: first.id });
+        assert.equal(reconciled.status, "failed");
+        assert.deepEqual(reconciled.remote, remote);
+        assert.equal(
+          reconciled.failure,
+          `Remote delivery found, but replacement delivery ${replacement.id} already holds the live slot.`,
+        );
+        assert.deepEqual(Option.getOrThrow(yield* store.get(first.id)), reconciled);
+        assert.deepEqual(Option.getOrThrow(yield* store.get(replacement.id)), before);
+        assert.deepEqual(
+          Option.getOrThrow(yield* store.getLiveArtifact(first.originKey, first.destinationKey)),
+          before,
+        );
       }),
     ),
 );

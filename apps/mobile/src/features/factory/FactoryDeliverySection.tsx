@@ -371,8 +371,9 @@ function PublishSection(props: {
           {prepared ? (
             <Text selectable className="text-xs text-foreground-muted">
               {factoryRepositoryLabel(prepared.repository)} · head{" "}
-              {shortFactorySha(prepared.headSha)} into {prepared.baseRef} · preview{" "}
-              {prepared.payloadDigest.slice(0, 12)}
+              {shortFactorySha(prepared.headSha)} into{" "}
+              {prepared.baseBranch ?? "no reviewed destination"} · snapshot{" "}
+              {shortFactorySha(prepared.baseRef)} · preview {prepared.payloadDigest.slice(0, 12)}
             </Text>
           ) : null}
           {delivery.previewFailure ? <FailureNotice failure={delivery.previewFailure} /> : null}

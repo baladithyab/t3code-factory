@@ -56,6 +56,7 @@ import { makeRepositoryResolver } from "./FactoryTaskLaunch.ts";
 import { IssueTrackerProviderRegistry } from "./IssueTrackerProviderRegistry.ts";
 
 const FAILURE_MAX_CHARS = 1000;
+const PUBLICATION_LOOKUP_LIMIT = 100;
 
 // Only these GitHub rejections prove no write occurred; all other failures stay unknown.
 // Other hosts cannot publish until their definite rejections are classified here.
@@ -148,6 +149,8 @@ export const deliveryPayloadDigest = (
   input: {
     readonly repository: FactoryRepository;
     readonly baseRef: string;
+    readonly baseBranch: string | null;
+    readonly baseSha: string;
     readonly headSha: string;
   } & (
     | { readonly kind: "publish-pr"; readonly payload: FactoryDeliveryPublishPayload }
@@ -166,6 +169,10 @@ export const deliveryPayloadDigest = (
               input.kind,
               input.repository.canonicalKey,
               input.baseRef,
+              input.baseBranch,
+              input.baseSha,
+              input.repository.provider,
+              input.repository.host,
               input.headSha,
               input.pullRequestNumber,
               input.payload.mergeMethod,
@@ -174,6 +181,10 @@ export const deliveryPayloadDigest = (
               input.kind,
               input.repository.canonicalKey,
               input.baseRef,
+              input.baseBranch,
+              input.baseSha,
+              input.repository.provider,
+              input.repository.host,
               input.headSha,
               input.payload.title,
               input.payload.body,
@@ -302,6 +313,17 @@ const makeService = Effect.gen(function* () {
       return yield* new FactoryDeliveryError({ reason: "capability-unsupported" });
     if (read.acceptance === null || read.acceptance.originKey !== origin.value.originKey)
       return yield* new FactoryDeliveryError({ reason: "not-accepted" });
+    if (!read.acceptance.baseBranch || read.acceptance.baseBranch !== origin.value.baseBranch)
+      return yield* new FactoryDeliveryError({ reason: "missing-base-branch" });
+    const live = yield* resolveRepository(input.projectId).pipe(
+      Effect.mapError(() => new FactoryDeliveryError({ reason: "repository-changed" })),
+    );
+    if (
+      live.repository.canonicalKey !== origin.value.repository.canonicalKey ||
+      live.repository.host !== origin.value.repository.host ||
+      live.repository.provider !== origin.value.repository.provider
+    )
+      return yield* new FactoryDeliveryError({ reason: "repository-changed" });
     return {
       origin: origin.value,
       acceptance: read.acceptance,
@@ -551,6 +573,7 @@ const makeService = Effect.gen(function* () {
       current: true,
       repository: seen.origin.repository,
       baseRef: seen.acceptance.baseRef,
+      baseBranch: seen.acceptance.baseBranch ?? null,
       headSha: seen.acceptance.headSha,
       existing: Option.getOrNull(existing),
     };
@@ -562,6 +585,8 @@ const makeService = Effect.gen(function* () {
           kind: target.kind,
           repository: seen.origin.repository,
           baseRef: seen.acceptance.baseRef,
+          baseBranch: seen.acceptance.baseBranch ?? null,
+          baseSha: seen.acceptance.baseSha,
           headSha: seen.acceptance.headSha,
           payload: target.payload,
         }),
@@ -579,6 +604,8 @@ const makeService = Effect.gen(function* () {
         kind: target.kind,
         repository: seen.origin.repository,
         baseRef: seen.acceptance.baseRef,
+        baseBranch: seen.acceptance.baseBranch ?? null,
+        baseSha: seen.acceptance.baseSha,
         headSha: seen.acceptance.headSha,
         payload: target.payload,
         pullRequestNumber: remote.number,
@@ -601,6 +628,24 @@ const makeService = Effect.gen(function* () {
         return yield* new FactoryDeliveryError({ reason: "intent-not-found" });
       if (replay.value.payloadDigest !== input.expectedPayloadDigest)
         return yield* new FactoryDeliveryError({ reason: "payload-changed" });
+      if (input.kind !== "publish-artifact" && replay.value.kind !== "publish-artifact") {
+        if (input.expectedHeadSha !== replay.value.headSha)
+          return yield* new FactoryDeliveryError({ reason: "head-moved" });
+        const target = targetOf(input);
+        const stored = targetOf(replay.value);
+        if (
+          target === null ||
+          stored === null ||
+          (target.kind === "publish-pr" && stored.kind === "publish-pr"
+            ? target.payload.title !== stored.payload.title ||
+              target.payload.body !== stored.payload.body ||
+              target.payload.draft !== stored.payload.draft
+            : target.kind === "merge-pr" && stored.kind === "merge-pr"
+              ? target.payload.mergeMethod !== stored.payload.mergeMethod
+              : true)
+        )
+          return yield* new FactoryDeliveryError({ reason: "payload-changed" });
+      }
       return replay.value;
     }
     if (input.kind === "publish-artifact") return yield* grantArtifact(input);
@@ -633,6 +678,8 @@ const makeService = Effect.gen(function* () {
       const common = {
         repository: seen.origin.repository,
         baseRef: seen.acceptance.baseRef,
+        baseBranch: seen.acceptance.baseBranch ?? null,
+        baseSha: seen.acceptance.baseSha,
         headSha,
       };
       if (target.kind === "publish-pr") {
@@ -649,6 +696,8 @@ const makeService = Effect.gen(function* () {
       if (pullRequest === null || pullRequest.number !== published.number)
         return yield* new FactoryDeliveryError({ reason: "not-published" });
       const { detail } = pullRequest;
+      if (detail.baseBranch !== seen.acceptance.baseBranch)
+        return yield* new FactoryDeliveryError({ reason: "payload-changed" });
       if (detail.state === "merged")
         return yield* new FactoryDeliveryError({ reason: "already-merged" });
       if (detail.headSha !== headSha)
@@ -682,6 +731,7 @@ const makeService = Effect.gen(function* () {
       acceptanceId: validated.acceptance.id,
       repository: validated.origin.repository,
       baseRef: validated.acceptance.baseRef,
+      baseBranch: validated.acceptance.baseBranch ?? null,
       baseSha: validated.acceptance.baseSha,
       headSha: validated.acceptance.headSha,
       payload: target.payload,
@@ -768,14 +818,34 @@ const makeService = Effect.gen(function* () {
   const confirm = Effect.fn("FactoryDeliveryService.confirm")(function* (
     intent: FactoryCommitDeliveryIntent,
     remote: { readonly number: number; readonly url: string },
+    mismatchStatus: "failed" | "unknown" = "failed",
   ) {
+    const detail = yield* Effect.result(
+      readPullRequest(pullRequestRef(intent.projectId, intent.repository, remote.number), {
+        fresh: true,
+      }),
+    );
+    const status =
+      detail._tag === "Failure"
+        ? "unknown"
+        : !intent.baseBranch ||
+            detail.success.baseBranch !== intent.baseBranch ||
+            detail.success.headSha !== intent.headSha
+          ? mismatchStatus
+          : "confirmed";
     const settled = yield* store.settle(intent.id, {
-      status: "confirmed",
+      status,
       remote,
-      failure: null,
+      failure:
+        status === "unknown"
+          ? "could not verify pull request destination"
+          : status === "failed"
+            ? "pull-request-target-mismatch"
+            : null,
       updatedAt: yield* nowIso,
     });
-    yield* linkPullRequest(intent, remote);
+    if (Option.isSome(settled) && settled.value.status === "confirmed")
+      yield* linkPullRequest(intent, remote);
     return Option.getOrElse(settled, () => intent);
   });
 
@@ -791,16 +861,51 @@ const makeService = Effect.gen(function* () {
     const fail = (failure: string) => settle(intent, "failed", failure);
     const { payload } = intent;
     if (isMergePayload(payload)) return yield* fail("payload does not match the delivery kind");
+    if (!intent.baseBranch) return yield* fail("missing-base-branch");
     const shell = yield* threads
       .getThreadShell(intent.threadId)
       .pipe(Effect.mapError(persistenceFailure));
     const worktree = shell === null ? null : worktreeOf(shell);
     if (worktree === null) return yield* fail("worktree-unavailable");
+    const destination = yield* Effect.result(resolveRepository(intent.projectId, worktree));
+    if (
+      destination._tag === "Failure" ||
+      destination.success.repository.canonicalKey !== intent.repository.canonicalKey ||
+      destination.success.repository.host !== intent.repository.host ||
+      destination.success.repository.provider !== intent.repository.provider
+    )
+      return yield* fail("repository-changed");
     const observed = yield* Effect.result(
       acceptance.read({ projectId: intent.projectId, threadId: intent.threadId }),
     );
     if (observed._tag === "Failure") return yield* fail("worktree-unavailable");
     if (observed.success.liveHeadSha !== intent.headSha) return yield* fail("head-moved");
+    const [owner, repository, ...rest] = intent.repository.repository.split("/");
+    if (!owner || !repository || rest.length > 0) return yield* fail("repository-changed");
+
+    const context = {
+      provider: {
+        kind: intent.repository.provider,
+        name: intent.repository.provider,
+        baseUrl: `https://${intent.repository.host}`,
+      },
+      remoteName: "origin",
+      remoteUrl: intent.repository.url,
+    };
+    const provider = yield* Effect.result(providers.resolveHandle({ cwd: worktree, context }));
+    if (provider._tag === "Failure")
+      return yield* fail(describe("no source control provider", provider.failure));
+    if (provider.success.provider.kind !== intent.repository.provider)
+      return yield* fail("repository-changed");
+    if (
+      provider.success.provider.createsChangeRequestsIn &&
+      !(yield* provider.success.provider.createsChangeRequestsIn({
+        cwd: worktree,
+        context,
+        repository: intent.repository.repository,
+      }))
+    )
+      return yield* fail("repository-changed");
 
     // Publishing sets the upstream, which the open-pull-request lookup needs to resolve the head.
     const pushed = yield* Effect.result(git.pushCurrentBranch(worktree, null));
@@ -817,9 +922,6 @@ const makeService = Effect.gen(function* () {
       return;
     }
 
-    const provider = yield* Effect.result(providers.resolve({ cwd: worktree }));
-    if (provider._tag === "Failure")
-      return yield* fail(describe("no source control provider", provider.failure));
     const bodyFile = path.join(
       tempDir,
       `t3code-delivery-body-${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}.md`,
@@ -829,10 +931,12 @@ const makeService = Effect.gen(function* () {
       return yield* fail(describe("could not write the pull request body", written.failure));
     // From here the request may reach the forge: only a definite rejection proves it did not.
     const created = yield* Effect.result(
-      provider.success
+      provider.success.provider
         .createChangeRequest({
           cwd: worktree,
-          baseRefName: intent.baseRef,
+          context,
+          target: { owner, repository, refName: intent.baseBranch },
+          baseRefName: intent.baseBranch,
           headSelector: before.success.headSelector,
           title: payload.title,
           bodyFile,
@@ -877,6 +981,13 @@ const makeService = Effect.gen(function* () {
     const { remote, payload } = intent;
     if (remote === null || !isMergePayload(payload))
       return yield* settle(intent, "failed", "merge intent is missing its pull request");
+    if (!intent.baseBranch) return yield* settle(intent, "failed", "missing-base-branch");
+    const detail = yield* readPullRequest(
+      pullRequestRef(intent.projectId, intent.repository, remote.number),
+      { fresh: true },
+    );
+    if (detail.baseBranch !== intent.baseBranch)
+      return yield* settle(intent, "failed", "pull-request-target-mismatch");
     const merged = yield* Effect.result(
       pullRequests.runAction({
         ...pullRequestRef(intent.projectId, intent.repository, remote.number),
@@ -904,8 +1015,7 @@ const makeService = Effect.gen(function* () {
     );
     if (looked._tag === "Success" && looked.success.state === "merged")
       return yield* confirmMerged(intent, intent.remote);
-    // As for a publish: a failed read proves nothing, so the status stays; a successful read of a
-    // pull request that is not merged means the send did not land, and releases the origin.
+    // A failed read proves nothing; an unmerged pull request releases the merge slot.
     const refreshed = yield* store.settle(intent.id, {
       status: looked._tag === "Failure" ? intent.status : "failed",
       failure: (looked._tag === "Failure"
@@ -969,8 +1079,19 @@ const makeService = Effect.gen(function* () {
       .getById(intent.projectId)
       .pipe(Effect.mapError(persistenceFailure));
     if (Option.isNone(project)) return intent;
+    const settleReconciliation = Effect.fn("FactoryDeliveryService.settleArtifactReconciliation")(
+      function* (status: FactoryArtifactDeliveryIntent["status"], failure: string) {
+        const settled = yield* store.settle(intent.id, {
+          status,
+          failure: failure.slice(0, FAILURE_MAX_CHARS),
+          updatedAt: yield* nowIso,
+        });
+        return Option.getOrElse(settled, () => intent);
+      },
+    );
+    const firstPassIds: { page: number; ids: readonly number[] }[] = [];
+    let lastCommentId = 0;
     let page = 1;
-    let remote: FactoryArtifactDeliveryRemote | null = null;
     while (true) {
       const listed = yield* Effect.result(
         tracker.listIssueComments({
@@ -981,23 +1102,66 @@ const makeService = Effect.gen(function* () {
           page,
         }),
       );
-      if (listed._tag === "Failure") return intent;
+      if (listed._tag === "Failure")
+        return yield* settleReconciliation(intent.status, listed.failure.message);
       const match = listed.success.comments.find((comment) =>
         carriesDeliveryMarker(comment.body, intent.body),
       );
-      if (remote === null && match !== undefined) remote = { commentId: match.id, url: match.url };
+      if (match !== undefined)
+        return yield* confirmArtifact(intent, { commentId: match.id, url: match.url });
+      if (
+        (listed.success.comments.length === 0 && (page > 1 || listed.success.nextPage !== null)) ||
+        (listed.success.nextPage !== null && listed.success.nextPage !== page + 1)
+      )
+        return yield* settleReconciliation(
+          intent.status,
+          "Comment listing did not advance cleanly; reconcile again.",
+        );
+      const ids = listed.success.comments.map((comment) => comment.id);
+      // The offset walk assumes ascending creation order, including across page boundaries.
+      for (const id of ids) {
+        if (id <= lastCommentId)
+          return yield* settleReconciliation(
+            intent.status,
+            "Comment listing did not advance cleanly; reconcile again.",
+          );
+        lastCommentId = id;
+      }
+      firstPassIds.push({ page, ids });
       if (listed.success.nextPage === null) break;
-      // A non-advancing cursor cannot prove absence; it is an incomplete listing.
-      if (listed.success.nextPage <= page) return intent;
       page = listed.success.nextPage;
     }
-    if (remote !== null) return yield* confirmArtifact(intent, remote);
-    const settled = yield* store.settle(intent.id, {
-      status: "failed",
-      failure: "no matching artifact comment found",
-      updatedAt: yield* nowIso,
-    });
-    return Option.getOrElse(settled, () => intent);
+    // Deletions can shift a comment into a page already read. A single response needs no
+    // verification; a multi-page absence is conclusive only while its prefix stays stable.
+    for (const previous of firstPassIds.slice(0, -1)) {
+      const reread = yield* Effect.result(
+        tracker.listIssueComments({
+          cwd: project.value.workspaceRoot,
+          host: intent.repository.host,
+          repository: intent.repository.repository,
+          number: intent.payload.issueNumber,
+          page: previous.page,
+        }),
+      );
+      if (reread._tag === "Failure")
+        return yield* settleReconciliation(intent.status, reread.failure.message);
+      const match = reread.success.comments.find((comment) =>
+        carriesDeliveryMarker(comment.body, intent.body),
+      );
+      if (match !== undefined)
+        return yield* confirmArtifact(intent, { commentId: match.id, url: match.url });
+      const ids = reread.success.comments.map((comment) => comment.id);
+      if (
+        reread.success.nextPage !== previous.page + 1 ||
+        ids.length !== previous.ids.length ||
+        ids.some((id, index) => id !== previous.ids[index])
+      )
+        return yield* settleReconciliation(
+          intent.status,
+          "Comment listing changed during reconciliation; reconcile again.",
+        );
+    }
+    return yield* settleReconciliation("failed", "no matching artifact comment found");
   });
 
   const execute = Effect.fn("FactoryDeliveryService.execute")(function* (intentId: string) {
@@ -1027,6 +1191,14 @@ const makeService = Effect.gen(function* () {
     if (intent.status !== "unknown" && intent.status !== "failed")
       return yield* new FactoryDeliveryError({ reason: "not-reconcilable" });
     if (intent.kind === "publish-artifact") return yield* reconcileArtifact(intent);
+    if (intent.status === "failed") {
+      const live = yield* store.getLive(intent.originKey, intent.kind);
+      if (Option.isSome(live) && live.value.id !== intent.id)
+        return yield* new FactoryDeliveryError({
+          reason: "not-reconcilable",
+          replacementDeliveryId: live.value.id,
+        });
+    }
     if (intent.kind === "merge-pr") return yield* reconcileMerge(intent);
     const shell = yield* threads
       .getThreadShell(intent.threadId)
@@ -1034,19 +1206,61 @@ const makeService = Effect.gen(function* () {
     const worktree = shell === null ? null : worktreeOf(shell);
     if (worktree === null)
       return yield* new FactoryDeliveryError({ reason: "worktree-unavailable" });
-    const looked = yield* Effect.result(gitManager.findOpenPullRequestForHead(worktree));
-    if (looked._tag === "Success" && Option.isSome(looked.success.open))
-      return yield* confirm(intent, looked.success.open.value);
-    // A lookup that itself failed proves nothing, so the status stays. A lookup that succeeded
-    // and found no open pull request is the human's answer: the send did not land, and the
-    // origin is released for a new grant. Without this an `unknown` intent would block the
-    // origin forever.
+    const looked = yield* Effect.result(
+      Effect.gen(function* () {
+        const context = {
+          provider: {
+            kind: intent.repository.provider,
+            name: intent.repository.provider,
+            baseUrl: `https://${intent.repository.host}`,
+          },
+          remoteName: "origin",
+          remoteUrl: intent.repository.url,
+        };
+        const { provider } = yield* providers.resolveHandle({ cwd: worktree, context });
+        if (provider.kind !== intent.repository.provider)
+          return yield* new FactoryDeliveryError({ reason: "repository-changed" });
+        const { headSelector } = yield* gitManager.findOpenPullRequestForHead(worktree);
+        return yield* provider.listChangeRequests({
+          cwd: worktree,
+          context,
+          headSelector,
+          state: "all",
+          limit: PUBLICATION_LOOKUP_LIMIT,
+        });
+      }),
+    );
+    const matches =
+      looked._tag === "Failure"
+        ? []
+        : looked.success.filter((candidate) => {
+            const parsed = sourceControlDefinitions.parseChangeRequestUrl(candidate.url);
+            return (
+              candidate.provider === intent.repository.provider &&
+              candidate.headSha === intent.headSha &&
+              candidate.baseRefName === intent.baseBranch &&
+              parsed?.definition.kind === intent.repository.provider &&
+              parsed.link.number === candidate.number &&
+              parsed.link.host === intent.repository.host &&
+              sourceControlDefinitions.canonicalRepositoryKey(
+                `${parsed.link.host}/${parsed.link.repository}`,
+              ) === intent.repository.canonicalKey
+            );
+          });
+    const truncated =
+      looked._tag === "Success" && looked.success.length >= PUBLICATION_LOOKUP_LIMIT;
+    if (!truncated && matches.length === 1) return yield* confirm(intent, matches[0]!, "unknown");
+    // Bounded head listings cannot prove absence: the PR may have merged, moved or aged out.
     const reason =
       looked._tag === "Failure"
         ? describe("could not read pull requests", looked.failure)
-        : "no open pull request found for this head";
+        : truncated
+          ? "pull request listing may be truncated; publication remains unverified"
+          : matches.length > 1
+            ? "multiple pull requests match this publication; attribution is ambiguous"
+            : "no matching pull request found; publication remains unverified";
     const refreshed = yield* store.settle(intent.id, {
-      status: looked._tag === "Failure" ? intent.status : "failed",
+      status: intent.status,
       failure: reason.slice(0, FAILURE_MAX_CHARS),
       updatedAt: yield* nowIso,
     });

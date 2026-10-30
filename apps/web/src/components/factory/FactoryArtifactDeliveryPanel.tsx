@@ -357,22 +357,20 @@ export function FactoryArtifactDeliveryPanel(props: {
                   {status}
                 </Badge>
               ) : intent.status === "confirmed" ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="secondary">{status}</Badge>
-                  {href !== null ? (
-                    <a
-                      href={href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline underline-offset-4"
-                    >
-                      View comment
-                    </a>
-                  ) : null}
-                </div>
+                <Badge variant="secondary">{status}</Badge>
               ) : (
                 <p className="[overflow-wrap:anywhere]">{status}</p>
               )}
+              {href !== null ? (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline underline-offset-4"
+                >
+                  View comment
+                </a>
+              ) : null}
               {intent.status === "unknown" || intent.status === "failed" ? (
                 <Button
                   size="xs"

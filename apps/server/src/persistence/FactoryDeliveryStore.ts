@@ -114,7 +114,7 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const columns = sql.literal(`id, origin_key AS originKey, thread_id AS threadId,
     project_id AS projectId, kind, acceptance_id AS acceptanceId, repository_json AS repository,
-    base_ref AS baseRef, base_sha AS baseSha, head_sha AS headSha, payload_json AS payload,
+    base_ref AS baseRef, base_branch AS baseBranch, base_sha AS baseSha, head_sha AS headSha, payload_json AS payload,
     payload_digest AS payloadDigest, granted_by AS grantedBy, granted_at AS grantedAt,
     request_command_id AS requestCommandId, status, remote_json AS remote, failure,
     updated_at AS updatedAt`);
@@ -262,11 +262,11 @@ const make = Effect.gen(function* () {
         } else {
           yield* sql`INSERT INTO factory_delivery_intents
             (id, origin_key, thread_id, project_id, kind, acceptance_id, repository_json, base_ref,
-             base_sha, head_sha, payload_json, payload_digest, granted_by, granted_at,
+             base_branch, base_sha, head_sha, payload_json, payload_digest, granted_by, granted_at,
              request_command_id, status, remote_json, failure, updated_at)
             VALUES (${intent.id}, ${intent.originKey}, ${intent.threadId}, ${intent.projectId},
               ${intent.kind}, ${intent.acceptanceId}, ${repository}, ${intent.baseRef},
-              ${intent.baseSha}, ${intent.headSha}, ${payload}, ${intent.payloadDigest},
+              ${intent.baseBranch ?? null}, ${intent.baseSha}, ${intent.headSha}, ${payload}, ${intent.payloadDigest},
               ${intent.grantedBy}, ${intent.grantedAt}, ${intent.requestCommandId}, 'pending',
               ${remote}, NULL, ${intent.updatedAt})
             ON CONFLICT DO NOTHING`;
@@ -295,18 +295,49 @@ const make = Effect.gen(function* () {
     id: string,
     settlement: FactoryDeliverySettlement,
   ) {
-    const remote = settlement.remote === undefined ? null : yield* encodeRemote(settlement.remote);
-    // `confirmed` is terminal: a late reconcile or a retried execute never rewrites it. A
-    // settlement without a remote keeps the one set at grant, which a merge needs to retry.
-    yield* sql`UPDATE factory_delivery_intents
-      SET status = ${settlement.status}, remote_json = COALESCE(${remote}, remote_json),
-        failure = ${settlement.failure}, updated_at = ${settlement.updatedAt}
-      WHERE id = ${id} AND status <> 'confirmed'`;
-    yield* sql`UPDATE factory_artifact_deliveries
-      SET status = ${settlement.status}, remote_json = COALESCE(${remote}, remote_json),
-        failure = ${settlement.failure}, updated_at = ${settlement.updatedAt}
-      WHERE id = ${id} AND status <> 'confirmed'`;
-    return yield* get(id);
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const found = yield* get(id);
+        if (Option.isNone(found) || found.value.status === "confirmed") return found;
+        const current = found.value;
+        let remote =
+          settlement.remote === undefined ? null : yield* encodeRemote(settlement.remote);
+        // An inconclusive read cannot undo an earlier release of the live slot.
+        let effectiveStatus =
+          current.status === "failed" && settlement.status === "unknown"
+            ? "failed"
+            : settlement.status;
+        let failure = settlement.failure;
+        if (effectiveStatus !== "failed") {
+          const live =
+            current.kind === "publish-artifact"
+              ? Option.getOrNull(yield* getLiveArtifact(current.originKey, current.destinationKey))
+              : Option.getOrNull(yield* getLive(current.originKey, current.kind));
+          if (live !== null && live.id !== current.id) {
+            effectiveStatus = "failed";
+            if (current.kind === "publish-artifact") {
+              // The exact attempt marker identifies the old comment despite the replacement.
+              failure ??= settlement.remote
+                ? `Remote delivery found, but replacement delivery ${live.id} already holds the live slot.`
+                : `Replacement delivery ${live.id} already holds the live slot.`;
+            } else {
+              // Head-based PR reads cannot distinguish this attempt from its replacement.
+              remote = null;
+              failure ??= `Replacement delivery ${live.id} already holds the live slot; its remote cannot be attributed to this attempt.`;
+            }
+          }
+        }
+        const table =
+          current.kind === "publish-artifact"
+            ? sql("factory_artifact_deliveries")
+            : sql("factory_delivery_intents");
+        yield* sql`UPDATE ${table}
+          SET status = ${effectiveStatus}, remote_json = COALESCE(${remote}, remote_json),
+            failure = ${failure}, updated_at = ${settlement.updatedAt}
+          WHERE id = ${id}`;
+        return yield* get(id);
+      }),
+    );
   }, Effect.mapError(persistenceError));
   const recoverInterrupted = Effect.fn("FactoryDeliveryStore.recoverInterrupted")(function* (
     updatedAt: string,

@@ -78,6 +78,7 @@ export function factoryDeliveryFailureMessage(
       case "not-accepted":
         return "Accept the current commit, then prepare again.";
       case "not-reconcilable":
+        if (error.replacementDeliveryId !== undefined) return error.message;
         return "This delivery can no longer be reconciled. Refresh its status.";
       case "intent-not-found":
         return "This delivery is no longer available. Refresh its status.";
@@ -203,6 +204,8 @@ export function describeDeliveryStatus(
     case "confirmed":
       return labels.done;
     case "unknown":
+      if (intent.kind === "publish-artifact" && intent.failure?.trim())
+        return `${intent.failure} Reconcile to check ${displayName}.`;
       return `The server lost the response. Reconcile to check ${displayName}.`;
     case "failed":
       return intent.failure ?? labels.failed;

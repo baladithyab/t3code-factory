@@ -26,6 +26,7 @@ const acceptance = (id: string, overrides: Partial<FactoryAcceptance> = {}): Fac
   projectId: ProjectId.make("project"),
   headSha: "a".repeat(40),
   baseRef: "main",
+  baseBranch: null,
   baseSha: "b".repeat(40),
   acceptedAt: "2026-10-27T00:00:00.000Z",
   acceptedBy: EnvironmentId.make("environment"),

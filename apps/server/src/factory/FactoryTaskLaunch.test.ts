@@ -8,11 +8,75 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as Identities from "../project/RepositoryIdentityResolver.ts";
 import * as Projects from "../project/ProjectService.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
-import { makeRepositoryResolver } from "./FactoryTaskLaunch.ts";
+import { makeRepositoryResolver, makeBaseResolver } from "./FactoryTaskLaunch.ts";
 import { issueTrackersLayer } from "./IssueTrackerProviderRegistry.testkit.ts";
 
 const projectId = ProjectId.make("origin-refinement");
 const at = "2026-10-29T00:00:00.000Z";
+
+it.effect.each([
+  { revision: "main", symbolic: "refs/heads/main", remote: "origin", branch: "main" },
+  {
+    revision: "refs/heads/stable",
+    symbolic: "refs/heads/stable",
+    remote: "origin",
+    branch: "stable",
+  },
+  { revision: undefined, symbolic: "refs/heads/main", remote: "origin", branch: "main" },
+  { revision: "HEAD", symbolic: "refs/heads/main", remote: "origin", branch: "main" },
+  {
+    revision: "origin/stable",
+    symbolic: "refs/remotes/origin/stable",
+    remote: "origin",
+    branch: "stable",
+  },
+  { revision: "origin/HEAD", symbolic: "refs/remotes/origin/HEAD", remote: "origin", branch: null },
+  {
+    revision: "upstream/main",
+    symbolic: "refs/remotes/upstream/main",
+    remote: "upstream",
+    branch: null,
+  },
+  { revision: "local", symbolic: "refs/heads/local", remote: "upstream", branch: null },
+  { revision: "v1", symbolic: "refs/tags/v1", remote: "origin", branch: null },
+  { revision: "a".repeat(40), symbolic: "", remote: "origin", branch: null },
+  { revision: "HEAD", symbolic: "HEAD", remote: "origin", branch: null },
+  {
+    revision: "local-only",
+    symbolic: "refs/heads/local-only",
+    remote: "origin",
+    branch: null,
+    missing: true,
+  },
+])("freezes $revision independently of its origin branch destination ($symbolic, $remote)", (row) =>
+  Effect.gen(function* () {
+    const pinned = yield* (yield* makeBaseResolver)("/repo", row.revision);
+    assert.deepEqual(pinned, { baseRef: "a".repeat(40), baseBranch: row.branch });
+  }).pipe(
+    Effect.provide(
+      Layer.mock(Git.GitVcsDriver)({
+        resolveCommit: ({ revision }) => {
+          assert.equal(
+            revision,
+            row.symbolic.startsWith("refs/") ? row.symbolic : (row.revision ?? "HEAD"),
+          );
+          return Effect.succeed({ commitSha: "a".repeat(40) });
+        },
+        execute: () =>
+          Effect.succeed({
+            exitCode: ChildProcessSpawner.ExitCode(0),
+            stdout: row.symbolic,
+            stderr: "",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+          }),
+        resolveWorktreeBaseRemote: ({ refName }) =>
+          Effect.succeed({ remoteName: row.remote, branchName: refName }),
+        remoteBranchExists: () => Effect.succeed(!("missing" in row)),
+      }),
+    ),
+  ),
+);
 const harness = (origin: string, upstream?: string) => {
   const remotes = `origin ${origin} (fetch)\n${upstream ? `upstream ${upstream} (fetch)\n` : ""}`;
   const identities = Layer.effect(

@@ -46,6 +46,7 @@ const persistenceError = (cause: unknown) =>
 export interface FactoryAcceptanceOrigin {
   readonly originKey: FactoryOriginKey;
   readonly baseRef: string;
+  readonly baseBranch: string | null;
   // The repository the claim was admitted against; deliveries are pinned to it.
   readonly repository: FactoryRepository;
 }
@@ -107,11 +108,12 @@ const make = Effect.gen(function* () {
     return Option.some({
       originKey,
       baseRef: row.intent.baseRef,
+      baseBranch: row.intent.baseBranch ?? null,
       repository: row.intent.repository,
     });
   }, Effect.mapError(persistenceError));
   const columns = sql.literal(`id, origin_key AS originKey, thread_id AS threadId,
-    project_id AS projectId, head_sha AS headSha, base_ref AS baseRef, base_sha AS baseSha,
+    project_id AS projectId, head_sha AS headSha, base_ref AS baseRef, base_branch AS baseBranch, base_sha AS baseSha,
     accepted_at AS acceptedAt, accepted_by AS acceptedBy, evidence_json AS evidenceRefs`);
   const getByThread = Effect.fn("FactoryAcceptanceStore.getByThread")(function* (
     threadId: ThreadId,
@@ -147,9 +149,9 @@ const make = Effect.gen(function* () {
         // The partial unique index is the arbiter when another writer wins between the read and
         // this insert; the loser reads its own row back as absent.
         yield* sql`INSERT INTO factory_acceptances
-          (id, origin_key, thread_id, project_id, head_sha, base_ref, base_sha, accepted_at, accepted_by, evidence_json)
+          (id, origin_key, thread_id, project_id, head_sha, base_ref, base_branch, base_sha, accepted_at, accepted_by, evidence_json)
           VALUES (${acceptance.id}, ${acceptance.originKey}, ${acceptance.threadId}, ${acceptance.projectId},
-            ${acceptance.headSha}, ${acceptance.baseRef}, ${acceptance.baseSha}, ${acceptance.acceptedAt},
+            ${acceptance.headSha}, ${acceptance.baseRef}, ${acceptance.baseBranch ?? null}, ${acceptance.baseSha}, ${acceptance.acceptedAt},
             ${acceptance.acceptedBy}, ${evidence})
           ON CONFLICT DO NOTHING`;
         const stored = yield* getByOrigin(acceptance.originKey);

@@ -33,7 +33,6 @@ import * as Store from "../persistence/FactoryFeedStore.ts";
 import * as Projects from "../project/ProjectService.ts";
 import * as ManagedFolders from "../project/ManagedProjectFolders.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
-import * as Git from "../vcs/GitVcsDriver.ts";
 import * as FeedFetch from "./FeedFetch.ts";
 import * as TaskLaunch from "./FactoryTaskLaunch.ts";
 import { feedItemOriginKey } from "./FactoryOriginKey.ts";
@@ -79,10 +78,10 @@ const make = Effect.gen(function* () {
   const projects = yield* Projects.ProjectService;
   const threads = yield* Threads.ThreadManagementService;
   const folders = yield* ManagedFolders.ManagedProjectFolders;
-  const git = yield* Git.GitVcsDriver;
   const crypto = yield* Crypto.Crypto;
   const environment = yield* ServerEnvironmentIdentity;
   const repositoryResolver = yield* TaskLaunch.makeRepositoryResolver;
+  const resolveBase = yield* TaskLaunch.makeBaseResolver;
   const resolve = Effect.fn("FactoryFeedService.resolve")(function* (projectId: ProjectId) {
     const resolved = yield* repositoryResolver(projectId).pipe(
       Effect.mapError(
@@ -335,11 +334,9 @@ const make = Effect.gen(function* () {
         `${identityReference.host}/${identityReference.repository}` === repository.canonicalKey)
     )
       return yield* new FactoryFeedError({ reason: "forge-issue-source" });
-    const { commitSha } = yield* git
-      .resolveCommit({ cwd: project.workspaceRoot, revision: input.baseRef ?? "HEAD" })
-      .pipe(
-        Effect.mapError((cause) => new FactoryFeedError({ reason: "invalid-base-ref", cause })),
-      );
+    const base = yield* resolveBase(project.workspaceRoot, input.baseRef).pipe(
+      Effect.mapError((cause) => new FactoryFeedError({ reason: "invalid-base-ref", cause })),
+    );
     const current = yield* resolve(input.projectId);
     if (
       current.repository.canonicalKey !== repository.canonicalKey ||
@@ -367,7 +364,7 @@ const make = Effect.gen(function* () {
       commandId: CommandId.make(`factory-feed:${attempt}`),
       threadId: ThreadId.make(`factory-feed:${attempt}`),
       messageId: MessageId.make(`factory-feed:${attempt}:message`),
-      baseRef: commitSha,
+      ...base,
       modelSelection: input.modelSelection,
       runtimeMode: input.runtimeMode,
       interactionMode: input.interactionMode,

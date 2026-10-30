@@ -99,7 +99,7 @@ const FactoryDeliveryIntentCore = {
 
 /**
  * A grant-then-execute record. It is committed before the side effect and pinned to an exact
- * `(repository, baseRef, headSha, payloadDigest)`: a head move or a changed payload invalidates
+ * `(repository, baseRef, baseBranch, headSha, payloadDigest)`: a head move or changed destination invalidates
  * the grant, and a lost response leaves it `unknown` rather than retried.
  */
 export const FactoryCommitDeliveryIntent = Schema.Struct({
@@ -107,6 +107,7 @@ export const FactoryCommitDeliveryIntent = Schema.Struct({
   kind: FactoryDeliveryCommitKind,
   repository: FactoryRepository,
   baseRef: Schema.String,
+  baseBranch: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   baseSha: Schema.String,
   headSha: Schema.String,
   payload: FactoryDeliveryCommitPayload,
@@ -175,6 +176,7 @@ export const FactoryCommitDeliveryPrepareResult = Schema.Struct({
   current: Schema.Boolean,
   repository: FactoryRepository,
   baseRef: Schema.String,
+  baseBranch: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   headSha: Schema.String,
   payload: FactoryDeliveryCommitPayload,
   // What a grant must echo back; the grant recomputes it and refuses a mismatch.
@@ -296,12 +298,19 @@ export class FactoryDeliveryError extends Schema.TaggedError<FactoryDeliveryErro
       "artifact-too-large",
       "artifact-not-text",
       "destination-not-found",
+      "missing-base-branch",
+      "repository-changed",
     ]),
+    replacementDeliveryId: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
     switch (this.reason) {
+      case "missing-base-branch":
+        return "This task has no reviewed host base branch. Start a new task from a named origin branch before publishing.";
+      case "repository-changed":
+        return "The checkout's origin no longer matches the reviewed delivery repository.";
       case "unknown-thread":
         return "This thread does not exist in the selected project.";
       case "not-a-factory-task":
@@ -327,6 +336,8 @@ export class FactoryDeliveryError extends Schema.TaggedError<FactoryDeliveryErro
       case "intent-not-found":
         return "This delivery does not exist in the selected project.";
       case "not-reconcilable":
+        if (this.replacementDeliveryId !== undefined)
+          return "A replacement delivery already holds this slot.";
         return "Only a delivery whose outcome is unknown or failed can be reconciled.";
       case "worktree-unavailable":
         return "The task's worktree is no longer available, so its commit cannot be read.";

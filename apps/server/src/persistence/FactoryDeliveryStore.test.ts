@@ -36,6 +36,7 @@ const intent = (
     url: "https://github.com/owner/repo",
   },
   baseRef: "main",
+  baseBranch: "main",
   baseSha: "b".repeat(40),
   headSha: "a".repeat(40),
   payload: { title: "Title", body: "Body", draft: false },
@@ -171,7 +172,7 @@ it.effect("a publish row stored before merge-pr existed still decodes as a publi
   Effect.gen(function* () {
     const store = yield* Store.FactoryDeliveryStore;
     const sql = yield* SqlClient.SqlClient;
-    const publish = intent("stored");
+    const publish = intent("stored", { baseBranch: null });
     yield* sql`INSERT INTO factory_delivery_intents
       (id, origin_key, thread_id, project_id, kind, acceptance_id, repository_json, base_ref, base_sha,
        head_sha, payload_json, payload_digest, granted_by, granted_at, request_command_id, status, updated_at)
@@ -233,6 +234,96 @@ const artifactIntent = (id: string, issueNumber = 7): FactoryArtifactDeliveryInt
   failure: null,
   updatedAt: at,
 });
+
+it.effect("late artifact confirmation records the remote without displacing a replacement", () =>
+  Effect.gen(function* () {
+    const store = yield* Store.FactoryDeliveryStore;
+    const first = artifactIntent("first");
+    yield* store.grant(first, { recheck: noop, enqueue: noop });
+    yield* store.settle(first.id, { status: "failed", failure: "absent", updatedAt: at });
+    const replacement = artifactIntent("replacement");
+    yield* store.grant(replacement, { recheck: noop, enqueue: noop });
+    const remote = { commentId: 12, url: "https://github.com/owner/repo/issues/7#issuecomment-12" };
+    const settled = Option.getOrThrow(
+      yield* store.settle(first.id, {
+        status: "confirmed",
+        remote,
+        failure: null,
+        updatedAt: at,
+      }),
+    );
+    assert.equal(settled.status, "failed");
+    assert.deepEqual(settled.remote, remote);
+    assert.equal(
+      settled.failure,
+      `Remote delivery found, but replacement delivery ${replacement.id} already holds the live slot.`,
+    );
+    assert.deepEqual(Option.getOrThrow(yield* store.get(replacement.id)), replacement);
+    assert.deepEqual(
+      Option.getOrThrow(yield* store.getLiveArtifact(first.originKey, first.destinationKey)),
+      replacement,
+    );
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect.each(["publish-pr", "merge-pr"] as const)(
+  "late %s confirmation cannot displace a replacement",
+  (kind) =>
+    Effect.gen(function* () {
+      const store = yield* Store.FactoryDeliveryStore;
+      const overrides = {
+        kind,
+        ...(kind === "merge-pr"
+          ? {
+              payload: { mergeMethod: "squash" as const },
+              remote: { number: 11, url: "https://github.com/owner/repo/pull/11" },
+            }
+          : {}),
+      };
+      const first = intent("first", overrides);
+      yield* store.grant(first, { recheck: noop, enqueue: noop });
+      yield* store.settle(first.id, { status: "failed", failure: "absent", updatedAt: at });
+      const replacement = intent("replacement", overrides);
+      yield* store.grant(replacement, { recheck: noop, enqueue: noop });
+      const remote = { number: 12, url: "https://github.com/owner/repo/pull/12" };
+      const settled = Option.getOrThrow(
+        yield* store.settle(first.id, {
+          status: "confirmed",
+          remote,
+          failure: null,
+          updatedAt: at,
+        }),
+      );
+      assert.equal(settled.status, "failed");
+      assert.deepEqual(settled.remote, first.remote);
+      assert.equal(
+        settled.failure,
+        `Replacement delivery ${replacement.id} already holds the live slot; its remote cannot be attributed to this attempt.`,
+      );
+      assert.deepEqual(Option.getOrThrow(yield* store.get(replacement.id)), replacement);
+      assert.deepEqual(Option.getOrThrow(yield* store.getLive(first.originKey, kind)), replacement);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect.each(["artifact", "commit"] as const)(
+  "a stale inconclusive settlement cannot resurrect a failed %s delivery",
+  (kind) =>
+    Effect.gen(function* () {
+      const store = yield* Store.FactoryDeliveryStore;
+      const first = kind === "artifact" ? artifactIntent("first") : intent("first");
+      yield* store.grant(first, { recheck: noop, enqueue: noop });
+      yield* store.settle(first.id, { status: "failed", failure: "absent", updatedAt: at });
+      const settled = Option.getOrThrow(
+        yield* store.settle(first.id, {
+          status: "unknown",
+          failure: "listing changed",
+          updatedAt: at,
+        }),
+      );
+      assert.equal(settled.status, "failed");
+      assert.equal(settled.failure, "listing changed");
+    }).pipe(Effect.provide(layer)),
+);
 
 it.effect("artifact rows share reads and command replay but are live per destination", () =>
   Effect.gen(function* () {

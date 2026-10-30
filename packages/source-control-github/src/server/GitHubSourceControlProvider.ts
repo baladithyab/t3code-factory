@@ -869,8 +869,8 @@ export const make = Effect.gen(function* () {
         return GitHubChangeRequestTemplate.detect(cwd, treeish, git.execute);
       },
     ),
-    // `createChangeRequest` targets what `resolveRepository` picks: GH_REPO when it parses, else
-    // the remote `gh repo set-default` marked (`gh-resolved`). An HTTPS remote keeps a
+    // Implicit creates use GH_REPO or the remote marked by gh-resolved; explicit target selectors
+    // pin the repository independently. An HTTPS remote keeps a
     // non-default port in the context's host, and the mark is then ignored.
     createsChangeRequestsIn: Effect.fn("GitHubSourceControlProvider.createsChangeRequestsIn")(
       function* ({ cwd, context, repository }) {
@@ -960,7 +960,14 @@ export const make = Effect.gen(function* () {
     }),
     createChangeRequest: Effect.fn("GitHubSourceControlProvider.createChangeRequest")(
       function* (input) {
-        const locator = yield* resolveRepository(input);
+        const locator =
+          input.target?.owner && input.target.repository
+            ? {
+                host: contextHost(input.context) ?? (yield* resolveRepository(input)).host,
+                owner: input.target.owner,
+                name: input.target.repository,
+              }
+            : yield* resolveRepository(input);
         const body = yield* fileSystem
           .readFileString(input.bodyFile)
           .pipe(
